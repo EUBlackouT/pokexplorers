@@ -1073,8 +1073,8 @@ const PauseMenu = ({ onClose, state, onSwap, onGiveItem }: any) => {
                         <div className="space-y-2">
                             <div className="bg-black/20 p-3 rounded border border-white/10 mb-4">
                                 <div className="flex justify-between text-[10px] mb-1">
-                                    <span className="text-gray-400 uppercase">Poké Balls:</span>
-                                    <span className="text-yellow-400 font-bold">{state.inventory.pokeballs}</span>
+                                    <span className="text-gray-400 uppercase">Capture Permits:</span>
+                                    <span className="text-yellow-400 font-bold">{state.run.capturePermits}</span>
                                 </div>
                                 <div className="flex justify-between text-[10px]">
                                     <span className="text-gray-400 uppercase">Potions:</span>
@@ -1119,7 +1119,7 @@ export default function App() {
       // Start at 9,9 (Center of room) to avoid spawning in wall
       team: [], position: { x: 9, y: 9 }, p2Position: { x: 10, y: 9 }, mapId: 'house_player',
       chunkPos: { x: 0, y: 0 },
-      money: 500, badges: 0, inventory: { pokeballs: 10, potions: 5, revives: 2, rare_candy: 0, items: [] as string[] }, defeatedTrainers: [], storyFlags: [],
+      money: 500, badges: 0, inventory: { pokeballs: 0, potions: 5, revives: 2, rare_candy: 0, items: [] as string[] }, defeatedTrainers: [], storyFlags: [],
       discoveredChunks: [], discoveryPoints: 0,
       meta: {
           riftEssence: 0,
@@ -1369,37 +1369,45 @@ export default function App() {
         const hasItem = Math.random() < 0.8;
         
         let itemMsg = "";
-        let itemToGive: keyof typeof playerState.inventory | null = null;
+        let itemToGive: keyof typeof playerState.inventory | 'capturePermits' | 'riftEssence' | null = null;
         let countToGive = 0;
 
         if (hasItem) {
-            const items = ['pokeballs', 'potions', 'revives', 'rare_candy', 'master_ball'];
             const itemRoll = Math.random();
-            let item: keyof typeof playerState.inventory;
-            let count = 1;
-
-            if (itemRoll < 0.05 && isRare) {
-                item = 'rare_candy';
-                count = 5;
-            } else if (itemRoll < 0.2) {
-                item = 'rare_candy';
-                count = isRare ? 3 : 1;
-            } else if (itemRoll < 0.5) {
-                item = 'revives';
-                count = isRare ? 10 : 5;
+            
+            if (itemRoll < 0.1) {
+                itemToGive = 'rare_candy';
+                countToGive = isRare ? 5 : 2;
+            } else if (itemRoll < 0.3) {
+                itemToGive = 'revives';
+                countToGive = isRare ? 8 : 3;
+            } else if (itemRoll < 0.6) {
+                itemToGive = 'capturePermits';
+                countToGive = isRare ? 3 : 1;
             } else {
-                item = 'pokeballs';
-                count = isRare ? 20 : 10;
+                itemToGive = 'riftEssence';
+                countToGive = isRare ? 25 : 10;
             }
 
-            itemToGive = item;
-            countToGive = count;
-            itemMsg = ` and ${count} ${item.toUpperCase()}`;
+            if (itemToGive === 'capturePermits') {
+                itemMsg = ` and ${countToGive} CAPTURE PERMITS`;
+            } else if (itemToGive === 'riftEssence') {
+                itemMsg = ` and ${countToGive} RIFT ESSENCE`;
+            } else {
+                itemMsg = ` and ${countToGive} ${itemToGive.toUpperCase()}`;
+            }
         }
 
         setPlayerState(prev => {
             const newInventory = { ...prev.inventory };
-            if (itemToGive) {
+            let newRiftEssence = prev.meta.riftEssence;
+            let newPermits = prev.run.capturePermits;
+
+            if (itemToGive === 'capturePermits') {
+                newPermits += countToGive;
+            } else if (itemToGive === 'riftEssence') {
+                newRiftEssence += countToGive;
+            } else if (itemToGive) {
                 newInventory[itemToGive] = (newInventory[itemToGive] || 0) + countToGive;
             }
             
@@ -1408,6 +1416,8 @@ export default function App() {
                 money: prev.money + bonusMoney, 
                 discoveryPoints: prev.discoveryPoints + bonusPoints,
                 inventory: newInventory,
+                meta: { ...prev.meta, riftEssence: newRiftEssence },
+                run: { ...prev.run, capturePermits: newPermits },
                 nextEncounterRare: isRare ? true : prev.nextEncounterRare
             };
         });
@@ -1505,7 +1515,7 @@ export default function App() {
               chunkPos: { x: 0, y: 0 },
               position: { x: 9, y: 9 },
               mapId: 'house_player',
-              inventory: { pokeballs: 10, potions: 5, revives: 0, rare_candy: 0, items: items },
+              inventory: { pokeballs: 0, potions: 5, revives: 0, rare_candy: 0, items: items },
               defeatedTrainers: [],
               discoveredChunks: [],
               discoveryPoints: 0
@@ -1751,14 +1761,32 @@ export default function App() {
               
               // Item Ball
               if (tile === 12 && !playerState.storyFlags.includes(itemFlag)) {
-                  const randomItem = Math.random() > 0.5 ? 'pokeballs' : 'potions';
-                  const qty = Math.floor(Math.random() * 3) + 1;
-                  setPlayerState(prev => ({
-                      ...prev,
-                      inventory: { ...prev.inventory, [randomItem]: prev.inventory[randomItem as 'pokeballs'|'potions'] + qty },
-                      storyFlags: [...prev.storyFlags, itemFlag]
-                  }));
-                  setDialogue([`You found ${qty} ${randomItem}!`, `Put it in your Bag.`]);
+                  const roll = Math.random();
+                  let randomItem: keyof typeof playerState.inventory | 'riftEssence' = 'potions';
+                  let qty = Math.floor(Math.random() * 3) + 1;
+                  
+                  if (roll < 0.4) randomItem = 'potions';
+                  else if (roll < 0.7) randomItem = 'revives';
+                  else {
+                      randomItem = 'riftEssence';
+                      qty = Math.floor(Math.random() * 5) + 5;
+                  }
+
+                  setPlayerState(prev => {
+                      if (randomItem === 'riftEssence') {
+                          return {
+                              ...prev,
+                              meta: { ...prev.meta, riftEssence: prev.meta.riftEssence + qty },
+                              storyFlags: [...prev.storyFlags, itemFlag]
+                          };
+                      }
+                      return {
+                          ...prev,
+                          inventory: { ...prev.inventory, [randomItem]: (prev.inventory[randomItem as keyof typeof prev.inventory] || 0) + qty },
+                          storyFlags: [...prev.storyFlags, itemFlag]
+                      };
+                  });
+                  setDialogue([`You found ${qty} ${randomItem === 'riftEssence' ? 'RIFT ESSENCE' : randomItem.toUpperCase()}!`, `Put it in your Bag.`]);
                   return;
               }
 
@@ -3289,27 +3317,14 @@ export default function App() {
                         continue;
                     }
 
-                    tempLogs.push(`Threw a ${item.name} at ${target.name}...`);
+                    tempLogs.push(`Using a Capture Permit on ${target.name}...`);
                     playMoveSfx('normal');
                     
-                    // Decrement inventory
-                    setPlayerState(prev => {
-                        const newInv = { ...prev.inventory };
-                        if (action.item === 'poke-ball') newInv.pokeballs = Math.max(0, newInv.pokeballs - 1);
-                        else {
-                            const idx = newInv.items.indexOf(action.item!);
-                            if (idx > -1) {
-                                const updatedItems = [...newInv.items];
-                                updatedItems.splice(idx, 1);
-                                newInv.items = updatedItems;
-                            }
-                        }
-                        return { ...prev, inventory: newInv };
-                    });
-
                     await syncState(1000);
 
                     let catchMultiplier = 1;
+                    // Special balls still give bonuses if you happen to have them from other sources, 
+                    // but standard Poké Balls are now just Permits
                     if (action.item === 'great-ball') catchMultiplier = 1.5;
                     else if (action.item === 'ultra-ball') catchMultiplier = 2;
                     else if (action.item === 'master-ball') catchMultiplier = 255;
@@ -6772,20 +6787,28 @@ export default function App() {
           return { ...prev, team: t }; 
       }); 
   };
-  function handleBuy(item: string, price: number) {
-      if (playerState.money >= price) {
-          setPlayerState(prev => {
-              const newInventory = { ...prev.inventory };
-              if (item === 'poke-ball') newInventory.pokeballs += 1;
-              else if (item === 'potion') newInventory.potions += 1;
-              else if (item === 'revive') newInventory.revives += 1;
-              else if (item === 'rare-candy') newInventory.rare_candy += 1;
-              else newInventory.items = [...(newInventory.items || []), item];
-              return { ...prev, money: prev.money - price, inventory: newInventory };
-          });
-          playSound('levelUp');
-      }
-  };
+    function handleBuy(item: string, price: number) {
+        if (playerState.money >= price) {
+            setPlayerState(prev => {
+                const newInventory = { ...prev.inventory };
+                let newPermits = prev.run.capturePermits;
+
+                if (item === 'poke-ball') newPermits += 1;
+                else if (item === 'potion') newInventory.potions += 1;
+                else if (item === 'revive') newInventory.revives += 1;
+                else if (item === 'rare-candy') newInventory.rare_candy += 1;
+                else newInventory.items = [...(newInventory.items || []), item];
+                
+                return { 
+                    ...prev, 
+                    money: prev.money - price, 
+                    inventory: newInventory,
+                    run: { ...prev.run, capturePermits: newPermits }
+                };
+            });
+            playSound('levelUp');
+        }
+    };
   function triggerEmote(e: string) { setCurrentEmote(e); setTimeout(()=>setCurrentEmote(null), 2000); };
   function handleStarterSelect(team: Pokemon[]) { 
       if (team[0]) playCry(team[0].id, team[0].name);
@@ -7513,9 +7536,9 @@ export default function App() {
                           )}
                            {isBagMode && (
                                <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-40">
-                                   {playerState.inventory.pokeballs > 0 && (
+                                   {playerState.run.capturePermits > 0 && (
                                        <ActionButton 
-                                           label={`POKE BALL (${playerState.inventory.pokeballs})`} 
+                                           label={`CAPTURE PERMIT (${playerState.run.capturePermits})`} 
                                            color="bg-orange-500" 
                                            onClick={() => setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'TARGET', selectedItem: 'poke-ball' } }))} 
                                        />

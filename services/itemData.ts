@@ -11,10 +11,10 @@ export interface Item {
 export const ITEMS: Record<string, Item> = {
     'poke-ball': {
         id: 'poke-ball',
-        name: 'Poké Ball',
-        description: 'A device for catching wild Pokémon.',
+        name: 'Capture Permit',
+        description: 'A permit that allows you to capture a wild Pokémon.',
         price: 200,
-        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/pokeball.png',
+        icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/poke-ball.png',
         category: 'pokeball'
     },
     'great-ball': {
