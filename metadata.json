@@ -1,0 +1,5 @@
+{
+  "name": "Pokémon Explorers",
+  "description": "A Roguelike Pokémon Expedition game featuring local co-op, real Gen 5 animated sprites, and dynamic battle logic in an ever-changing world.",
+  "requestFramePermissions": []
+}
