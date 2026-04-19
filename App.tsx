@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState } from './types';
+import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName } from './types';
 import { NEW_ABILITIES } from './data/abilities';
 import { NEW_MOVES } from './data/moves';
 import { getFusionMove } from './data/fusionChart';
@@ -21,11 +21,13 @@ import {
     getEvolutionTarget,
     TYPE_COLORS
 } from './services/pokeService';
-import { playSound, playCry, playMoveSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS } from './services/soundService';
+import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, playTestBeep, clearAudioFails } from './services/soundService';
 import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE } from './services/mapData';
 import { ITEMS } from './services/itemData';
 import { generateBattleBackground } from './services/imageService';
 import { multiplayer, NetworkPayload } from './services/multiplayer';
+import { auth, loginWithGoogle } from './firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { HealthBar } from './components/HealthBar';
 import { PokemonSprite } from './components/PokemonSprite';
 import { StarterSelect } from './components/StarterSelect';
@@ -297,6 +299,7 @@ const MetaMenu = ({ state, setState, onBack }: { state: PlayerGlobalState, setSt
 
     const buyUpgrade = (id: string, cost: number) => {
         if (state.meta.riftEssence < cost) return;
+        playSound('https://www.soundjay.com/button/sounds/button-16.mp3'); // Existing correct call
         setState(prev => ({
             ...prev,
             meta: {
@@ -308,7 +311,7 @@ const MetaMenu = ({ state, setState, onBack }: { state: PlayerGlobalState, setSt
                 }
             }
         }));
-        playSound('levelUp');
+        playLevelUpSfx();
     };
 
     const buyPack = (id: string, cost: number) => {
@@ -321,7 +324,7 @@ const MetaMenu = ({ state, setState, onBack }: { state: PlayerGlobalState, setSt
                 unlockedPacks: [...prev.meta.unlockedPacks, id]
             }
         }));
-        playSound('levelUp');
+        playLevelUpSfx();
     };
 
     return (
@@ -603,29 +606,21 @@ const PerkSelect = ({ onSelect }: { onSelect: (perk: string) => void }) => {
 };
 
 const OnlineMenu = ({ onBack, onStartGame }: { onBack: () => void, onStartGame: () => void }) => {
-     const [status, setStatus] = useState<'idle' | 'connecting' | 'connected'>('idle');
+    const [status, setStatus] = useState<'idle' | 'connecting' | 'connected'>('idle');
     const [roomId, setRoomId] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
 
-    const generateRoomId = () => {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        let result = '';
-        for (let i = 0; i < 6; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        setRoomId(result);
-    };
-
     const joinRoom = async () => {
-        if (roomId.length < 4) { setErrorMsg("Enter valid room ID."); return; }
+        const cleanId = roomId.trim().toUpperCase();
+        if (cleanId.length < 4) { setErrorMsg("Enter valid room ID."); return; }
         setStatus('connecting');
         setErrorMsg('');
         try {
-            await multiplayer.initialize(roomId.toUpperCase());
+            await multiplayer.joinRoom(cleanId);
             setStatus('connected');
             onStartGame();
-        } catch (e) { 
-            setErrorMsg('Connection failed. Server might be down.'); 
+        } catch (e: any) { 
+            setErrorMsg(e.message || 'Connection failed.'); 
             setStatus('idle'); 
         }
     };
@@ -641,29 +636,21 @@ const OnlineMenu = ({ onBack, onStartGame }: { onBack: () => void, onStartGame: 
             <div className="max-w-md w-full z-10 bg-white/5 backdrop-blur-2xl border border-white/10 p-10 rounded-[2.5rem] shadow-2xl">
                 <div className="text-center mb-10">
                     <h2 className="text-4xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                        Multiplayer
+                        Join Friend
                     </h2>
-                    <p className="text-gray-500 text-[10px] uppercase tracking-[0.4em] font-bold mt-2">Rift Synchronization Terminal</p>
+                    <p className="text-gray-500 text-[10px] uppercase tracking-[0.4em] font-bold mt-2">Enter the Rift Synchronization Code</p>
                 </div>
 
                 <div className="space-y-6">
                     <div className="space-y-2">
                         <label className="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-2">Room ID</label>
-                        <div className="flex gap-2">
-                            <input 
-                                type="text" 
-                                value={roomId}
-                                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                                placeholder="ENTER CODE"
-                                className="flex-1 bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-center text-xl font-mono font-bold tracking-[0.5em] focus:outline-none focus:border-blue-500 transition-colors"
-                            />
-                            <button 
-                                onClick={generateRoomId}
-                                className="w-14 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl flex items-center justify-center text-xl transition-all"
-                            >
-                                🎲
-                            </button>
-                        </div>
+                        <input 
+                            type="text" 
+                            value={roomId}
+                            onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                            placeholder="ENTER CODE"
+                            className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-center text-xl font-mono font-bold tracking-[0.5em] focus:outline-none focus:border-blue-500 transition-colors"
+                        />
                     </div>
 
                     {errorMsg && (
@@ -675,10 +662,10 @@ const OnlineMenu = ({ onBack, onStartGame }: { onBack: () => void, onStartGame: 
                     <div className="flex flex-col gap-3">
                         <button 
                             onClick={joinRoom}
-                            disabled={status === 'connecting' || roomId.length < 4}
+                            disabled={status === 'connecting' || roomId.trim().length < 4}
                             className={`
                                 w-full py-5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg
-                                ${status === 'connecting' || roomId.length < 4
+                                ${status === 'connecting' || roomId.trim().length < 4
                                     ? 'bg-white/5 text-white/20 cursor-not-allowed'
                                     : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}
                             `}
@@ -1111,8 +1098,95 @@ const PauseMenu = ({ onClose, state, onSwap, onGiveItem }: any) => {
 // Utility for async delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+const AudioWidget = () => {
+    const [status, setStatus] = useState(getAudioStatus());
+    const [isOpen, setIsOpen] = useState(false);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setStatus(getAudioStatus());
+        }, 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const isError = status.state !== 'running';
+
+    return (
+        <div className="fixed bottom-4 left-4 z-[999999] flex flex-col items-start gap-2 font-press-start">
+            <AnimatePresence>
+                {isOpen && (
+                    <motion.div 
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -20 }}
+                        className="bg-slate-900/95 border-2 border-slate-700 p-4 rounded-2xl shadow-2xl backdrop-blur-md w-64 mb-2"
+                    >
+                        <div className="text-[10px] text-yellow-400 font-black mb-3 uppercase tracking-widest border-b border-white/10 pb-2">Audio Diagnostics</div>
+                        
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                                <span className="text-[8px] text-slate-400 uppercase">State</span>
+                                <span className={`text-[8px] font-bold px-2 py-0.5 rounded ${status.state === 'running' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                    {status.state.toUpperCase()}
+                                </span>
+                            </div>
+
+                            <div className="flex justify-between items-center text-[8px] text-slate-300">
+                                <span className="uppercase">Cache</span>
+                                <span className="text-white">{status.cachedBuffers} Buffers</span>
+                            </div>
+
+                            <div className="flex justify-between items-center text-[8px] text-slate-300">
+                                <span className="uppercase">Fails</span>
+                                <span className={status.failedResources > 0 ? 'text-red-400' : 'text-white'}>{status.failedResources} URLs</span>
+                            </div>
+
+                            {status.lastError && (
+                                <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-[7px] text-red-300 break-all leading-tight">
+                                    ERR: {status.lastError}
+                                </div>
+                            )}
+
+                            <div className="pt-2 flex flex-col gap-2">
+                                <button 
+                                    onClick={() => { unlockAudio(); playTestBeep(); }}
+                                    className="bg-yellow-500 hover:bg-yellow-400 text-black text-[9px] font-black py-2 rounded-lg transition-colors uppercase tracking-tight"
+                                >
+                                    Force Restart & Test
+                                </button>
+                                <button 
+                                    onClick={clearAudioFails}
+                                    className="bg-slate-800 hover:bg-slate-700 text-white text-[8px] font-bold py-2 rounded-lg transition-colors uppercase"
+                                >
+                                    Clear Fails
+                                </button>
+                                <button 
+                                    onClick={() => setIsOpen(false)}
+                                    className="bg-slate-800 hover:bg-slate-700 text-white text-[8px] font-bold py-2 rounded-lg transition-colors uppercase"
+                                >
+                                    Minimize
+                                </button>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <button 
+                onClick={() => setIsOpen(!isOpen)}
+                className={`p-3 rounded-2xl shadow-lg transition-all active:scale-90 flex items-center gap-2 border-2 ${isError || status.failedResources > 0 ? 'bg-red-950/80 border-red-500 animate-pulse' : 'bg-slate-900/80 border-slate-700'}`}
+            >
+                <span className="text-xl">{(isError || status.failedResources > 0) ? '🔇' : '🔊'}</span>
+                {(isError || status.failedResources > 0) && <span className="text-[8px] font-bold text-red-400 uppercase tracking-tighter">Audio Issues ({status.failedResources})</span>}
+            </button>
+        </div>
+    );
+};
+
 export default function App() {
   console.log('App Rendering: Start');
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [phase, setPhase] = useState<GamePhase>(GamePhase.MENU);
   const [playerState, setPlayerState] = useState<PlayerGlobalState>({
       name: 'Jonathan', // Default name from user email
@@ -1180,7 +1254,7 @@ export default function App() {
     enemyLightScreenTurns: 0,
     auroraVeilTurns: 0,
     enemyAuroraVeilTurns: 0,
-    backgroundUrl: undefined,
+    backgroundUrl: '',
     battleStreak: 0
   });
   const [caveLayouts, setCaveLayouts] = useState<Record<string, number[][]>>({});
@@ -1196,6 +1270,17 @@ export default function App() {
   // Using a beautiful atmospheric gradient to avoid "real-life" photo issues and ensure it works for everyone
   const [menuBgUrl] = useState<string>('');
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+      if (u) {
+        setPlayerState(prev => ({ ...prev, name: u.displayName || 'Trainer' }));
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   const [challengeState, setChallengeState] = useState<{
       type: 'speed' | 'stealth' | 'none';
       endTime?: number;
@@ -1207,10 +1292,14 @@ export default function App() {
   const networkRoleRef = useRef<'none' | 'host' | 'client'>('none');
   const phaseRef = useRef<GamePhase>(GamePhase.MENU);
   const isHostRef = useRef(false);
+  const lastSyncRef = useRef("");
+  const lastMapSyncRef = useRef("");
+  const onDataRef = useRef<(data: any) => void>(() => {});
 
   const [remotePlayers, setRemotePlayers] = useState<Map<string, any>>(new Map());
   const [battleChallenge, setBattleChallenge] = useState<{ challengerId: string, playerInfo: any } | null>(null);
   const [isMultiplayerBattle, setIsMultiplayerBattle] = useState(false);
+  const lastProcessedLogIndexRef = useRef(0);
   const [opponentId, setOpponentId] = useState<string | null>(null);
   const [battleId, setBattleId] = useState<string | null>(null);
   const [isBattleLead, setIsBattleLead] = useState(false);
@@ -1248,29 +1337,29 @@ export default function App() {
                   leveledUp = true;
               }
               
-              p.currentHp = newHp;
-              p.status = newStatus;
-              newTeam[monIdx] = p;
-              
-              const newInventory = { ...prev.inventory };
-              if (itemId === 'potion') newInventory.potions = Math.max(0, newInventory.potions - 1);
-              else if (itemId === 'revive') newInventory.revives = Math.max(0, newInventory.revives - 1);
-              else if (itemId === 'rare-candy') newInventory.rare_candy = Math.max(0, newInventory.rare_candy - 1);
-              else {
-                  const idx = newInventory.items.indexOf(itemId);
-                  if (idx > -1) {
-                      const updatedItems = [...newInventory.items];
-                      updatedItems.splice(idx, 1);
-                      newInventory.items = updatedItems;
-                  }
-              }
-              
-              return { ...prev, team: newTeam, inventory: newInventory };
-          });
-
-          playSound('levelUp');
+          p.currentHp = newHp;
+          p.status = newStatus;
+          newTeam[monIdx] = p;
           
-          // Check for level-up evolution if rare candy was used
+          const newInventory = { ...prev.inventory };
+          if (itemId === 'potion') newInventory.potions = Math.max(0, newInventory.potions - 1);
+          else if (itemId === 'revive') newInventory.revives = Math.max(0, newInventory.revives - 1);
+          else if (itemId === 'rare-candy') newInventory.rare_candy = Math.max(0, newInventory.rare_candy - 1);
+          else {
+              const idx = newInventory.items.indexOf(itemId);
+              if (idx > -1) {
+                  const updatedItems = [...newInventory.items];
+                  updatedItems.splice(idx, 1);
+                  newInventory.items = updatedItems;
+              }
+          }
+          
+          return { ...prev, team: newTeam, inventory: newInventory };
+      });
+
+      playLevelUpSfx();
+      
+      // Check for level-up evolution if rare candy was used
           if (itemId === 'rare-candy') {
               const canEvolve = await checkEvolution(pokemon);
               if (canEvolve) {
@@ -1304,7 +1393,7 @@ export default function App() {
                       inventory: newInventory
                   };
               });
-              playSound('levelUp');
+              playLevelUpSfx();
               setDialogue([`${pokemon.name} evolved into ${evo.name}!`]);
           } else {
               setDialogue([`It had no effect...`]);
@@ -1347,7 +1436,7 @@ export default function App() {
 
           return { ...prev, team: newTeam, inventory: newInventory };
       });
-      playSound('levelUp');
+      playLevelUpSfx();
   };
 
 
@@ -1443,10 +1532,17 @@ export default function App() {
         playerTeam: playerState.team,
         enemyTeam: oppInfo.team,
         isTrainerBattle: true,
+        isPvP: true,
         phase: 'player_input',
         logs: [`Battle started with ${oppInfo.name}!`]
     }));
     setPhase(GamePhase.BATTLE);
+    
+    // Play initial cries
+    if (playerState.team[0]) playCry(playerState.team[0].id, playerState.team[0].name);
+    setTimeout(() => {
+        if (oppInfo.team[0]) playCry(oppInfo.team[0].id, oppInfo.team[0].name);
+    }, 500);
   };
 
   function handleChallengeResponse(accept: boolean) {
@@ -1524,10 +1620,28 @@ export default function App() {
       setPhase(GamePhase.MENU);
   };
 
-  const activePlayer = battleState.playerTeam[battleState.activePlayerIndex];
+  const myPokemonIndex = networkRole === 'host' ? 0 : (networkRole === 'client' ? 1 : battleState.activePlayerIndex);
+  const activePlayer = battleState.playerTeam[myPokemonIndex];
   const isTargeting = battleState.ui.selectionMode === 'TARGET';
   const isBagMode = battleState.ui.selectionMode === 'ITEM';
   const isSwitchMode = battleState.ui.selectionMode === 'SWITCH';
+  
+  const isTrapped = activePlayer && activePlayer.ability.name !== 'PhaseStep' && (
+      (activePlayer.isTrapped && activePlayer.isTrapped > 0) ||
+      battleState.enemyTeam.some(e => {
+          if (e.isFainted) return false;
+          if (e.ability.name === 'MagneticField' && activePlayer.types.map(t => t.toLowerCase()).includes('steel')) return true;
+          if (e.ability.name === 'ShadowTagger' && activePlayer.currentHp < e.currentHp) return true;
+          return false;
+      })
+  );
+  
+  const hasSelected = battleState.pendingMoves.some(m => m.actorIndex === myPokemonIndex);
+  const isMyTurn = !hasSelected && (
+      networkRole === 'none' || 
+      (networkRole === 'host' && myPokemonIndex === 0) || 
+      (networkRole === 'client' && myPokemonIndex === 1)
+  );
   
 
 
@@ -1560,8 +1674,21 @@ export default function App() {
       if (isMultiplayerBattle) {
           const currentActorIndex = forcedActorIndex !== undefined ? forcedActorIndex : battleState.activePlayerIndex;
           const actor = battleState.playerTeam[currentActorIndex];
-          let speed = actor.stats.speed * (1 + playerState.meta.upgrades.speedBoost * 0.05);
+          let speed = actor.stats.speed;
+          
+          // Speed Stat Stages
+          const speedStage = actor.statStages?.speed || 0;
+          if (speedStage > 0) speed *= (1 + 0.5 * speedStage);
+          else if (speedStage < 0) speed *= (1 / (1 + 0.5 * Math.abs(speedStage)));
+
+          // Meta Upgrades
+          speed *= (1 + playerState.meta.upgrades.speedBoost * 0.05);
+
           if (actor.status === 'paralysis') speed *= 0.5;
+          if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
+          if (actor.heldItem?.id === 'iron-ball') speed *= 0.5;
+          if (actor.heldItem?.id === 'lagging-tail') speed *= 0.1;
+
           const priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
           
           const action = { actorIndex: currentActorIndex, targetIndex, move, item, isPlayer: true, isFusion, speed, priority, switchIndex };
@@ -1708,16 +1835,34 @@ export default function App() {
   };
 
   function handleTargetSelect(targetIndex: number) {
+      unlockAudio();
       if (battleState.ui.selectionMode === 'TARGET') {
-          if (battleState.ui.selectedItem === 'combo') queueAction(targetIndex, 'combo');
-          else if (battleState.ui.selectedMove) queueAction(targetIndex, undefined, battleState.ui.selectedMove);
-          else queueAction(targetIndex, 'pokeball');
+          const move = battleState.ui.selectedMove;
+          const item = battleState.ui.selectedItem;
+          
+          if (networkRole === 'client') {
+              multiplayer.send({
+                  type: 'INPUT_BATTLE_ACTION',
+                  payload: { targetIndex, item, move, isFusion: battleState.ui.isFusionNext, activePlayerIndex: 1 }
+              });
+              setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: null } }));
+          } else {
+              if (item === 'combo') queueAction(targetIndex, 'combo');
+              else if (move) queueAction(targetIndex, undefined, move);
+              else queueAction(targetIndex, 'pokeball');
+          }
       }
   };
 
   function handleRun() {
+      if (networkRole === 'client') {
+          multiplayer.send({ type: 'INPUT_MENU', payload: 'RUN' });
+          return;
+      }
       if (battleState.isTrainerBattle) {
           setBattleState(prev => ({...prev, logs: [...prev.logs, "Can't run from a trainer battle!"]}));
+      } else if (isTrapped) {
+          setBattleState(prev => ({...prev, logs: [...prev.logs, `${activePlayer.name} is trapped and cannot run!`]}));
       } else {
           const canAlwaysRun = playerState.team.some(p => p.heldItem?.id === 'smoke-ball' && !p.isFainted);
           if (canAlwaysRun) {
@@ -1826,6 +1971,63 @@ export default function App() {
                       storyFlags: [...prev.storyFlags, itemFlag]
                   }));
                   setDialogue(["The stone pulses with energy...", "You found 3 Potions!"]);
+                  return;
+              }
+          }
+
+          if (layout && layout[targetY] && layout[targetY][targetX] !== undefined) {
+              const tile = layout[targetY][targetX];
+              
+              // Fishing Logic
+              if (tile === 3 && playerState.storyFlags.includes('has_rod')) {
+                  const roll = Math.random();
+                  if (roll < 0.3) {
+                      setDialogue(["Something bit!", "A wild Magikarp appeared!"]);
+                      startBattle(1, false, false); // Wild battle
+                  } else {
+                      setDialogue(["Not even a nibble..."]);
+                  }
+                  return;
+              }
+
+              // Co-op Puzzle Logic
+              if (tile === 68) { // Rift Portal / Puzzle Switch
+                  const p1OnSwitch = playerState.position.x === targetX && playerState.position.y === targetY;
+                  const p2OnSwitch = playerState.p2Position.x === targetX && playerState.p2Position.y === targetY;
+                  
+                  // Find the other switch
+                  let otherSwitch: Coordinate | null = null;
+                  for (const [k, n] of Object.entries(currentMap.npcs || {})) {
+                      const npc = n as any;
+                      if (npc.id.startsWith('switch_') && k !== key) {
+                          const [ox, oy] = k.split(',').map(Number);
+                          otherSwitch = { x: ox, y: oy };
+                          break;
+                      }
+                  }
+
+                  const p1OnOther = otherSwitch && playerState.position.x === otherSwitch.x && playerState.position.y === otherSwitch.y;
+                  const p2OnOther = otherSwitch && playerState.p2Position.x === otherSwitch.x && playerState.p2Position.y === otherSwitch.y;
+
+                  if ((p1OnSwitch && p2OnOther) || (p2OnSwitch && p1OnOther)) {
+                      setDialogue(["The rift stabilizes!", "A secret path has opened!"]);
+                      // Open the gate (tile 21)
+                      const [sx, sy] = key.split(',').map(Number);
+                      const gateX = sx + (otherSwitch!.x - sx) / 2;
+                      const gateY = sy - 1;
+                      
+                      if (playerState.mapId.startsWith('chunk_')) {
+                          const newLayout = [...currentMap.layout.map((r: any) => [...r])];
+                          if (newLayout[gateY]) newLayout[gateY][gateX] = 4; // Path
+                          setLoadedChunks(prev => ({
+                              ...prev,
+                              [playerState.mapId]: { ...currentMap, layout: newLayout }
+                          }));
+                      }
+                      setPlayerState(prev => ({ ...prev, storyFlags: [...prev.storyFlags, 'rift_portal_open'] }));
+                  } else {
+                      setDialogue(["The portal flickers...", "It seems to require two people standing on the switches simultaneously."]);
+                  }
                   return;
               }
           }
@@ -1951,63 +2153,15 @@ export default function App() {
               return; 
           }
 
-          // Fishing Logic
-          if (layout[targetY][targetX] === 3 && playerState.storyFlags.includes('has_rod')) {
-              const roll = Math.random();
-              if (roll < 0.3) {
-                  setDialogue(["Something bit!", "A wild Magikarp appeared!"]);
-                  startBattle(1, false, false); // Wild battle
-              } else {
-                  setDialogue(["Not even a nibble..."]);
-              }
-              return;
-          }
-
-          // Co-op Puzzle Logic
-          if (layout[targetY][targetX] === 68) { // Rift Portal / Puzzle Switch
-              const p1OnSwitch = playerState.position.x === targetX && playerState.position.y === targetY;
-              const p2OnSwitch = playerState.p2Position.x === targetX && playerState.p2Position.y === targetY;
-              
-              // Find the other switch
-              let otherSwitch: Coordinate | null = null;
-              for (const [k, n] of Object.entries(currentMap.npcs || {})) {
-                  const npc = n as any;
-                  if (npc.id.startsWith('switch_') && k !== key) {
-                      const [ox, oy] = k.split(',').map(Number);
-                      otherSwitch = { x: ox, y: oy };
-                      break;
-                  }
-              }
-
-              const p1OnOther = otherSwitch && playerState.position.x === otherSwitch.x && playerState.position.y === otherSwitch.y;
-              const p2OnOther = otherSwitch && playerState.p2Position.x === otherSwitch.x && playerState.p2Position.y === otherSwitch.y;
-
-              if ((p1OnSwitch && p2OnOther) || (p2OnSwitch && p1OnOther)) {
-                  setDialogue(["The rift stabilizes!", "A secret path has opened!"]);
-                  // Open the gate (tile 21)
-                  const [sx, sy] = key.split(',').map(Number);
-                  const gateX = sx + (otherSwitch!.x - sx) / 2;
-                  const gateY = sy - 1;
-                  
-                  if (playerState.mapId.startsWith('chunk_')) {
-                      const newLayout = [...currentMap.layout.map((r: any) => [...r])];
-                      if (newLayout[gateY]) newLayout[gateY][gateX] = 4; // Path
-                      setLoadedChunks(prev => ({
-                          ...prev,
-                          [playerState.mapId]: { ...currentMap, layout: newLayout }
-                      }));
-                  }
-                  return;
-              } else {
-                  setDialogue(["The rift is unstable...", "It seems to require two souls to stabilize."]);
-                  return;
-              }
-          }
       }
   };
 
   async function handleMapMove(newPos: Coordinate, playerNum: 1 | 2) {
-      if (dialogue) return; 
+      if (dialogue) {
+          console.log(`[MOVE] Player ${playerNum} move rejected: Dialogue active`);
+          return;
+      }
+      console.log(`[MOVE] Player ${playerNum} moving to`, newPos);
       
       let currentMap;
       if (playerState.mapId.startsWith('chunk_')) {
@@ -2388,13 +2542,16 @@ export default function App() {
   };
 
   const startBattle = async (enemyCount: number, isBoss: boolean, isTrainer: boolean, trainerData?: TrainerData, biome?: string, tileType?: number) => {
+    const isMultiplayer = !!multiplayer.roomId;
+    const bId = isMultiplayer ? `wild_${multiplayer.roomId}_${Date.now()}` : null;
+    if (bId) setBattleId(bId);
     setPhase(GamePhase.BATTLE);
       // --- SYNC BOOST ABILITY ---
       let initialCombo = 0;
       playerState.team.slice(0, 2).forEach(p => {
           if (p.ability.name === 'SyncBoost') initialCombo += 10;
       });
-      setBattleState(prev => ({ ...prev, phase: 'player_input', logs: isTrainer ? ["Trainer Battle!"] : ["Wild Encounter!"], isTrainerBattle: isTrainer, currentTrainerId: trainerData?.id, backgroundUrl: undefined, comboMeter: initialCombo }));
+      setBattleState(prev => ({ ...prev, phase: 'player_input', logs: isTrainer ? ["Trainer Battle!"] : ["Wild Encounter!"], isTrainerBattle: isTrainer, currentTrainerId: trainerData?.id, backgroundUrl: '', comboMeter: initialCombo }));
     try {
       let currentMap;
       if (playerState.mapId.startsWith('chunk_')) {
@@ -2404,7 +2561,8 @@ export default function App() {
       }
       if (!currentMap) return;
 
-      const bgUrl = await generateBattleBackground(biome || currentMap.biome || 'forest', tileType);
+      const isMultiplayer = !!multiplayer.roomId;
+      const bgUrl = await generateBattleBackground(biome || currentMap.biome || 'forest', tileType, isMultiplayer);
       console.log('Setting Battle Background URL:', bgUrl);
       
       // Calculate Difficulty Scaling
@@ -2529,19 +2687,47 @@ export default function App() {
           }
       });
 
+      // Sync battle start to client if host
+      if (networkRole === 'host') {
+          multiplayer.send({
+              type: 'BATTLE_START',
+              payload: {
+                  battleId: bId,
+                  playerTeam: playerTeam.map(p => {
+                      const { movePool, ...rest } = p;
+                      return rest;
+                  }),
+                  enemies: enemies.map(p => {
+                      const { movePool, ...rest } = p;
+                      return rest;
+                  }),
+                  isBoss,
+                  isTrainer,
+                  trainerData,
+                  biome,
+                  tileType,
+                  bgUrl,
+                  initialWeather: startWeather,
+                  initialCombo,
+                  isPvP: false
+              }
+          });
+      }
+
       let firstActive = 0;
       while (firstActive < playerTeam.length && playerTeam[firstActive].isFainted) firstActive++;
 
       setBattleState({
         playerTeam, enemyTeam: enemies,
         turn: 1, phase: 'player_input', logs: startLogs, pendingMoves: [], activePlayerIndex: firstActive, ui: { selectionMode: 'MOVE', selectedMove: null },
-        isTrainerBattle: isTrainer, comboMeter: Math.min(100, initialCombo + playerSyncBoost), enemyComboMeter: Math.min(100, enemySyncBoost), currentTrainerId: trainerData?.id, weather: startWeather, terrain: 'none', backgroundUrl: bgUrl,
+        isTrainerBattle: isTrainer, isPvP: false, comboMeter: Math.min(100, initialCombo + playerSyncBoost), enemyComboMeter: Math.min(100, enemySyncBoost), currentTrainerId: trainerData?.id, weather: startWeather, terrain: 'none', backgroundUrl: bgUrl,
         weatherTurns: startWeather !== 'none' ? 5 : 0,
         tailwindTurns: startTailwind,
         enemyTailwindTurns: startEnemyTailwind,
         aegisFieldTurns: startAegis,
         enemyAegisFieldTurns: startEnemyAegis
       });
+
     } catch (e) { setPhase(GamePhase.OVERWORLD); }
   };
    const checkBerries = (p: Pokemon, logs: string[]) => {
@@ -2731,6 +2917,12 @@ export default function App() {
        
        // Speed reduction from paralysis
        let speed = mon.stats.speed;
+       
+       // Speed Stat Stages
+       const speedStage = mon.statStages?.speed || 0;
+       if (speedStage > 0) speed *= (1 + 0.5 * speedStage);
+       else if (speedStage < 0) speed *= (1 / (1 + 0.5 * Math.abs(speedStage)));
+
        if (mon.status === 'paralysis') speed *= 0.5;
        if (mon.heldItem?.id === 'choice-scarf') speed *= 1.5;
        if (mon.heldItem?.id === 'lagging-tail') speed *= 0.5;
@@ -3075,6 +3267,38 @@ export default function App() {
                 applyHazards(newMon, isPlayer, isPlayer ? (battleState.playerHazards || []) : (battleState.enemyHazards || []), tempLogs);
 
                 // --- ENTRY ABILITIES ON SWITCH ---
+                if (p.ability.name === 'RiftWalker') {
+                    tempLogs.push(`${p.name}'s Rift Walker swapped the field!`);
+                    setBattleState(prev => {
+                        let nextWeather = prev.weather;
+                        let nextTerrain = prev.terrain;
+                        
+                        if (prev.weather === 'sun') nextWeather = 'rain';
+                        else if (prev.weather === 'rain') nextWeather = 'sun';
+                        else if (prev.weather === 'sand') nextWeather = 'hail';
+                        else if (prev.weather === 'hail') nextWeather = 'sand';
+                        
+                        if (prev.terrain === 'electric') nextTerrain = 'grassy';
+                        else if (prev.terrain === 'grassy') nextTerrain = 'electric';
+                        else if (prev.terrain === 'psychic') nextTerrain = 'misty';
+                        else if (prev.terrain === 'misty') nextTerrain = 'psychic';
+                        
+                        return { ...prev, weather: nextWeather, terrain: nextTerrain };
+                    });
+                }
+                if (p.ability.name === 'GlacialAura') {
+                    const targets = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                    targets.forEach(t => {
+                        if (t && !t.isFainted && !t.status && Math.random() < 0.2) {
+                            t.status = 'freeze';
+                            tempLogs.push(`${t.name} was frozen by ${p.name}'s Glacial Aura!`);
+                        }
+                    });
+                }
+                if (p.ability.name === 'GravityWell') {
+                    tempLogs.push(`${p.name}'s Gravity Well intensified gravity!`);
+                    setBattleState(prev => ({ ...prev, gravityTurns: 5 }));
+                }
                 if (p.ability.name === 'Drizzle') { tempLogs.push(`${p.name}'s Drizzle summoned rain!`); setBattleState(prev => ({ ...prev, weather: 'rain', weatherTurns: 5 })); }
                 if (p.ability.name === 'Drought') { tempLogs.push(`${p.name}'s Drought summoned sun!`); setBattleState(prev => ({ ...prev, weather: 'sun', weatherTurns: 5 })); }
                 if (p.ability.name === 'SandStream') { tempLogs.push(`${p.name}'s Sand Stream summoned a sandstorm!`); setBattleState(prev => ({ ...prev, weather: 'sand', weatherTurns: 5 })); }
@@ -3550,7 +3774,7 @@ export default function App() {
                     actor = tempETeam[actorIdx];
                 }
                 
-                playMoveSfx(action.move.type);
+                playMoveSfx(action.move.type || 'normal', action.move.name, action.move.sfx);
                 const realTargetIndex = targetTeam.findIndex(mon => mon === target);
                 await setVFX(action.move.type, action.isPlayer ? 'enemy' : 'player', realTargetIndex);
                 await syncState(400); // Wait for attack
@@ -3560,6 +3784,14 @@ export default function App() {
                     tempLogs.push(`${target.name}'s Iron Blood absorbed the poison!`);
                     const heal = Math.floor(target.maxHp / 16);
                     target.currentHp = Math.min(target.maxHp, target.currentHp + heal);
+                    await syncState(500);
+                    continue;
+                }
+
+                // Static Field Ability
+                const staticFieldUser = [...tempPTeam, ...tempETeam].find(p => p && !p.isFainted && p.ability.name === 'StaticField');
+                if (staticFieldUser && (action.move?.priority || 0) > 0 && Math.random() < 0.25) {
+                    tempLogs.push(`${staticFieldUser.name}'s Static Field disrupted the priority move!`);
                     await syncState(500);
                     continue;
                 }
@@ -3615,6 +3847,9 @@ export default function App() {
                 let numHits = (res.hits || 1);
                 if (actor.ability.name === 'ThreeHitWonder') {
                     numHits = 3;
+                }
+                if (actor.ability.name === 'EchoChamber' && action.move?.isSound && numHits === 1) {
+                    numHits = 2;
                 }
                 let totalDamage = 0;
 
@@ -3739,6 +3974,9 @@ export default function App() {
                 for (let h = 0; h < finalNumHits; h++) {
                     // Spread damage reduction
                     let finalDamage = res.damage;
+                    if (actor.ability.name === 'EchoChamber' && action.move?.isSound && h === 1) {
+                        finalDamage = Math.floor(finalDamage * 0.5);
+                    }
                     if (isBothFoes && targetsToHit.length > 1) {
                         finalDamage = Math.floor(finalDamage * 0.75);
                     }
@@ -3826,10 +4064,19 @@ export default function App() {
                     }
                     
                     damageTarget.currentHp = Math.max(0, damageTarget.currentHp - finalDamage);
+                    if (finalDamage > 0) damageTarget.tookDamageThisTurn = true;
                     totalDamage += finalDamage;
+
+                    // Primal Hunger Ability
+                    if (actor.ability.name === 'PrimalHunger' && action.move?.isBiting) {
+                        const heal = Math.floor(finalDamage * 0.5);
+                        actor.currentHp = Math.min(actor.maxHp, actor.currentHp + heal);
+                        tempLogs.push(`${actor.name}'s Primal Hunger restored its HP!`);
+                    }
                     
                     // Trigger Damage VFX
                     if (finalDamage > 0) {
+                        playEffectivenessSfx(res.effectiveness);
                         await setDamageVFX(
                             !action.isPlayer ? 'enemy' : 'player',
                             realTargetIndex,
@@ -4047,7 +4294,7 @@ export default function App() {
                     }
 
                     // Venom Spite Ability
-                if (target.ability.name === 'VenomSpite' && target.status === 'poison' && res.damage > 0) {
+                if (target.ability.name === 'VenomSpite' && actor.status === 'poison' && res.damage > 0) {
                     if (actor.statStages) {
                         actor.statStages['special-defense'] = Math.max(-6, (actor.statStages['special-defense'] || 0) - 1);
                         tempLogs.push(`${target.name}'s Venom Spite lowered ${actor.name}'s Sp. Def!`);
@@ -4290,6 +4537,13 @@ export default function App() {
                     }
                 }
 
+                // Battery Pack Ability
+                if (actor.ability.name === 'BatteryPack' && action.move && (action.move.pp || 0) >= 3) {
+                    if (action.isPlayer) setBattleState(prev => ({ ...prev, comboMeter: Math.min(100, prev.comboMeter + 10) }));
+                    else setBattleState(prev => ({ ...prev, enemyComboMeter: Math.min(100, prev.enemyComboMeter + 10) }));
+                    tempLogs.push(`${actor.name}'s Battery Pack boosted the Sync Gauge!`);
+                }
+
                 // Coalescence Ability
                 if (actor.ability.name === 'Coalescence' && action.isFusion) {
                     const heal = Math.floor(actor.maxHp * 0.25);
@@ -4426,6 +4680,13 @@ export default function App() {
                     tempLogs.push(`${actor.name} was hurt by its Life Orb!`);
                 }
 
+                // Overheat Drive Recoil
+                if (actor.ability.name === 'OverheatDrive' && action.move?.type === 'Fire' && totalDamage > 0) {
+                    const recoil = Math.floor(actor.maxHp / 8);
+                    actor.currentHp = Math.max(0, actor.currentHp - recoil);
+                    tempLogs.push(`${actor.name} took recoil from Overheat Drive!`);
+                }
+
                 // Shell Bell
                 if (actor.heldItem?.id === 'shell-bell' && totalDamage > 0) {
                     const heal = Math.floor(totalDamage / 8);
@@ -4506,6 +4767,20 @@ export default function App() {
                             boost += 20;
                         } else {
                             boost += 5;
+                        }
+                    }
+
+                    // Partner Boost Ability
+                    if (action.isFusion) {
+                        const allyIdx = 1 - actorIdx;
+                        const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
+                        if (ally && !ally.isFainted && ally.ability.name === 'PartnerBoost' && ally.statStages) {
+                            ally.statStages.speed = Math.min(6, (ally.statStages.speed || 0) + 1);
+                            tempLogs.push(`${ally.name}'s Partner Boost raised its Speed!`);
+                        }
+                        if (actor.ability.name === 'PartnerBoost' && actor.statStages) {
+                            actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
+                            tempLogs.push(`${actor.name}'s Partner Boost raised its Speed!`);
                         }
                     }
                     
@@ -4671,6 +4946,18 @@ export default function App() {
                                 });
                                 tempLogs.push(`${target.name}'s Carry Over passed stats to ${targetAlly.name}!`);
                             }
+                        }
+                    }
+
+                    // Soul Siphon Ability
+                    if (actor.ability.name === 'SoulSiphon' && !actor.isFainted) {
+                        const heal = Math.floor(actor.maxHp / 8);
+                        actor.currentHp = Math.min(actor.maxHp, actor.currentHp + heal);
+                        const stats: StatName[] = ['attack', 'defense', 'special-attack', 'special-defense', 'speed'];
+                        const randomStat = stats[Math.floor(Math.random() * stats.length)];
+                        if (actor.statStages) {
+                            actor.statStages[randomStat] = Math.min(6, (actor.statStages[randomStat] || 0) + 1);
+                            tempLogs.push(`${actor.name}'s Soul Siphon restored HP and raised its ${randomStat}!`);
                         }
                     }
 
@@ -5409,6 +5696,18 @@ export default function App() {
                         target.confusionTurns = Math.floor(Math.random() * 4) + 2; // 2-5 turns
                         checkBerries(target, tempLogs);
                     } else {
+                        // Verdant Veil Ability
+                        const verdantVeilUser = [...tempPTeam, ...tempETeam].find(p => p && !p.isFainted && p.ability.name === 'VerdantVeil');
+                        const isTargetAllyOfVeil = verdantVeilUser && (
+                            (tempPTeam.includes(verdantVeilUser) && tempPTeam.includes(target)) ||
+                            (tempETeam.includes(verdantVeilUser) && tempETeam.includes(target))
+                        );
+                        if (isTargetAllyOfVeil && battleState.terrain === 'grassy') {
+                            tempLogs.push(`${verdantVeilUser.name}'s Verdant Veil protected ${target.name} from status!`);
+                            await syncState(500);
+                            continue;
+                        }
+
                         target.status = sec.status;
                         // Trigger Status VFX
                         setBattleState(prev => ({ 
@@ -5697,6 +5996,12 @@ export default function App() {
                 tempLogs.push(`${mon.name}'s Stone Harvest restored HP and raised Defense!`);
             }
 
+            // Energy Core Ability
+            if (mon.ability.name === 'EnergyCore' && !mon.tookDamageThisTurn) {
+                setBattleState(prev => ({ ...prev, comboMeter: Math.min(100, prev.comboMeter + 5) }));
+                tempLogs.push(`${mon.name}'s Energy Core boosted the Sync Gauge!`);
+            }
+
             // Bleakwind Ability
             if (mon.ability.name === 'Bleakwind' && battleState.weather === 'hail') {
                 tempETeam.forEach(e => {
@@ -5788,6 +6093,15 @@ export default function App() {
                     playFaintSfx();
                     tempLogs.push(`${mon.name} fainted!`);
                 }
+            }
+
+            // Withstand Ability (Ally protection)
+            const allyIdxW = 1 - i;
+            const allyW = tempPTeam[allyIdxW];
+            if (allyW && allyW.currentHp === 0 && !allyW.isFainted && mon.ability.name === 'Withstand' && !mon.usedWithstand) {
+                allyW.currentHp = 1;
+                mon.usedWithstand = true;
+                tempLogs.push(`${mon.name}'s Withstand protected ${allyW.name}!`);
             }
 
             const endResP = handleEndOfTurnStatus(mon, battleState.weather, battleState.terrain);
@@ -5889,13 +6203,6 @@ export default function App() {
                 tempLogs.push(`${mon.name}'s Abyssal Pull is trapping the foes!`);
             }
 
-            // Energy Core
-            if (mon.ability.name === 'EnergyCore') {
-                if (mon.statStages) {
-                    mon.statStages['special-attack'] = Math.min(6, (mon.statStages['special-attack'] || 0) + 1);
-                    tempLogs.push(`${mon.name}'s Energy Core boosted its Sp. Atk!`);
-                }
-            }
             // Mud Forged
             if (mon.ability.name === 'MudForged' && battleState.weather === 'sand') {
                 if (mon.statStages) {
@@ -6101,6 +6408,23 @@ export default function App() {
                 if (mon.statStages) {
                     mon.statStages['special-attack'] = Math.min(6, (mon.statStages['special-attack'] || 0) + 1);
                     tempLogs.push(`Enemy ${mon.name}'s Storm Rider raised its Sp. Atk!`);
+                }
+            }
+
+            // Energy Core Ability (Enemy)
+            if (mon.ability.name === 'EnergyCore' && !mon.tookDamageThisTurn) {
+                setBattleState(prev => ({ ...prev, enemyComboMeter: Math.min(100, prev.enemyComboMeter + 5) }));
+                tempLogs.push(`Enemy ${mon.name}'s Energy Core boosted the Sync Gauge!`);
+            }
+
+            // Lifebloom Ability (Enemy)
+            if (mon.ability.name === 'Lifebloom') {
+                const allyIdx = 1 - i;
+                const ally = tempETeam[allyIdx];
+                if (ally && !ally.isFainted) {
+                    const heal = Math.floor(ally.maxHp / 16);
+                    tempETeam[allyIdx] = { ...ally, currentHp: Math.min(ally.maxHp, ally.currentHp + heal) };
+                    tempLogs.push(`Enemy ${mon.name}'s Lifebloom restored its ally's HP!`);
                 }
             }
 
@@ -6806,7 +7130,7 @@ export default function App() {
                     run: { ...prev.run, capturePermits: newPermits }
                 };
             });
-            playSound('levelUp');
+            playLevelUpSfx();
         }
     };
   function triggerEmote(e: string) { setCurrentEmote(e); setTimeout(()=>setCurrentEmote(null), 2000); };
@@ -6822,6 +7146,132 @@ export default function App() {
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { isHostRef.current = multiplayer.isHost; }, [multiplayer.isHost]);
 
+  onDataRef.current = (data) => {
+    if (data.type === 'BATTLE_REQUEST') {
+        setBattleChallenge(data.payload);
+    } else if (data.type === 'BATTLE_ACCEPT') {
+        const { battleId, opponentId, opponentInfo, isLead } = data.payload;
+        startMultiplayerBattle(battleId, opponentId, opponentInfo, isLead);
+    } else if (data.type === 'BATTLE_START') {
+        const { playerTeam: netPlayerTeam, enemies, isBoss, isTrainer, trainerData, biome, tileType, bgUrl, initialWeather, initialCombo, isPvP, battleId: netBattleId } = data.payload;
+        if (netBattleId) setBattleId(netBattleId);
+        setIsMultiplayerBattle(true);
+        setPhase(GamePhase.BATTLE);
+        
+        // Play initial cries
+        if (netPlayerTeam && netPlayerTeam[0]) playCry(netPlayerTeam[0].id, netPlayerTeam[0].name);
+        else if (playerState.team[0]) playCry(playerState.team[0].id, playerState.team[0].name);
+        
+        setTimeout(() => {
+            if (enemies && enemies[0]) playCry(enemies[0].id, enemies[0].name);
+        }, 500);
+
+        setBattleState({
+            playerTeam: netPlayerTeam || playerState.team,
+            enemyTeam: enemies,
+            turn: 1,
+            phase: 'player_input',
+            logs: isTrainer ? [`Trainer ${trainerData?.name || 'Unknown'} wants to battle!`] : [`A wild ${enemies[0]?.name || 'Pokémon'} appeared!`],
+            pendingMoves: [],
+            activePlayerIndex: 0,
+            ui: { selectionMode: 'MOVE', selectedMove: null },
+            isTrainerBattle: isTrainer,
+            isPvP: !!isPvP,
+            comboMeter: initialCombo,
+            enemyComboMeter: 0,
+            currentTrainerId: trainerData?.id,
+            weather: initialWeather,
+            terrain: 'none',
+            backgroundUrl: bgUrl,
+            weatherTurns: initialWeather !== 'none' ? 5 : 0,
+            tailwindTurns: 0,
+            enemyTailwindTurns: 0,
+            aegisFieldTurns: 0,
+            enemyAegisFieldTurns: 0,
+            battleStreak: 0
+        });
+    } else if (data.type === 'BATTLE_ACTION') {
+        const remoteActions = Array.isArray(data.payload) 
+            ? data.payload.map((a: any) => ({ ...a, isPlayer: false }))
+            : [{ ...data.payload, isPlayer: false }];
+        setRemoteBattleActions(remoteActions);
+        setBattleState(prev => {
+            const livingPlayers = prev.playerTeam.filter(p => !p.isFainted).length;
+            const activePlayerCount = Math.min(2, livingPlayers);
+            if (prev.pendingMoves.length >= activePlayerCount) {
+                return { ...prev, phase: 'execution' };
+            }
+            return prev;
+        });
+    } else if (data.type === 'SYNC_STATE') {
+        setRemotePlayers(prev => {
+            const newMap = new Map(prev);
+            newMap.set(data.payload.id, data.payload);
+            return newMap;
+        });
+    } else if (data.type === 'MAP_DATA_SYNC') {
+        const { riftLayout: netRift, caveLayouts: netCaves } = data.payload;
+        if (netRift) setRiftLayout(netRift);
+        if (netCaves) setCaveLayouts(netCaves);
+    } else if (data.type === 'GAME_SYNC') {
+        const { phase: netPhase, battleState: netBS, p2Position: netP2Pos, mapId: netMapId, type: nestedType } = data.payload;
+        
+        // Handle nested special types within GAME_SYNC
+        if (nestedType === 'BATTLE_START' || data.payload.type === 'BATTLE_START') {
+            console.log('[BATTLE] Processing BATTLE_START via GAME_SYNC');
+            onDataRef.current({ type: 'BATTLE_START', payload: data.payload });
+            return;
+        }
+
+        if (netPhase) setPhase(netPhase); 
+        if (networkRoleRef.current === 'client') {
+            setPlayerState(prev => ({ 
+                ...prev, 
+                position: netP2Pos || prev.position,
+                mapId: netMapId || prev.mapId
+            }));
+        }
+        if (netBS) {
+            if (networkRoleRef.current === 'client') {
+                // Always sync backgroundUrl if provided and not empty
+                if (netBS.backgroundUrl && netBS.backgroundUrl !== battleStateRef.current?.backgroundUrl) {
+                    setBattleState(prev => prev ? { ...prev, backgroundUrl: netBS.backgroundUrl } : netBS);
+                }
+
+                // Only sync full battleState if not in player_input, or if the host says it's execution, 
+                // or if we have no pokemon teams yet (initialization)
+                const hasNoTeams = !battleStateRef.current || (battleStateRef.current.playerTeam.length === 0 && battleStateRef.current.enemyTeam.length === 0);
+                if (hasNoTeams || battleStateRef.current?.phase !== 'player_input' || netBS.phase === 'execution') {
+                    const isPvP = !!netBS.isPvP;
+                    setBattleState({
+                        ...netBS,
+                        playerTeam: isPvP ? netBS.enemyTeam : netBS.playerTeam,
+                        enemyTeam: isPvP ? netBS.playerTeam : netBS.enemyTeam,
+                        pendingMoves: []
+                    });
+                }
+            } else {
+                setBattleState(netBS);
+            }
+        }
+    } else if (data.type === 'INPUT_MOVE') { 
+        if (isHostRef.current) handleMapMove(data.payload, 2);
+    } else if (data.type === 'INPUT_BATTLE_ACTION') { 
+        if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex);
+    } else if (data.type === 'INPUT_MENU') {
+        if (isHostRef.current) {
+            if (data.payload === 'PAUSE') setIsPaused(prev => !prev);
+            if (data.payload.type === 'SWAP') handleSwapTeam(data.payload.i1, data.payload.i2);
+            if (data.payload.type === 'BUY') handleBuy(data.payload.item, data.payload.price);
+            if (data.payload.type === 'CLOSE_SHOP') setPhase(GamePhase.OVERWORLD);
+            if (data.payload.type === 'INTERACT') handleInteraction(2);
+            if (data.payload.type === 'RUN') handleRun();
+        }
+    } else if (data.type === 'INPUT_EMOTE') {
+        triggerEmote(data.payload);
+    }
+  };
+
   useEffect(() => {
     if (scanCooldown > 0) {
       const timer = setInterval(() => setScanCooldown(c => Math.max(0, c - 1)), 1000);
@@ -6835,98 +7285,81 @@ export default function App() {
         setRemotePlayers(new Map(players));
     });
 
-    multiplayer.onData((data) => {
-        if (data.type === 'BATTLE_REQUEST') {
-            setBattleChallenge(data.payload);
-        } else if (data.type === 'BATTLE_ACCEPT') {
-            const { battleId, opponentId, opponentInfo, isLead } = data.payload;
-            startMultiplayerBattle(battleId, opponentId, opponentInfo, isLead);
-        } else if (data.type === 'BATTLE_ACTION') {
-            const remoteActions = Array.isArray(data.payload) 
-                ? data.payload.map((a: any) => ({ ...a, isPlayer: false }))
-                : [{ ...data.payload, isPlayer: false }];
-            setRemoteBattleActions(remoteActions);
-            setBattleState(prev => {
-                const livingPlayers = prev.playerTeam.filter(p => !p.isFainted).length;
-                const activePlayerCount = Math.min(2, livingPlayers);
-                if (prev.pendingMoves.length >= activePlayerCount) {
-                    return { ...prev, phase: 'execution' };
-                }
-                return prev;
-            });
-        } else if (data.type === 'SYNC_STATE') {
-            setRemotePlayers(prev => {
-                const newMap = new Map(prev);
-                newMap.set(data.payload.id, data.payload);
-                return newMap;
-            });
-        } else if (data.type === 'GAME_SYNC') {
-            const { phase: netPhase, battleState: netBS, riftLayout: netRift, caveLayouts: netCaves, p2Position: netP2Pos } = data.payload;
-            if (netPhase) setPhase(netPhase); 
-            if (netP2Pos && networkRoleRef.current === 'client') {
-                setPlayerState(prev => ({ ...prev, position: netP2Pos }));
-            }
-            if (netBS) {
-                if (networkRoleRef.current === 'client') {
-                    // Only sync battleState if not in player_input, or if the host says it's execution
-                    if (battleStateRef.current?.phase !== 'player_input' || netBS.phase === 'execution') {
-                        setBattleState({
-                            ...netBS,
-                            playerTeam: netBS.enemyTeam,
-                            enemyTeam: netBS.playerTeam,
-                            pendingMoves: []
-                        });
-                    }
-                } else {
-                    setBattleState(netBS);
-                }
-            }
-            if (netRift) setRiftLayout(netRift);
-            if (netCaves) setCaveLayouts(netCaves);
-        } else if (data.type === 'INPUT_MOVE') { 
-            if (isHostRef.current) handleMapMove(data.payload, 2);
-        } else if (data.type === 'INPUT_BATTLE_ACTION') { 
-            if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex);
-        } else if (data.type === 'INPUT_MENU') {
-            if (isHostRef.current) {
-                if (data.payload === 'PAUSE') setIsPaused(prev => !prev);
-                if (data.payload.type === 'SWAP') handleSwapTeam(data.payload.i1, data.payload.i2);
-                if (data.payload.type === 'BUY') handleBuy(data.payload.item, data.payload.price);
-                if (data.payload.type === 'CLOSE_SHOP') setPhase(GamePhase.OVERWORLD);
-                if (data.payload.type === 'INTERACT') handleInteraction(2);
-                if (data.payload.type === 'RUN') handleRun();
-            }
-        } else if (data.type === 'INPUT_EMOTE') {
-            triggerEmote(data.payload);
-        }
+    const unsub = multiplayer.onData((data) => {
+        if (onDataRef.current) onDataRef.current(data);
     });
+    return unsub;
   }, []);
 
+  // Sync game state to others (Host only)
   useEffect(() => { 
-    if (multiplayer.isHost && multiplayer.socket?.connected) {
+    if (multiplayer.isHost && multiplayer.roomId) {
+        // Strip movePool from battleState pokemon to reduce size significantly
+        const optimizedBattleState = battleState ? {
+            ...battleState,
+            playerTeam: battleState.playerTeam.map(p => {
+                const { movePool, ...rest } = p;
+                return rest;
+            }),
+            enemyTeam: battleState.enemyTeam.map(p => {
+                const { movePool, ...rest } = p;
+                return rest;
+            })
+        } : null;
+
+        const syncData = { 
+            phase, 
+            battleState: optimizedBattleState, 
+            p2Position: playerState.p2Position,
+            mapId: playerState.mapId
+        };
+        const syncString = JSON.stringify(syncData);
+        if (lastSyncRef.current === syncString) return;
+        lastSyncRef.current = syncString;
+
         multiplayer.send({ 
             type: 'GAME_SYNC', 
-            payload: { phase, battleState, riftLayout, caveLayouts, p2Position: playerState.p2Position } 
+            payload: syncData 
         }); 
     } 
-  }, [phase, battleState, riftLayout, caveLayouts, playerState.p2Position]);
+  }, [phase, battleState, playerState.p2Position, playerState.mapId]);
+
+  // Sync map data (Host only, persistent)
+  useEffect(() => {
+    if (multiplayer.isHost && multiplayer.roomId && (riftLayout || Object.keys(caveLayouts).length > 0)) {
+        const syncString = JSON.stringify({ riftLayout, caveLayouts });
+        if (lastMapSyncRef.current === syncString) return;
+        lastMapSyncRef.current = syncString;
+
+        multiplayer.send({
+            type: 'MAP_DATA_SYNC',
+            payload: {
+                riftLayout,
+                caveLayouts,
+                isPersistent: true,
+                type: 'MAP_DATA'
+            }
+        });
+    }
+  }, [riftLayout, caveLayouts]);
 
   // Sync player state to others
   useEffect(() => {
-    if (phase === GamePhase.OVERWORLD && multiplayer.socket) {
+    if (phase === GamePhase.OVERWORLD && multiplayer.roomId) {
         const syncInterval = setInterval(() => {
             multiplayer.send({
                 type: 'SYNC_STATE',
                 payload: {
-                    id: multiplayer.socket?.id,
+                    id: auth.currentUser?.uid,
                     name: playerState.name,
                     position: playerState.position,
                     mapId: playerState.mapId,
                     team: playerState.team.map(p => ({ id: p.id, name: p.name, level: p.level, currentHp: p.currentHp, maxHp: p.maxHp })),
-                    spriteUrl: networkRole === 'host' ? 'https://play.pokemonshowdown.com/sprites/trainers/red.png' : 'https://play.pokemonshowdown.com/sprites/trainers/leaf.png'
+                    spriteUrl: networkRole === 'host' ? 'https://play.pokemonshowdown.com/sprites/trainers/red.png' : 'https://play.pokemonshowdown.com/sprites/trainers/leaf.png',
+                    isHost: networkRole === 'host'
                 }
             });
-        }, 100);
+        }, 1000);
         return () => clearInterval(syncInterval);
     }
   }, [phase, playerState.position, playerState.mapId, playerState.name, networkRole]);
@@ -6992,6 +7425,41 @@ export default function App() {
     }
   }, [phase, battleState.backgroundUrl]);
 
+    // Sound Reactive Effect for Client in Multiplayer
+    useEffect(() => {
+        if (networkRoleRef.current !== 'client' || !battleState.logs || battleState.logs.length === 0) {
+            if (!battleState.logs) lastProcessedLogIndexRef.current = 0;
+            else lastProcessedLogIndexRef.current = battleState.logs.length;
+            return;
+        }
+
+        const newLogs = battleState.logs.slice(lastProcessedLogIndexRef.current);
+        lastProcessedLogIndexRef.current = battleState.logs.length;
+
+        newLogs.forEach(log => {
+            if (log.includes(' used ')) {
+                const parts = log.split(' used ');
+                if (parts.length > 1) {
+                    const moveName = parts[1].split('!')[0].trim();
+                    const moveEntry = Object.entries(NEW_MOVES).find(([name]) => name === moveName);
+                    if (moveEntry) {
+                        playMoveSfx(moveEntry[1].type, moveEntry[0], moveEntry[1].sfx);
+                    } else {
+                        playMoveSfx('normal');
+                    }
+                }
+            } else if (log.includes(' fainted!')) {
+                playFaintSfx();
+            } else if (log.includes('Super effective!')) {
+                playEffectivenessSfx(2);
+            } else if (log.includes('Not very effective...')) {
+                playEffectivenessSfx(0.5);
+            } else if (log.includes('Critical hit!')) {
+                playSound('https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/hit.mp3', 0.4);
+            }
+        });
+    }, [battleState.logs?.length, networkRoleRef.current]);
+
   // --- CONTROLS ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -7004,6 +7472,7 @@ export default function App() {
               if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
               if (dx !== 0 || dy !== 0) {
                   const newPos = { x: playerState.position.x + dx, y: playerState.position.y + dy };
+                  console.log("[CONTROLS] Client sending INPUT_MOVE to", newPos);
                   multiplayer.send({ type: 'INPUT_MOVE', payload: newPos });
               }
               if (e.key === 'Enter' || e.key === 'e' || e.key === 'E') multiplayer.send({ type: 'INPUT_MENU', payload: { type: 'INTERACT' } });
@@ -7067,6 +7536,51 @@ export default function App() {
 
     // RENDER UI
     const renderContent = () => {
+        if (authLoading) return (
+            <div className="min-h-screen bg-black flex items-center justify-center">
+                <div className="text-yellow-400 animate-pulse font-press-start uppercase tracking-widest">Initialising Rift...</div>
+            </div>
+        );
+
+        if (!user) return (
+            <div className="min-h-screen bg-[#0a1a0a] flex flex-col items-center justify-center p-6 font-press-start relative overflow-hidden">
+                <div className="absolute inset-0 z-0 bg-[radial-gradient(circle_at_50%_50%,#1a3a1a_0%,#050a05_100%)] opacity-50"></div>
+                
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className="z-10 text-center max-w-md w-full bg-black/60 backdrop-blur-xl p-12 rounded-[3rem] border border-white/10 shadow-2xl"
+                >
+                    <h1 className="text-4xl font-black italic mb-8 tracking-tighter leading-tight"
+                        style={{ 
+                            color: '#ffcb05',
+                            textShadow: '0 4px 0 #3c5aa6',
+                            WebkitTextStroke: '1.5px #3c5aa6',
+                            paintOrder: 'stroke fill'
+                        }}
+                    >
+                        POKÉMON<br/>EXPLORERS
+                    </h1>
+                    
+                    <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-12 leading-relaxed">
+                        Secure your trainer profile to access the multiplayer rift.
+                    </p>
+
+                    <button 
+                        onClick={() => loginWithGoogle()}
+                        className="w-full group relative bg-white text-black px-8 py-5 rounded-2xl font-bold uppercase text-xs tracking-widest hover:bg-yellow-400 transition-all flex items-center justify-center gap-4 shadow-xl active:translate-y-1"
+                    >
+                        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                        LOGIN WITH GOOGLE
+                    </button>
+                    
+                    <div className="mt-8 text-[8px] text-gray-600 uppercase tracking-widest">
+                        Powered by Firebase Realtime Rift
+                    </div>
+                </motion.div>
+            </div>
+        );
+
         console.log('App Rendering: Phase =', phase);
         if (phase === GamePhase.MENU) return (
             <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center relative overflow-hidden font-press-start">
@@ -7129,11 +7643,11 @@ export default function App() {
 
                 <div className="z-10 flex flex-col gap-6 w-full max-w-sm px-6">
                     <button 
-                        onClick={()=>setPhase(GamePhase.STARTER_SELECT)} 
+                        onClick={()=>{ unlockAudio(); setMusicStarted(true); setPhase(GamePhase.STARTER_SELECT); }} 
                         className="group relative bg-blue-600 hover:bg-blue-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-blue-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(37,99,235,0.3)]"
                     >
                         <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">🚀</span> START EXPEDITION
+                            <span className="text-2xl">⚡</span> Start Adventure
                         </span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
                     </button>
@@ -7154,11 +7668,11 @@ export default function App() {
                     </button>
 
                     <button 
-                        onClick={()=>setPhase(GamePhase.NETWORK_MENU)} 
+                        onClick={()=>{ unlockAudio(); setMusicStarted(true); setPhase(GamePhase.NETWORK_MENU); }} 
                         className="group relative bg-emerald-600 hover:bg-emerald-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-emerald-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(16,185,129,0.3)]"
                     >
                         <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">🌐</span> CO-OP PLAY
+                            <span className="text-2xl">🌐</span> Join Friend
                         </span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
                     </button>
@@ -7196,7 +7710,7 @@ export default function App() {
             setPhase(GamePhase.OVERWORLD);
             setDialogue([`You gained the ${perk.toUpperCase()} perk!`]);
         }} />;
-        if (phase === GamePhase.NETWORK_MENU) return <OnlineMenu onBack={()=>setPhase(GamePhase.MENU)} onStartGame={()=>{ setNetworkRole(multiplayer.isHost?'host':'client'); setPhase(multiplayer.isHost?GamePhase.STARTER_SELECT:GamePhase.OVERWORLD); }} />;
+        if (phase === GamePhase.NETWORK_MENU) return <OnlineMenu onBack={()=>{ setPhase(GamePhase.MENU); setNetworkRole('none'); multiplayer.disconnect(); }} onStartGame={()=>{ setNetworkRole('client'); setPhase(GamePhase.STARTER_SELECT); }} />;
         if (phase === GamePhase.STARTER_SELECT) { 
             return (
                 <StarterSelect 
@@ -7206,6 +7720,16 @@ export default function App() {
                     upgrades={playerState.meta.upgrades}
                     networkRole={networkRole}
                     multiplayer={multiplayer}
+                    remotePlayers={remotePlayers}
+                    onInvite={async () => {
+                        await multiplayer.createRoom();
+                        setNetworkRole('host');
+                    }}
+                    onBack={() => {
+                        setPhase(GamePhase.MENU);
+                        setNetworkRole('none');
+                        multiplayer.disconnect();
+                    }}
                 />
             ); 
         }
@@ -7244,8 +7768,8 @@ export default function App() {
                         </div>
                     </div>
                 <Overworld 
-                    p1Pos={networkRole === 'client' ? { x: -100, y: -100 } : playerState.position} 
-                    p2Pos={networkRole === 'client' ? playerState.position : (networkRole === 'host' ? { x: -100, y: -100 } : playerState.p2Position)} 
+                    p1Pos={networkRole === 'client' ? ((Array.from(remotePlayers.values()).find((p: any) => p.isHost) as any)?.position || { x: -100, y: -100 }) : playerState.position} 
+                    p2Pos={networkRole === 'host' ? playerState.p2Position : (networkRole === 'client' ? playerState.position : { x: -100, y: -100 })} 
                     mapId={playerState.mapId} 
                     loadedChunks={loadedChunks} 
                     customLayout={playerState.mapId==='rift'?riftLayout! : (playerState.mapId.startsWith('cave_') ? caveLayouts[playerState.mapId] : undefined)} 
@@ -7304,6 +7828,29 @@ export default function App() {
         );
         }
         
+        if (phase === GamePhase.BATTLE) {
+          if (!battleState || (battleState.playerTeam.length === 0 && battleState.enemyTeam.length === 0)) {
+            return (
+              <div className="h-[100dvh] bg-black flex flex-col items-center justify-center font-press-start text-white p-8 text-center">
+                <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-6"></div>
+                <h2 className="text-xl text-yellow-400 mb-4 animate-pulse uppercase tracking-widest">INITIALIZING BATTLE...</h2>
+                <p className="text-[10px] text-gray-500 leading-relaxed max-w-xs">
+                  Synchronizing with the Rift...<br/>
+                  Please wait while we stabilize the connection.
+                </p>
+                {networkRole === 'client' && (
+                   <button 
+                    onClick={() => setPhase(GamePhase.OVERWORLD)}
+                    className="mt-8 text-[8px] text-blue-400 hover:text-blue-300 underline"
+                   >
+                    CANCEL & RETURN TO OVERWORLD
+                   </button>
+                )}
+              </div>
+            );
+          }
+        }
+
         return (
           <div className="h-[100dvh] bg-gray-900 flex flex-col relative overflow-hidden font-press-start">
              {!battleState.backgroundUrl && (
@@ -7486,37 +8033,43 @@ export default function App() {
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 md:gap-4">
                                   <div className="grid grid-cols-2 gap-2">
                                       {activePlayer.moves.map((m, i) => {
-                                          const isMyTurn = networkRole === 'none' || (networkRole === 'host' && battleState.activePlayerIndex === 0) || (networkRole === 'client' && battleState.activePlayerIndex === 1);
                                           return (
                                               <MoveButton 
                                                   key={i} 
                                                   move={m} 
                                                   type={m.type || 'normal'} 
-                                                  onClick={() => { if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'TARGET', selectedMove:m}})) }} 
+                                                  onClick={() => { 
+                                                      unlockAudio();
+                                                      if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'TARGET', selectedMove:m}})) 
+                                                  }} 
                                                   disabled={!isMyTurn || (activePlayer.sealedMoveName === m.name && (activePlayer.sealedTurns || 0) > 0)} 
                                               />
                                           );
                                       })}
                                   </div>
                                   <div className="grid grid-cols-3 md:grid-cols-1 gap-2">
-                                      {(() => {
-                                          const isMyTurn = networkRole === 'none' || (networkRole === 'host' && battleState.activePlayerIndex === 0) || (networkRole === 'client' && battleState.activePlayerIndex === 1);
-                                          return (
-                                              <>
-                                                  <ActionButton label="BAG" color="bg-blue-600" onClick={()=>{ if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'ITEM', selectedMove:null}})) }} disabled={!isMyTurn} />
-                                                  <ActionButton label="POKEMON" color="bg-green-600" onClick={()=>{ if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'SWITCH', selectedMove:null}})) }} disabled={!isMyTurn} />
-                                                  <ActionButton label="RUN" color="bg-red-600" onClick={() => { if (isMyTurn) handleRun() }} disabled={!isMyTurn} />
-                                              </>
-                                          );
-                                      })()}
+                                      <ActionButton label="BAG" color="bg-blue-600" onClick={()=>{ unlockAudio(); if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'ITEM', selectedMove:null}})) }} disabled={!isMyTurn} />
+                                      <ActionButton label="POKEMON" color="bg-green-600" onClick={()=>{ 
+                                          unlockAudio();
+                                          if (isMyTurn) {
+                                              if (isTrapped) {
+                                                  setBattleState(prev => ({...prev, logs: [...prev.logs, `${activePlayer.name} is trapped and cannot switch!`]}));
+                                              } else {
+                                                  setBattleState(prev=>({...prev, ui:{selectionMode:'SWITCH', selectedMove:null}}));
+                                              }
+                                          } 
+                                      }} disabled={!isMyTurn} />
+                                      <ActionButton label="RUN" color="bg-red-600" onClick={() => { unlockAudio(); if (isMyTurn) handleRun() }} disabled={!isMyTurn} />
                                   </div>
                                   {/* Multiplayer Turn Indicator */}
-                                  {networkRole !== 'none' && (
+                                  {(networkRole !== 'none' || !isMyTurn) && (
                                       <div className="col-span-full text-center text-xs text-yellow-400 mt-2 animate-pulse">
-                                          {(networkRole === 'host' && battleState.activePlayerIndex === 1) ? 'Waiting for Client...' : 
+                                          {hasSelected ? 'Waiting for other player...' : 
+                                           (networkRole === 'host' && battleState.activePlayerIndex === 1) ? 'Waiting for Client...' : 
                                            (networkRole === 'client' && battleState.activePlayerIndex === 0) ? 'Waiting for Host...' : ''}
                                       </div>
                                   )}
+
                               </div>
                           )}
 
@@ -7626,8 +8179,22 @@ export default function App() {
           );
     };
 
+    useEffect(() => {
+        const globalUnlock = () => {
+            unlockAudio();
+            // Don't remove listener immediately, let various clicks try to resume
+        };
+        window.addEventListener('click', globalUnlock);
+        window.addEventListener('touchstart', globalUnlock);
+        return () => {
+            window.removeEventListener('click', globalUnlock);
+            window.removeEventListener('touchstart', globalUnlock);
+        };
+    }, []);
+
     return (
         <>
+            <AudioWidget />
             {renderContent()}
         </>
     );

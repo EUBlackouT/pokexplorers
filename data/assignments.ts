@@ -111,7 +111,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Porygon-Z",
       "availability": "late",
-      "abilities_new": ["EnergyCore", "BatteryPack"],
+      "abilities_new": ["EnergyCore", "BatteryPack", "RiftWalker"],
       "learnset_additions": [
         { "move": "Gauge Drain", "level": 35 }
       ]
@@ -420,7 +420,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Alakazam",
       "availability": "mid",
-      "abilities_new": ["MindFracture", "SyncPulse"],
+      "abilities_new": ["Overclock", "SyncPulse", "MindOverMatter"],
       "learnset_additions": [
         { "move": "Mind Fracture", "level": 36 }
       ]
@@ -436,7 +436,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Gengar",
       "availability": "mid",
-      "abilities_new": ["GavePact", "HollowEcho"],
+      "abilities_new": ["GravePact", "HollowEcho", "SoulSiphon"],
       "learnset_additions": [
         { "move": "Gravebind", "level": 36 }
       ]
@@ -452,7 +452,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Mewtwo",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "PressurePoint"],
+      "abilities_new": ["PressurePoint", "Overclock", "MindOverMatter"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 70 }
       ]
@@ -476,7 +476,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Lucario",
       "availability": "mid",
-      "abilities_new": ["DuelistSWill", "SyncStrike"],
+      "abilities_new": ["DuelistSWill", "SyncStrike", "MindOverMatter"],
       "learnset_additions": [
         { "move": "Fighting Snap of Driving Strike", "level": 32 }
       ]
@@ -492,7 +492,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Gardevoir",
       "availability": "mid",
-      "abilities_new": ["SoulResonance", "RuneBloom"],
+      "abilities_new": ["MirrorFocus", "RuneBloom"],
       "learnset_additions": [
         { "move": "Soul Resonance", "level": 30 }
       ]
@@ -508,7 +508,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Metagross",
       "availability": "late",
-      "abilities_new": ["ThreatMatrix", "ArmorMelt"],
+      "abilities_new": ["ThreatMatrix", "ArmorMelt", "GravityWell"],
       "learnset_additions": [
         { "move": "Iron Waltz", "level": 45 }
       ]
@@ -516,7 +516,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Salamence",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "Jetstream"],
+      "abilities_new": ["Multiscale", "Jetstream"],
       "learnset_additions": [
         { "move": "Dragon Torrent of Scaled Fury", "level": 50 }
       ]
@@ -740,7 +740,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Hypno",
       "availability": "mid",
-      "abilities_new": ["MindFracture", "QuietZone"],
+      "abilities_new": ["Overclock", "QuietZone"],
       "learnset_additions": [
         { "move": "Mind Fracture", "level": 26 }
       ]
@@ -812,7 +812,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Rhydon",
       "availability": "mid",
-      "abilities_new": ["SolidRock", "BasaltBurst"],
+      "abilities_new": ["SolidRock", "BasaltArmor"],
       "learnset_additions": [
         { "move": "Basalt Burst", "level": 42 }
       ]
@@ -986,7 +986,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Articuno",
       "availability": "late",
-      "abilities_new": ["BorealCoat", "QuietZone"],
+      "abilities_new": ["BorealCoat", "GlacialAura"],
       "learnset_additions": [
         { "move": "Ice Torrent of Biting Cold", "level": 50 }
       ]
@@ -1018,7 +1018,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Meganium",
       "availability": "mid",
-      "abilities_new": ["Lifebloom", "SourSap"],
+      "abilities_new": ["Lifebloom", "VerdantVeil"],
       "learnset_additions": [
         { "move": "Grass Surge of Razor Leaves", "level": 32 }
       ]
@@ -1034,7 +1034,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Feraligatr",
       "availability": "mid",
-      "abilities_new": ["BladeDance", "WhirlpoolHeart"],
+      "abilities_new": ["BladeDance", "PrimalHunger"],
       "learnset_additions": [
         { "move": "Water Wave of Foaming Tide", "level": 30 }
       ]
@@ -1130,7 +1130,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Donphan",
       "availability": "mid",
-      "abilities_new": ["HeavyStance", "BasaltBurst"],
+      "abilities_new": ["HeavyStance", "BasaltArmor"],
       "learnset_additions": [
         { "move": "Basalt Burst", "level": 25 }
       ]
@@ -1170,7 +1170,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Lugia",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 60 }
       ]
@@ -1178,7 +1178,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Ho-Oh",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "HotBlooded"],
+      "abilities_new": ["AetherPresence", "HotBlooded"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 60 }
       ]
@@ -1202,7 +1202,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Blaziken",
       "availability": "mid",
-      "abilities_new": ["HotBlooded", "RecklessTempo"],
+      "abilities_new": ["HotBlooded", "OverheatDrive"],
       "learnset_additions": [
         { "move": "Emberlance", "level": 36 }
       ]
@@ -1234,7 +1234,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Exploud",
       "availability": "mid",
-      "abilities_new": ["CavernRoar", "Amplifier"],
+      "abilities_new": ["CavernRoar", "EchoChamber"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 40 }
       ]
@@ -1266,7 +1266,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Sharpedo",
       "availability": "mid",
-      "abilities_new": ["BladeDance", "RecklessTempo"],
+      "abilities_new": ["BladeDance", "PrimalHunger"],
       "learnset_additions": [
         { "move": "Water Wave of Foaming Tide", "level": 30 }
       ]
@@ -1282,7 +1282,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Camerupt",
       "availability": "mid",
-      "abilities_new": ["BoilingPoint", "BasaltBurst"],
+      "abilities_new": ["BoilingPoint", "BasaltArmor"],
       "learnset_additions": [
         { "move": "Basalt Burst", "level": 33 }
       ]
@@ -1378,7 +1378,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Latias",
       "availability": "late",
-      "abilities_new": ["SyncPulse", "AetherRoar"],
+      "abilities_new": ["SyncPulse", "AetherPresence"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 40 }
       ]
@@ -1386,7 +1386,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Latios",
       "availability": "late",
-      "abilities_new": ["SyncPulse", "AetherRoar"],
+      "abilities_new": ["SyncPulse", "AetherPresence"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 40 }
       ]
@@ -1442,7 +1442,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Infernape",
       "availability": "mid",
-      "abilities_new": ["HotBlooded", "BladeDance"],
+      "abilities_new": ["HotBlooded", "OverheatDrive"],
       "learnset_additions": [
         { "move": "Emberlance", "level": 36 }
       ]
@@ -1498,7 +1498,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Abomasnow",
       "availability": "mid",
-      "abilities_new": ["BorealCoat", "SourSap"],
+      "abilities_new": ["BorealCoat", "GlacialAura"],
       "learnset_additions": [
         { "move": "Ice Torrent of Biting Cold", "level": 1 }
       ]
@@ -1514,7 +1514,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Magnezone",
       "availability": "mid",
-      "abilities_new": ["ContactCharge", "ArcSurge"],
+      "abilities_new": ["ContactCharge", "StaticField"],
       "learnset_additions": [
         { "move": "Arc Cannon", "level": 1 }
       ]
@@ -1530,7 +1530,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Rhyperior",
       "availability": "mid",
-      "abilities_new": ["SolidRock", "BasaltBurst"],
+      "abilities_new": ["SolidRock", "BasaltArmor"],
       "learnset_additions": [
         { "move": "Basalt Burst", "level": 1 }
       ]
@@ -1546,7 +1546,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Electivire",
       "availability": "mid",
-      "abilities_new": ["ContactCharge", "LagShock"],
+      "abilities_new": ["ContactCharge", "StaticField"],
       "learnset_additions": [
         { "move": "Arc Cannon", "level": 1 }
       ]
@@ -1610,7 +1610,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Porygon-Z",
       "availability": "mid",
-      "abilities_new": ["Overclock", "SyncPulse"],
+      "abilities_new": ["Overclock", "RiftWalker"],
       "learnset_additions": [
         { "move": "Normal Wave of Quick Step", "level": 1 }
       ]
@@ -1650,7 +1650,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Dialga",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -1658,7 +1658,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Palkia",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -1666,7 +1666,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Giratina",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -1706,7 +1706,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Emboar",
       "availability": "mid",
-      "abilities_new": ["HotBlooded", "RecklessTempo"],
+      "abilities_new": ["HotBlooded", "OverheatDrive"],
       "learnset_additions": [
         { "move": "Emberlance", "level": 36 }
       ]
@@ -1738,7 +1738,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Gigalith",
       "availability": "mid",
-      "abilities_new": ["SolidRock", "HeavyStance"],
+      "abilities_new": ["SolidRock", "GravityWell"],
       "learnset_additions": [
         { "move": "Basalt Burst", "level": 25 }
       ]
@@ -1834,7 +1834,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Hydreigon",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "AngleShot"],
+      "abilities_new": ["AetherPresence", "AngleShot"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 64 }
       ]
@@ -1938,7 +1938,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Xerneas",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -1946,7 +1946,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Yveltal",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -1954,7 +1954,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Zygarde",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Ground Surge of Muddy Surge", "level": 1 }
       ]
@@ -1994,7 +1994,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Tapu Koko",
       "availability": "late",
-      "abilities_new": ["SyncPulse", "AetherRoar"],
+      "abilities_new": ["SyncPulse", "AetherPresence"],
       "learnset_additions": [
         { "move": "Arc Cannon", "level": 1 }
       ]
@@ -2002,7 +2002,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Tapu Lele",
       "availability": "late",
-      "abilities_new": ["SyncPulse", "AetherRoar"],
+      "abilities_new": ["SyncPulse", "AetherPresence"],
       "learnset_additions": [
         { "move": "Mind Fracture", "level": 1 }
       ]
@@ -2010,7 +2010,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Tapu Bulu",
       "availability": "late",
-      "abilities_new": ["SyncPulse", "AetherRoar"],
+      "abilities_new": ["SyncPulse", "AetherPresence"],
       "learnset_additions": [
         { "move": "Grass Surge of Razor Leaves", "level": 1 }
       ]
@@ -2018,7 +2018,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Tapu Fini",
       "availability": "late",
-      "abilities_new": ["SyncPulse", "AetherRoar"],
+      "abilities_new": ["SyncPulse", "AetherPresence"],
       "learnset_additions": [
         { "move": "Water Wave of Foaming Tide", "level": 1 }
       ]
@@ -2026,7 +2026,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Solgaleo",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -2034,7 +2034,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Lunala",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -2042,7 +2042,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Necrozma",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Aether Roar", "level": 1 }
       ]
@@ -2050,7 +2050,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Rillaboom",
       "availability": "mid",
-      "abilities_new": ["RootedSpirit", "Wardrum"],
+      "abilities_new": ["RootedSpirit", "VerdantVeil"],
       "learnset_additions": [
         { "move": "Grass Surge of Razor Leaves", "level": 35 }
       ]
@@ -2074,7 +2074,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Zacian",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Iron Waltz", "level": 1 }
       ]
@@ -2082,7 +2082,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Zamazenta",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Iron Waltz", "level": 1 }
       ]
@@ -2090,7 +2090,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Eternatus",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Dragon Torrent of Scaled Fury", "level": 1 }
       ]
@@ -2106,7 +2106,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Koraidon",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Fighting Snap of Driving Strike", "level": 1 }
       ]
@@ -2114,7 +2114,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Miraidon",
       "availability": "late",
-      "abilities_new": ["AetherRoar", "QuietZone"],
+      "abilities_new": ["AetherPresence", "QuietZone"],
       "learnset_additions": [
         { "move": "Arc Cannon", "level": 1 }
       ]

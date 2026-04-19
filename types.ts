@@ -161,6 +161,7 @@ export interface PokemonMove {
   flinchChance?: number;
   min_hits?: number;
   max_hits?: number;
+  sfx?: string;
 }
 
 export interface MovePoolItem {
@@ -247,15 +248,27 @@ export interface Pokemon {
   incomingAttackType?: string; 
   isShiny?: boolean;
   cryUrl?: string;
-  
-  // Status & Effects
+  nextSpecialBoost?: boolean;
+  isTrapped?: number;
+  isProtected?: boolean;
+  isInvulnerable?: boolean;
+  perishTurns?: number;
+  futureSightTurns?: number;
+  futureSightDamage?: number;
+  isLeechSeeded?: boolean;
+  choiceMove?: string;
+  metronomeCount?: number;
+  nextMoveDamageBoost?: number | boolean;
+  nextMovePriorityBoost?: number;
+  lastMoveWasLink?: boolean;
+  substituteHp?: number;
   trappedTurns?: number;
+  confusionDamage?: boolean;
   sealedMoveName?: string;
   sealedTurns?: number;
+  tookDamageThisTurn?: boolean;
   lastMoveName?: string;
   lastMoveMissed?: boolean;
-  metronomeCount?: number;
-  lastMoveWasLink?: boolean;
   hasUsedJetstream?: boolean;
   hasUsedRuneBloomThisTurn?: boolean;
   
@@ -266,6 +279,7 @@ export interface Pokemon {
     critMod?: boolean;
     physicalDamageMult?: number;
     healAtEnd?: boolean;
+    critRate?: number;
   };
   
   // Progression
@@ -280,28 +294,17 @@ export interface Pokemon {
   chargingMove?: PokemonMove; // If present, pokemon is charging this move
   mustRecharge?: boolean; // If true, pokemon must recharge next turn
   heldItem?: { id: string, name: string };
-  choiceMove?: string;
-  nextMovePriorityBoost?: boolean;
-  nextMoveDamageBoost?: boolean;
-  isProtected?: boolean;
-  isTrapped?: number;
   ignoresProtect?: boolean;
   usedSacrificialGuard?: boolean;
   usedTrickMirror?: boolean;
   usedBackdraftClause?: boolean;
+  usedWithstand?: boolean;
   hasMovedThisTurn?: boolean;
-  tookDamageThisTurn?: boolean;
-  isInvulnerable?: boolean;
-  substituteHp?: number;
-  isLeechSeeded?: boolean;
   isCursed?: boolean;
   isDestinyBondActive?: boolean;
   toxicTurns?: number;
-  perishTurns?: number;
   isBoosterEnergyActive?: boolean;
   mustSwitch?: boolean;
-  futureSightTurns?: number;
-  futureSightDamage?: number;
   isNightmareActive?: boolean;
   isTaunted?: number;
   isEncored?: number;
@@ -379,6 +382,7 @@ export interface BattleState {
       isFusionNext?: boolean;
   };
   isTrainerBattle: boolean;
+  isPvP?: boolean;
   currentTrainerId?: string; // To track win
   weather: WeatherType;
   weatherTurns?: number;

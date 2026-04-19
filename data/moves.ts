@@ -18,6 +18,7 @@ export interface MoveData {
     flinchChance?: number;
     min_hits?: number;
     max_hits?: number;
+    sfx?: string;
 }
 
 export const NEW_MOVES: Record<string, MoveData> = {
@@ -33,6 +34,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "May burn the target.",
     "flavor": "The user hardens flame into a lance and dashes forward in a blazing thrust.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/firepunch.mp3",
     "meta": { "ailment": { "name": "burn" }, "ailment_chance": 20, "category": { "name": "damage+ailment" } }
   },
   "Iron Waltz": {
@@ -47,6 +49,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["multi-hit"],
     "effect": "Hits twice.",
     "flavor": "The user dances with ringing steel, striking in a measured duet.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/geargrind.mp3",
     "min_hits": 2,
     "max_hits": 2,
     "meta": { "category": { "name": "damage" } }
@@ -63,6 +66,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["sub-pierce"],
     "effect": "May frostbite; hits through Substitute.",
     "flavor": "A frigid beam that seeps into every gap, chilling even hidden foes.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/icebeam.mp3",
     "meta": { "ailment": { "name": "frostbite" }, "ailment_chance": 20, "category": { "name": "damage+ailment" } }
   },
   "Mind Fracture": {
@@ -77,6 +81,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["spdef-drop"],
     "effect": "Lowers the target’s Sp. Def.",
     "flavor": "A sharp psionic spike shatters the foe’s focus from within.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/psychic.mp3",
     "stat_changes": [{ "stat": { "name": "special-defense" }, "change": -1 }],
     "meta": { "stat_chance": 100, "category": { "name": "damage+lower" } }
   },
@@ -92,6 +97,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "May cause the target to flinch.",
     "flavor": "The user detonates jagged stone in a brutal close-range burst.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/rockblast.mp3",
     "flinchChance": 30,
     "meta": { "category": { "name": "damage" } }
   },
@@ -107,6 +113,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["spread"],
     "effect": "Hits both foes; may lower Sp. Atk.",
     "flavor": "A tempest of buzzing wings and cutting scales batters the field.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/bugbuzz.mp3",
     "stat_changes": [{ "stat": { "name": "special-attack" }, "change": -1 }],
     "meta": { "stat_chance": 30, "category": { "name": "damage+lower" } }
   },
@@ -122,6 +129,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "Steals 10% Sync Gauge from the opponent.",
     "flavor": "The user siphons the opponent's energy to fuel its own Sync Gauge.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/darkpulse.mp3",
     "meta": { "category": { "name": "damage" } }
   },
   "Shield Bash": {
@@ -136,6 +144,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "Raises the user's Defense by 1 stage.",
     "flavor": "The user slams the target with its shield, hardening its own defenses.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/ironhead.mp3",
     "stat_changes": [{ "stat": { "name": "defense" }, "change": 1 }],
     "meta": { "stat_chance": 100, "category": { "name": "damage+raise" } }
   },
@@ -151,6 +160,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["tailwind-after"],
     "effect": "Sets Tailwind after dealing damage.",
     "flavor": "A sharp cross-breeze lifts the team’s wings after the strike.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/gust.mp3",
     "meta": { "category": { "name": "damage" } }
   },
   "Gravebind": {
@@ -165,6 +175,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["trap"],
     "effect": "Traps the target for four turns; seals its last move for two.",
     "flavor": "A spiteful tether of spirit matter binds the foe and chokes its options.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/shadowball.mp3",
     "meta": { "ailment": { "name": "trapped" }, "ailment_chance": 100, "category": { "name": "damage+ailment" } }
   },
   "Arc Cannon": {
@@ -179,6 +190,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "May paralyze the target.",
     "flavor": "A condensed blast of charged particles tears through the air before erupting.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/zapcannon.mp3",
     "meta": { "ailment": { "name": "paralysis" }, "ailment_chance": 30, "category": { "name": "damage+ailment" } }
   },
   "Aether Roar": {
@@ -193,6 +205,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["crit-vs-status"],
     "effect": "Always critical on statused targets.",
     "flavor": "An ancient, echoing roar that tears open weak spots.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/roaroftime.mp3",
     "meta": { "category": { "name": "damage" } }
   },
   "Soul Resonance": {
@@ -207,6 +220,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["signature", "slow-start"],
     "effect": "Always moves last; heals both users for a little after damage.",
     "flavor": "Two kindred spirits harmonize their power into a single, world-shaking note.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/hypervoice.mp3",
     "meta": { "category": { "name": "damage" } }
   },
   "Eclipse Beam": {
@@ -221,6 +235,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["signature", "field"],
     "effect": "Sets Trick Room or Tailwind depending on the field state.",
     "flavor": "A sun–moon ray bends time or wind as it carves through the opposition.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/flashcannon.mp3",
     "meta": { "category": { "name": "damage" } }
   },
   "Lucky Bark": {
@@ -235,6 +250,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["flinch"],
     "effect": "30% chance to flinch the target.",
     "flavor": "The user barks in a lucky rhythm, startling the foe.",
+    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/snarl.mp3",
     "flinchChance": 30,
     "meta": { "category": { "name": "damage" } }
   },
@@ -889,5 +905,179 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flavor": "Borrowing the power of the moon, the user attacks the target. This may also lower the target's Sp. Atk stat.",
     "stat_changes": [{ "stat": { "name": "special-attack" }, "change": -1 }],
     "meta": { "stat_chance": 30, "category": { "name": "damage+lower" } }
+  },
+  "Fighting Snap of Driving Strike": {
+    "type": "Fighting",
+    "category": "Physical",
+    "power": 85,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": true,
+    "target": "Single",
+    "flags": [],
+    "effect": "High critical-hit ratio.",
+    "flavor": "A precise, snapping strike that targets the foe's weak points.",
+    "meta": { "crit_rate": 1, "category": { "name": "damage" } }
+  },
+  "Flying Surge of Spiral Dive": {
+    "type": "Flying",
+    "category": "Physical",
+    "power": 85,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": true,
+    "target": "Single",
+    "flags": [],
+    "effect": "May lower the target's Defense.",
+    "flavor": "The user spirals down from the sky, striking with the force of a gale.",
+    "stat_changes": [{ "stat": { "name": "defense" }, "change": -1 }],
+    "meta": { "stat_chance": 20, "category": { "name": "damage+lower" } }
+  },
+  "Ice Torrent of Biting Cold": {
+    "type": "Ice",
+    "category": "Special",
+    "power": 85,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": false,
+    "target": "Both foes",
+    "flags": ["spread"],
+    "effect": "May freeze the targets.",
+    "flavor": "A torrent of sub-zero air that freezes everything in its path.",
+    "meta": { "ailment": { "name": "freeze" }, "ailment_chance": 10, "category": { "name": "damage+ailment" } }
+  },
+  "Water Wave of Foaming Tide": {
+    "type": "Water",
+    "category": "Special",
+    "power": 90,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": false,
+    "target": "Both foes",
+    "flags": ["spread"],
+    "effect": "May lower the target's Speed.",
+    "flavor": "A massive foaming tide that sweeps away the opposition.",
+    "stat_changes": [{ "stat": { "name": "speed" }, "change": -1 }],
+    "meta": { "stat_chance": 20, "category": { "name": "damage+lower" } }
+  },
+  "Rock Wave of Falling Scree": {
+    "type": "Rock",
+    "category": "Physical",
+    "power": 80,
+    "accuracy": 95,
+    "pp": 15,
+    "priority": 0,
+    "contact": false,
+    "target": "Both foes",
+    "flags": ["spread"],
+    "effect": "May cause flinching.",
+    "flavor": "A wave of falling rocks that batters the entire field.",
+    "flinchChance": 20,
+    "meta": { "category": { "name": "damage" } }
+  },
+  "Ground Surge of Muddy Surge": {
+    "type": "Ground",
+    "category": "Physical",
+    "power": 90,
+    "accuracy": 100,
+    "pp": 10,
+    "priority": 0,
+    "contact": false,
+    "target": "Both foes",
+    "flags": ["spread"],
+    "effect": "May lower the target's Accuracy.",
+    "flavor": "A surge of thick mud that coats the battlefield and blinds foes.",
+    "stat_changes": [{ "stat": { "name": "accuracy" }, "change": -1 }],
+    "meta": { "stat_chance": 20, "category": { "name": "damage+lower" } }
+  },
+  "Bug Torrent of Hive Surge": {
+    "type": "Bug",
+    "category": "Physical",
+    "power": 80,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": true,
+    "target": "Single",
+    "flags": [],
+    "effect": "Restores HP by half the damage dealt.",
+    "flavor": "A relentless swarm that drains the foe's vitality.",
+    "meta": { "drain": 50, "category": { "name": "damage+lower" } }
+  },
+  "Poison Torrent of Toxic Spume": {
+    "type": "Poison",
+    "category": "Special",
+    "power": 85,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": false,
+    "target": "Both foes",
+    "flags": ["spread"],
+    "effect": "May badly poison the targets.",
+    "flavor": "A spray of toxic foam that seeps into the foe's skin.",
+    "meta": { "ailment": { "name": "poison" }, "ailment_chance": 30, "category": { "name": "damage+ailment" } }
+  },
+  "Psychic Wave of Bending Thought": {
+    "type": "Psychic",
+    "category": "Special",
+    "power": 90,
+    "accuracy": 100,
+    "pp": 10,
+    "priority": 0,
+    "contact": false,
+    "target": "Single",
+    "flags": [],
+    "effect": "May lower the target's Sp. Atk.",
+    "flavor": "A wave of psionic energy that warps the foe's perception.",
+    "stat_changes": [{ "stat": { "name": "special-attack" }, "change": -1 }],
+    "meta": { "stat_chance": 20, "category": { "name": "damage+lower" } }
+  },
+  "Fairy Torrent of Pixie Flit": {
+    "type": "Fairy",
+    "category": "Special",
+    "power": 80,
+    "accuracy": 100,
+    "pp": 15,
+    "priority": 0,
+    "contact": false,
+    "target": "Both foes",
+    "flags": ["spread"],
+    "effect": "May lower the target's Attack.",
+    "flavor": "A shimmering torrent of fairy dust that weakens the foe's resolve.",
+    "stat_changes": [{ "stat": { "name": "attack" }, "change": -1 }],
+    "meta": { "stat_chance": 20, "category": { "name": "damage+lower" } }
+  },
+  "Normal Wave of Quick Step": {
+    "type": "Normal",
+    "category": "Physical",
+    "power": 70,
+    "accuracy": 100,
+    "pp": 20,
+    "priority": 1,
+    "contact": true,
+    "target": "Single",
+    "flags": [],
+    "effect": "Always moves first.",
+    "flavor": "A quick, rhythmic strike that catches the foe off guard.",
+    "meta": { "category": { "name": "damage" } }
+  },
+  "Dragon Torrent of Scaled Fury": {
+    "type": "Dragon",
+    "category": "Physical",
+    "power": 100,
+    "accuracy": 100,
+    "pp": 10,
+    "priority": 0,
+    "contact": true,
+    "target": "Single",
+    "flags": [],
+    "effect": "High critical-hit ratio.",
+    "flavor": "The user unleashes a barrage of sharp scales in a furious assault.",
+    "meta": { "crit_rate": 1, "category": { "name": "damage" } }
   }
 };

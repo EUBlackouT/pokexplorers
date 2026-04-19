@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: rooms
+    // Document ID: {roomId}
+    // Fields:
+    //   - hostId: string (required) - UID of the host
+    //   - createdAt: timestamp (required)
+    //   - lastActive: timestamp
+    //
+    // Collection: rooms/{roomId}/players
+    // Document ID: {playerId} (usually UID)
+    // Fields:
+    //   - uid: string (required)
+    //   - displayName: string
+    //   - state: map (required) - game state
+    //   - lastUpdate: timestamp (required)
+    //
+    // Collection: rooms/{roomId}/battles
+    // Document ID: {battleId}
+    // Fields:
+    //   - challengerId: string (required)
+    //   - acceptorId: string (required)
+    //   - challengerInfo: map
+    //   - acceptorInfo: map
+    //   - status: string (required) - pending, active, completed
+    //   - lastAction: map
+    //   - createdAt: timestamp (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidRoom(data) {
+      return data.hostId is string && data.hostId.size() > 0 &&
+             (data.createdAt is timestamp || !('createdAt' in data));
+    }
+
+    function isValidPlayer(data) {
+      return data.uid is string && data.uid == request.auth.uid &&
+             data.state is map &&
+             (data.lastUpdate is timestamp || !('lastUpdate' in data));
+    }
+
+    function isValidBattle(data) {
+      return data.status in ['pending', 'active', 'completed'] &&
+             (data.createdAt is timestamp || !('createdAt' in data)) &&
+             (data.challengerId is string || !('challengerId' in data)) &&
+             (data.acceptorId is string || !('acceptorId' in data));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidRoom(request.resource.data) && request.resource.data.hostId == request.auth.uid;
+      allow update: if isAuthenticated() && isValidRoom(request.resource.data) && resource.data.hostId == request.auth.uid;
+
+      match /players/{playerId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidPlayer(request.resource.data) && playerId == request.auth.uid;
+        allow update: if isAuthenticated() && isValidPlayer(request.resource.data) && playerId == request.auth.uid;
+        allow delete: if isAuthenticated() && playerId == request.auth.uid;
+      }
+
+      match /battles/{battleId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidBattle(request.resource.data) && (request.resource.data.challengerId == request.auth.uid || request.resource.data.acceptorId == request.auth.uid);
+        allow update: if isAuthenticated() && isValidBattle(request.resource.data) && (resource.data.challengerId == request.auth.uid || resource.data.acceptorId == request.auth.uid);
+      }
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -931,5 +931,105 @@ export const NEW_ABILITIES: Record<string, AbilityData> = {
     "category": "General",
     "description": "Reduces damage taken by 50% when at full HP.",
     "tags": ["defense", "fullhp"]
+  },
+  "SolidRock": {
+    "category": "General",
+    "description": "Reduces damage from super-effective moves by 25%.",
+    "tags": ["defense", "super-effective"]
+  },
+  "ThickFat": {
+    "category": "General",
+    "description": "Reduces damage from Fire and Ice-type moves by 50%.",
+    "tags": ["defense", "resist"]
+  },
+  "CompoundEyes": {
+    "category": "General",
+    "description": "Boosts the Pokémon's accuracy by 30%.",
+    "tags": ["accuracy"]
+  },
+  "SuperLuck": {
+    "category": "General",
+    "description": "Boosts the critical-hit ratio of moves by one stage.",
+    "tags": ["crit"]
+  },
+  "Filter": {
+    "category": "General",
+    "description": "Reduces damage from super-effective moves by 25%.",
+    "tags": ["defense", "super-effective"]
+  },
+  "ShadowShield": {
+    "category": "General",
+    "description": "Reduces damage taken by 50% when at full HP.",
+    "tags": ["defense", "fullhp"]
+  },
+  "MagneticField": {
+    "category": "General",
+    "description": "Prevents Steel-type foes from fleeing or switching out.",
+    "tags": ["trapping", "steel"]
+  },
+  "ShellArmor": {
+    "category": "General",
+    "description": "Protects the Pokémon from critical hits.",
+    "tags": ["crit-immunity"]
+  },
+  "AetherPresence": {
+    "category": "Legendary",
+    "description": "Boosts the power of Dragon and Psychic-type moves by 30%.",
+    "tags": ["damage-boost", "dragon", "psychic"]
+  },
+  "BasaltArmor": {
+    "category": "General",
+    "description": "Reduces damage from super-effective moves by 25% and boosts Rock-type moves by 20%.",
+    "tags": ["defense", "rock-boost"]
+  },
+  "RiftWalker": {
+    "category": "Rift",
+    "description": "On switch-in, swaps the current weather and terrain to their opposites.",
+    "tags": ["field", "entry"]
+  },
+  "EchoChamber": {
+    "category": "General",
+    "description": "Sound-based moves hit twice, but the second hit deals 50% damage.",
+    "tags": ["sound", "multi-hit"]
+  },
+  "PrimalHunger": {
+    "category": "General",
+    "description": "Bite moves restore 50% of the damage dealt as HP.",
+    "tags": ["bite", "drain"]
+  },
+  "StaticField": {
+    "category": "General",
+    "description": "While active, priority moves have a 25% chance to fail.",
+    "tags": ["priority", "disrupt"]
+  },
+  "VerdantVeil": {
+    "category": "General",
+    "description": "Protects the team from status conditions while Grassy Terrain is active.",
+    "tags": ["terrain", "status-immunity"]
+  },
+  "GlacialAura": {
+    "category": "General",
+    "description": "On switch-in, 20% chance to freeze each adjacent foe.",
+    "tags": ["freeze", "entry"]
+  },
+  "MindOverMatter": {
+    "category": "General",
+    "description": "Uses Special Attack instead of Attack for Physical moves.",
+    "tags": ["stat-swap"]
+  },
+  "SoulSiphon": {
+    "category": "General",
+    "description": "When an opponent faints, restores 1/8 max HP and gains +1 to a random stat.",
+    "tags": ["ko", "heal", "buff"]
+  },
+  "OverheatDrive": {
+    "category": "General",
+    "description": "Fire moves deal 1.5x damage but cause 1/8 max HP recoil.",
+    "tags": ["fire", "damage", "recoil"]
+  },
+  "GravityWell": {
+    "category": "General",
+    "description": "On switch-in, sets Gravity for 5 turns.",
+    "tags": ["gravity", "entry"]
   }
 };

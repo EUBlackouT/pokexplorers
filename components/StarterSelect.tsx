@@ -10,13 +10,24 @@ interface Props {
     upgrades: any;
     networkRole?: 'host' | 'client' | 'none';
     multiplayer?: any;
+    remotePlayers?: Map<string, any>;
+    onInvite?: () => void;
+    onBack?: () => void;
 }
 
-export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyBoost, upgrades, networkRole = 'none', multiplayer }) => {
+export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyBoost, upgrades, networkRole = 'none', multiplayer, remotePlayers = new Map(), onInvite, onBack }) => {
     const [options, setOptions] = useState<Pokemon[]>([]);
+    const optionsRef = React.useRef<Pokemon[]>([]);
     const [selected, setSelected] = useState<number[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+    const [isInviting, setIsInviting] = useState(false);
+
+    // Sync ref
+    React.useEffect(() => {
+        optionsRef.current = options;
+    }, [options]);
 
     const currentPlayer = selected.length === 0 ? 1 : 2;
     const isMyTurn = networkRole === 'none' || 
@@ -32,19 +43,59 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
     };
 
     useEffect(() => {
+        if (networkRole === 'client') return; // Client waits for host
+        
+        if (options.length > 0) {
+            // If we already have options and just became host, broadcast them
+            if (networkRole === 'host' && multiplayer) {
+                console.log("[STARTER_SELECT] Host broadcasting existing starters");
+                multiplayer.send({
+                    type: 'GAME_SYNC',
+                    payload: { type: 'STARTERS_DATA', options: options, isPersistent: true }
+                });
+            }
+            setLoading(false);
+            return;
+        }
+
         getStarters(unlockedPacks, shinyBoost).then(data => {
             setOptions(data);
             setLoading(false);
+            
+            if (networkRole === 'host' && multiplayer) {
+                multiplayer.send({
+                    type: 'GAME_SYNC',
+                    payload: { type: 'STARTERS_DATA', options: data, isPersistent: true }
+                });
+            }
+        }).catch(err => {
+            console.error("Failed to fetch starters:", err);
+            setError("Failed to scout Pokémon. Please check your connection.");
+            setLoading(false);
         });
-    }, [unlockedPacks, shinyBoost]);
+    }, [unlockedPacks, shinyBoost, networkRole]);
 
     // Network Sync
     useEffect(() => {
         if (networkRole === 'none' || !multiplayer) return;
 
         const handleData = (data: any) => {
-            if (data.type === 'GAME_SYNC' && data.payload?.type === 'STARTER_SELECT') {
-                setSelected(data.payload.selected);
+            if (data.type === 'GAME_SYNC') {
+                if (data.payload?.type === 'STARTER_SELECT') {
+                    setSelected(data.payload.selected);
+                } else if (data.payload?.type === 'STARTERS_DATA' && networkRole === 'client') {
+                    console.log("[STARTER_SELECT] Received STARTERS_DATA", data.payload.options.length);
+                    optionsRef.current = data.payload.options; // Update ref immediately for synchronous replay
+                    setOptions(data.payload.options);
+                    setLoading(false);
+                } else if (data.payload?.type === 'START_GAME') {
+                    if (optionsRef.current.length === 0) {
+                        console.warn("[STARTER_SELECT] Received START_GAME but no options yet. Payload:", data.payload);
+                        return;
+                    }
+                    const team = data.payload.selectedIndices.map((i: number) => optionsRef.current[i]);
+                    onSelect(team);
+                }
             }
         };
 
@@ -71,7 +122,7 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
         if (networkRole !== 'none' && multiplayer) {
             multiplayer.send({
                 type: 'GAME_SYNC',
-                payload: { type: 'STARTER_SELECT', selected: newSelected }
+                payload: { type: 'STARTER_SELECT', selected: newSelected, isPersistent: false }
             });
         }
     };
@@ -79,15 +130,68 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
     const confirmSelection = () => {
         if (selected.length === 2 && (networkRole === 'none' || networkRole === 'host')) {
             const team = selected.map(i => options[i]);
+            
+            if (networkRole === 'host' && multiplayer) {
+                multiplayer.send({
+                    type: 'GAME_SYNC',
+                    payload: { type: 'START_GAME', selectedIndices: selected, isPersistent: true }
+                });
+            }
+            
             onSelect(team);
         }
     };
 
-    if (loading) return (
+    const isActuallyLoading = loading && options.length === 0;
+
+    const retryScouting = () => {
+        setLoading(true);
+        setError(null);
+        getStarters(unlockedPacks, shinyBoost).then(data => {
+            setOptions(data);
+            setLoading(false);
+            if (networkRole === 'host' && multiplayer) {
+                multiplayer.send({
+                    type: 'GAME_SYNC',
+                    payload: { type: 'STARTERS_DATA', options: data, isPersistent: true }
+                });
+            }
+        }).catch(err => {
+            console.error("Retry failed:", err);
+            setError("Scouting failed again. Check connection.");
+            setLoading(false);
+        });
+    };
+
+    if (isActuallyLoading) return (
         <div className="fixed inset-0 bg-[#020617] flex items-center justify-center z-50">
             <div className="text-center">
                 <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                <div className="text-blue-400 text-xl font-black uppercase tracking-[0.2em] animate-pulse">Scouting Pokemon...</div>
+                <div className="text-blue-400 text-xl font-black uppercase tracking-[0.2em] animate-pulse mb-4">Scouting Pokemon...</div>
+                <div className="text-white/40 text-xs mb-8">
+                    {networkRole === 'client' ? "Waiting for host to send data..." : "Fetching from PokeAPI..."}
+                </div>
+                <button 
+                    onClick={retryScouting}
+                    className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white/60 text-xs rounded-full border border-white/10 transition-all"
+                >
+                    RETRY SCOUTING
+                </button>
+            </div>
+        </div>
+    );
+
+    if (error) return (
+        <div className="fixed inset-0 bg-[#020617] flex items-center justify-center z-50 p-4">
+            <div className="text-center max-w-md bg-white/5 backdrop-blur-xl p-10 rounded-[2.5rem] border border-red-500/20">
+                <div className="text-4xl mb-6">⚠️</div>
+                <div className="text-red-400 text-xl font-black uppercase tracking-widest mb-4">{error}</div>
+                <button 
+                    onClick={() => window.location.reload()}
+                    className="bg-white/10 hover:bg-white/20 text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                    Try Again
+                </button>
             </div>
         </div>
     );
@@ -105,6 +209,15 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
             </div>
 
             <div className="max-w-7xl w-full z-10">
+                <div className="absolute top-8 left-8">
+                    <button 
+                        onClick={onBack}
+                        className="bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-white/10"
+                    >
+                        ← Back to Menu
+                    </button>
+                </div>
+
                 <div className="text-center mb-16">
                     <h1 className="text-5xl md:text-8xl font-black tracking-tighter uppercase italic mb-4" style={{ 
                         color: '#ffcb05',
@@ -112,24 +225,69 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
                     }}>
                         POKÉMON EXPLORERS
                     </h1>
-                    <div className="flex flex-col items-center gap-4 mt-4">
-                        <div className="flex items-center gap-4">
-                            <div className="h-px w-12 bg-blue-500"></div>
-                            <p className="text-blue-400 text-xs md:text-sm uppercase tracking-[0.5em] font-black">
-                                {selected.length < 2 
-                                    ? (isMyTurn ? 'Your Turn: Pick your starter' : `Waiting for Player ${currentPlayer}...`)
-                                    : 'Team Ready'}
-                            </p>
-                            <div className="h-px w-12 bg-blue-500"></div>
-                        </div>
-                        
-                        {selected.length < 2 && (
-                            <div className={`px-6 py-2 rounded-full animate-pulse border ${isMyTurn ? 'bg-green-500/20 border-green-400/30' : 'bg-blue-500/20 border-blue-400/30'}`}>
-                                <span className={`text-[10px] font-black uppercase tracking-widest ${isMyTurn ? 'text-green-200' : 'text-blue-200'}`}>
-                                    {isMyTurn ? 'Select your Pokémon' : `Player ${currentPlayer} is choosing...`}
-                                </span>
+                    
+                    {/* Co-op Controls */}
+                    <div className="flex flex-col items-center gap-6 mt-8">
+                        {networkRole === 'none' ? (
+                            <button 
+                                onClick={async () => {
+                                    setIsInviting(true);
+                                    if (onInvite) await onInvite();
+                                    setIsInviting(false);
+                                }}
+                                disabled={isInviting}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-2xl text-xs font-black uppercase tracking-[0.3em] transition-all shadow-[0_10px_30px_rgba(16,185,129,0.3)] border-b-4 border-emerald-800 active:border-b-0 active:translate-y-1"
+                            >
+                                {isInviting ? 'Opening Rift...' : '🤝 Invite Friend to Co-op'}
+                            </button>
+                        ) : (
+                            <div className="flex flex-col items-center gap-3">
+                                <div className="bg-white/5 backdrop-blur-xl border border-white/10 px-8 py-4 rounded-[2rem] flex items-center gap-6 shadow-2xl">
+                                    <div className="text-left">
+                                        <div className="text-[8px] text-blue-400 font-black uppercase tracking-widest mb-1">Room Code</div>
+                                        <div className="text-2xl font-mono font-bold tracking-[0.3em] text-white">{multiplayer?.roomId}</div>
+                                    </div>
+                                    <button 
+                                        onClick={() => {
+                                            if (multiplayer?.roomId) {
+                                                navigator.clipboard.writeText(multiplayer.roomId);
+                                            }
+                                        }}
+                                        className="bg-white/10 hover:bg-white/20 p-3 rounded-xl transition-colors text-xl"
+                                        title="Copy Code"
+                                    >
+                                        📋
+                                    </button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <div className={`w-2 h-2 rounded-full ${remotePlayers.size > 0 ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                        {remotePlayers.size > 0 ? 'Friend Connected!' : 'Waiting for friend to join...'}
+                                    </span>
+                                </div>
+                                <p className="text-[8px] text-gray-600 uppercase tracking-widest mt-2">Share this code with your friend to sync your Rifts</p>
                             </div>
                         )}
+
+                        <div className="flex flex-col items-center gap-4 mt-4">
+                            <div className="flex items-center gap-4">
+                                <div className="h-px w-12 bg-blue-500"></div>
+                                <p className="text-blue-400 text-xs md:text-sm uppercase tracking-[0.5em] font-black">
+                                    {selected.length < 2 
+                                        ? (isMyTurn ? 'Your Turn: Pick your starter' : `Waiting for Player ${currentPlayer}...`)
+                                        : 'Team Ready'}
+                                </p>
+                                <div className="h-px w-12 bg-blue-500"></div>
+                            </div>
+                            
+                            {selected.length < 2 && (
+                                <div className={`px-6 py-2 rounded-full animate-pulse border ${isMyTurn ? 'bg-green-500/20 border-green-400/30' : 'bg-blue-500/20 border-blue-400/30'}`}>
+                                    <span className={`text-[10px] font-black uppercase tracking-widest ${isMyTurn ? 'text-green-200' : 'text-blue-200'}`}>
+                                        {isMyTurn ? 'Select your Pokémon' : `Player ${currentPlayer} is choosing...`}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
                 

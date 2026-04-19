@@ -1,9 +1,12 @@
-
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import { fileURLToPath } from "url";
 import { createServer } from "http";
 import { Server } from "socket.io";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
@@ -14,75 +17,62 @@ async function startServer() {
       methods: ["GET", "POST"]
     }
   });
+
   const PORT = 3000;
 
-  app.use(express.json({ limit: '50mb' }));
-
-  // Socket.io logic
-  const rooms = new Map<string, Set<string>>(); // Room ID -> Set of socket IDs
-  const playerStates = new Map<string, any>(); // Socket ID -> Player State
-
+  // --- SOCKET.IO LOGIC ---
   io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-
-    socket.on("join_room", (roomId) => {
+    console.log(`[Socket] User connected: ${socket.id}`);
+    
+    socket.on("join-room", (roomId) => {
       socket.join(roomId);
-      let isHost = false;
-      if (!rooms.has(roomId)) {
-        rooms.set(roomId, new Set());
-        isHost = true;
-      }
-      rooms.get(roomId)!.add(socket.id);
-      console.log(`Socket ${socket.id} joined room ${roomId} as host: ${isHost}`);
-      
-      socket.emit("room_joined", { isHost });
-      
-      // Notify others in the room
-      socket.to(roomId).emit("player_joined", { id: socket.id });
-    });
-
-    socket.on("update_state", (data) => {
-      const { roomId, state } = data;
-      playerStates.set(socket.id, state);
-      socket.to(roomId).emit("remote_player_update", { id: socket.id, state });
-    });
-
-    socket.on("battle_request", (data) => {
-      const { roomId, targetId, playerInfo } = data;
-      io.to(targetId).emit("battle_challenged", { challengerId: socket.id, playerInfo });
-    });
-
-    socket.on("battle_accept", (data) => {
-      const { roomId, challengerId, acceptorInfo } = data;
-      // Start a shared battle session
-      const battleId = `battle_${Date.now()}`;
-      io.to(challengerId).emit("battle_started", { battleId, opponentId: socket.id, opponentInfo: acceptorInfo, isLead: true });
-      io.to(socket.id).emit("battle_started", { battleId, opponentId: challengerId, opponentInfo: data.challengerInfo, isLead: false });
-    });
-
-    socket.on("battle_action", (data) => {
-      const { roomId, battleId, targetId, action } = data;
-      io.to(targetId).emit("remote_battle_action", { action });
-    });
-
-    socket.on("game_sync", (data) => {
-      const { roomId, state } = data;
-      socket.to(roomId).emit("game_sync", state);
+      console.log(`[Socket] User ${socket.id} joined room: ${roomId}`);
     });
 
     socket.on("disconnect", () => {
-      console.log("User disconnected:", socket.id);
-      playerStates.delete(socket.id);
-      // Remove from rooms
-      rooms.forEach((members, roomId) => {
-        if (members.has(socket.id)) {
-          members.delete(socket.id);
-          io.to(roomId).emit("player_left", { id: socket.id });
-        }
-      });
+      console.log(`[Socket] User disconnected: ${socket.id}`);
     });
   });
 
+  // --- AUDIO PROXY ENDPOINT ---
+  // This bypasses CORS because the server (Node) fetches the file, not the browser.
+  app.get("/api/audio-proxy", async (req, res) => {
+    const audioUrl = req.query.url as string;
+    if (!audioUrl) {
+      return res.status(400).send("No URL provided");
+    }
+
+    try {
+      console.log(`[Proxy] Fetching: ${audioUrl}`);
+      const response = await fetch(audioUrl, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Referer': 'https://play.pokemonshowdown.com/'
+        }
+      });
+
+      if (!response.ok) {
+        console.warn(`[Proxy] Upstream 404/Error for: ${audioUrl}`);
+        return res.status(response.status).send(`Upstream returned ${response.status}`);
+      }
+
+      // Set appropriate headers for streaming
+      const contentType = response.headers.get("content-type") || "audio/mpeg";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+
+      const arrayBuffer = await response.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+      
+    } catch (error) {
+      console.error(`[Proxy] Error for ${audioUrl}:`, error);
+      res.status(500).send(`Proxy Error: ${(error as Error).message}`);
+    }
+  });
+
+  // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -98,7 +88,9 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`[Server] Running on http://localhost:${PORT}`);
+    console.log(`[Server] Audio Proxy ready at /api/audio-proxy?url=...`);
+    console.log(`[Server] Socket.io enabled.`);
   });
 }
 

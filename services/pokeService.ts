@@ -16,36 +16,31 @@ const NATURES: Nature[] = [
     { name: 'calm', increased: 'special-defense', decreased: 'attack' }, { name: 'gentle', increased: 'special-defense', decreased: 'defense' }, { name: 'sassy', increased: 'special-defense', decreased: 'speed' }, { name: 'careful', increased: 'special-defense', decreased: 'special-attack' }, { name: 'quirky' }
 ];
 
-// Encounter Pools - Expanded to cover more generations and variety
-const COMMON_IDS = [ 
-    10, 13, 16, 19, 21, 23, 27, 41, 50, 52, 161, 163, 165, 167, 261, 263, 265, 276, 396, 399, 401, 504, 506, 509, 519, 659, 661, 664, 731, 734, 736, 819, 821, 824, 831, 915, 917, 919, 921, 928,
-    293, 298, 300, 311, 312, 315, 325, 339, 341, 349, 353, 355, 360, 363, 366, 370, 396, 399, 401, 403, 406, 412, 415, 417, 418, 420, 422, 425, 427, 431, 434, 436, 438, 439, 440, 441, 442, 449, 451, 453, 455, 456, 458, 459
+// Progression-based Pools
+const EARLY_IDS = [
+    1, 4, 7, 10, 13, 16, 19, 21, 23, 25, 27, 29, 32, 35, 37, 39, 41, 43, 46, 48, 50, 52, 54, 56, 58, 60, 63, 66, 69, 72, 74, 77, 79, 81, 84, 86, 88, 90, 92, 95, 96, 98, 100, 104, 109, 111, 116, 118, 129, 133, 147,
+    152, 155, 158, 161, 163, 165, 167, 172, 173, 174, 175, 179, 187, 194, 200, 204, 209, 216, 218, 220, 228, 231, 236, 246,
+    252, 255, 258, 261, 263, 265, 276, 280, 285, 293, 296, 298, 300, 304, 309, 316, 320, 325, 328, 331, 333, 339, 341, 343, 349, 353, 355, 360, 361, 363, 366, 371, 374,
+    387, 390, 393, 396, 399, 401, 403, 406, 408, 410, 412, 415, 417, 418, 420, 422, 425, 427, 431, 434, 436, 438, 439, 440, 441, 443, 447, 449, 451, 453, 455, 456, 458, 459,
+    495, 498, 501, 504, 506, 509, 511, 519, 522, 524, 529, 532, 535, 540, 546, 551, 554, 559, 562, 568, 570, 572, 574, 577, 582, 585, 590, 595, 597, 607, 610, 613, 619, 622, 624, 627, 629, 633, 636, 650, 653, 656, 659, 661, 664, 667, 669, 672, 674, 677, 679, 686, 690, 692, 694, 696, 698, 704, 708, 710, 712, 714,
+    722, 725, 728, 731, 734, 736, 744, 747, 749, 751, 753, 755, 757, 759, 761, 767, 769, 777, 778, 782, 810, 813, 816, 819, 821, 824, 829, 831, 833, 837, 840, 843, 848, 850, 852, 854, 856, 859, 868, 872, 877, 878, 885, 906, 909, 912, 915, 917, 919, 921, 924, 926, 928, 932, 935, 938, 940, 942, 946, 948, 950, 951, 953, 955, 957, 960, 963, 965, 967, 969, 971, 973, 974, 996
 ];
-const UNCOMMON_IDS = [ 
-    1, 4, 7, 25, 35, 37, 39, 43, 46, 48, 54, 56, 58, 60, 63, 66, 69, 72, 74, 77, 79, 81, 84, 86, 88, 90, 92, 95, 96, 98, 100, 104, 109, 111, 116, 118, 129, 133, 152, 155, 158, 179, 187, 194, 200, 204, 209, 216, 218, 220, 228, 231, 252, 255, 258, 280, 285, 296, 304, 309, 316, 320, 325, 328, 331, 333, 341, 343, 355, 361, 363, 387, 390, 393, 403, 408, 410, 418, 425, 427, 431, 434, 436, 449, 451, 453, 459, 495, 498, 501, 522, 524, 529, 532, 535, 546, 551, 554, 559, 562, 568, 570, 572, 574, 577, 582, 595, 597, 607, 610, 619, 622, 624, 627, 629, 650, 653, 656, 667, 669, 674, 677, 679, 686, 690, 692, 694, 696, 698, 708, 710, 712, 714, 722, 725, 728, 744, 747, 749, 751, 755, 757, 759, 761, 767, 769, 777, 778, 810, 813, 816, 833, 837, 840, 843, 848, 850, 852, 854, 856, 859, 868, 872, 877, 878, 906, 909, 912, 924, 926, 932, 935, 938, 940, 942, 946, 948, 950, 951, 953, 955, 957, 960, 963, 965, 967, 969, 971, 973, 974,
-    133, 134, 135, 136, 196, 197, 470, 471, 700, // Eeveelutions
-    25, 26, 172, // Pikachu line
-    175, 176, 468, // Togepi line
-    280, 281, 282, 475, // Ralts line
-    443, 444, 445, // Gible line
-    633, 634, 635, // Deino line
-    704, 705, 706, // Goomy line
-    782, 783, 784, // Jangmo-o line
-    885, 886, 887, // Dreepy line
-    996, 997, 998 // Frigibax line
+
+const MID_IDS = [
+    2, 5, 8, 11, 14, 17, 20, 22, 24, 26, 28, 30, 33, 36, 38, 40, 42, 44, 47, 49, 51, 53, 55, 57, 59, 61, 64, 67, 70, 73, 75, 78, 80, 82, 85, 87, 89, 91, 93, 97, 99, 101, 103, 105, 107, 110, 112, 117, 119, 121, 124, 125, 126, 130, 134, 135, 136, 139, 141, 148,
+    153, 156, 159, 162, 164, 166, 168, 171, 176, 178, 180, 184, 188, 192, 195, 196, 197, 199, 203, 205, 208, 210, 212, 217, 219, 221, 224, 226, 229, 232, 237, 242, 247,
+    253, 256, 259, 262, 264, 266, 271, 274, 277, 278, 281, 284, 286, 288, 291, 294, 297, 299, 301, 303, 305, 308, 310, 314, 317, 319, 321, 323, 326, 330, 332, 334, 336, 338, 340, 342, 344, 346, 348, 351, 354, 356, 358, 362, 364, 367, 372, 375,
+    388, 391, 394, 397, 400, 404, 407, 409, 411, 413, 416, 419, 421, 423, 426, 428, 430, 432, 435, 437, 440, 444, 448, 450, 452, 454, 457, 460, 461, 462, 463, 465, 466, 467, 469, 470, 471, 472, 473, 474, 476, 477, 478
 ];
-const RARE_IDS = [ 
-    123, 127, 128, 131, 142, 143, 147, 214, 227, 246, 371, 374, 443, 447, 479, 442, 633, 636, 704, 782, 885, 996, 323,
-    113, 115, 122, 123, 127, 128, 131, 142, 143, 147, 148, 149, // Gen 1 Rares
-    214, 227, 230, 241, 242, 246, 247, 248, // Gen 2 Rares
-    350, 359, 371, 372, 373, 374, 375, 376, // Gen 3 Rares
-    443, 444, 445, 447, 448, 461, 462, 464, 466, 467, 472, 473, 474, 477, // Gen 4 Rares
-    534, 553, 567, 571, 576, 579, 601, 604, 609, 612, 621, 625, 628, 630, 635, 637, // Gen 5 Rares
-    671, 673, 681, 685, 687, 689, 691, 693, 695, 697, 699, 706, 713, 715, // Gen 6 Rares
-    740, 743, 746, 750, 752, 754, 756, 758, 760, 763, 766, 768, 770, 771, 773, 776, 778, 779, 780, 781, 784, // Gen 7 Rares
-    820, 823, 826, 828, 830, 832, 834, 836, 839, 842, 844, 845, 847, 849, 851, 853, 855, 858, 861, 863, 865, 867, 869, 871, 873, 875, 876, 877, 879, 884, 887, // Gen 8 Rares
-    907, 908, 911, 914, 916, 918, 920, 923, 925, 927, 930, 931, 934, 937, 939, 941, 943, 945, 947, 949, 952, 954, 956, 959, 962, 964, 966, 968, 970, 972, 975, 977, 978, 980, 998, 1000 // Gen 9 Rares
+
+const LATE_IDS = [
+    3, 6, 9, 12, 15, 18, 31, 34, 45, 62, 65, 68, 71, 76, 94, 123, 127, 128, 131, 142, 143, 149, 214, 227, 230, 241, 242, 248, 323, 350, 359, 373, 376, 445, 447, 448, 461, 462, 464, 466, 467, 468, 472, 473, 474, 475, 477, 534, 553, 567, 571, 576, 579, 601, 604, 609, 612, 621, 625, 628, 630, 635, 637, 671, 673, 681, 685, 687, 689, 691, 693, 695, 697, 699, 706, 713, 715, 740, 743, 746, 750, 752, 754, 756, 758, 760, 763, 766, 768, 770, 771, 773, 776, 778, 779, 780, 781, 784, 820, 823, 826, 828, 830, 832, 834, 836, 839, 842, 844, 845, 847, 849, 851, 853, 855, 858, 861, 863, 865, 867, 869, 871, 873, 875, 876, 877, 879, 884, 887, 907, 908, 911, 914, 916, 918, 920, 923, 925, 927, 930, 931, 934, 937, 939, 941, 943, 945, 947, 949, 952, 954, 956, 959, 962, 964, 966, 968, 970, 972, 975, 977, 978, 980, 998, 1000
 ];
+
+// Legacy pools for compatibility
+const COMMON_IDS = EARLY_IDS.slice(0, 50);
+const UNCOMMON_IDS = [...EARLY_IDS.slice(50), ...MID_IDS];
+const RARE_IDS = LATE_IDS;
 
 const LEGENDARY_IDS = [
     144, 145, 146, 150, 151, // Gen 1
@@ -1562,148 +1557,9 @@ export const calculateDamage = (
   // Speed modifiers
   // (Speed already calculated above)
 
-  // --- STAT CALCULATION (OFFENSIVE) ---
-  const getOffensiveStat = (): number => {
-      let statName: StatName = isPhysical ? 'attack' : 'special-attack';
-      
-      if (name === 'body press') statName = 'defense';
-      if (name === 'foul play') {
-          let stat = defender.stats.attack;
-          const stage = defender.statStages?.attack || 0;
-          if (stage > 0) stat *= (1 + 0.5 * stage);
-          if (stage < 0) stat *= (1 / (1 + 0.5 * Math.abs(stage)));
-          return stat;
-      }
-
-      let stat = attacker.stats[statName];
-      const stage = attacker.statStages?.[statName] || 0;
-      
-      // Unaware (Defender) ignores attacker boosts
-      if (defAbility !== 'Unaware') {
-          if (stage > 0) stat *= (1 + 0.5 * stage);
-          if (stage < 0) stat *= (1 / (1 + 0.5 * Math.abs(stage)));
-      }
-
-      // Ability Modifiers
-      if (atkAbility === 'HugePower' || atkAbility === 'PurePower') stat *= 2;
-      if (atkAbility === 'GorillaTactics' && isPhysical) stat *= 1.5;
-      if (atkAbility === 'Hustle' && isPhysical) stat *= 1.5;
-      if (atkAbility === 'Guts' && isPhysical && attacker.status) stat *= 1.5;
-      if (atkAbility === 'Swarm' && moveType === 'bug' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
-      if (atkAbility === 'Torrent' && moveType === 'water' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
-      if (atkAbility === 'Blaze' && moveType === 'fire' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
-      if (atkAbility === 'Overgrow' && moveType === 'grass' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
-      if (atkAbility === 'FlashFire' && moveType === 'fire' && attacker.status === 'flash-fire-boost') stat *= 1.5; 
-      if (atkAbility === 'SolarPower' && isSpecial && weather === 'sun') stat *= 1.5;
-      if (atkAbility === 'SlowStart' && isPhysical && attacker.turnCount !== undefined && attacker.turnCount <= 5) stat *= 0.5; 
-      if (atkAbility === 'Defeatist' && attacker.currentHp <= attacker.maxHp / 2) stat *= 0.5;
-      if (atkAbility === 'Protosynthesis' && (weather === 'sun' || attacker.isBoosterEnergyActive)) stat *= 1.3;
-      if (atkAbility === 'QuarkDrive' && (weather === 'electric' || attacker.isBoosterEnergyActive)) stat *= 1.3; 
-      
-      // New Abilities
-      if (atkAbility === 'Overclock' && isSpecial && isMovingFirst) stat *= 1.2;
-      if (atkAbility === 'ArcSurge' && moveType === 'electric') stat *= 1.2;
-      if (atkAbility === 'FusionMaster' && (move.isFusion || move.name.toLowerCase().includes('sync'))) stat *= 1.5;
-      if (atkAbility === 'Amplifier' && (move.isPulse || move.name.toLowerCase().includes('pulse'))) stat *= 1.3;
-      if (atkAbility === 'Battery' && moveType === 'electric') stat *= 1.3;
-      if (atkAbility === 'Feedback' && attacker.currentHp < attacker.stats.hp / 2) stat *= 1.5;
-      if (atkAbility === 'SlowPulse' && attackerSpeed < defenderSpeed) stat *= 1.2;
-      if (atkAbility === 'NightBloom' && weather === 'none' && (moveType === 'dark' || moveType === 'grass')) stat *= 1.2;
-      if (atkAbility === 'Counterweight' && isPhysical && !isMovingFirst) stat *= 1.2;
-      if (atkAbility === 'FeverRush' && attacker.status === 'burn') {
-          // Speed is doubled, handled in speed calc but also boost offense slightly for flavor
-          stat *= 1.1;
-      }
-
-      // Partner Boost: Ally Attack boost when user is at full HP
-      const myAlly = isPlayer ? playerTeam.find(p => p && !p.isFainted && p.id !== attacker.id) : enemyTeam.find(p => p && !p.isFainted && p.id !== attacker.id);
-      if (myAlly && myAlly.ability.name === 'PartnerBoost' && myAlly.currentHp === myAlly.maxHp && isPhysical) {
-          stat *= 1.3;
-      }
-
-      // Item Modifiers
-      const heldItem = attacker.heldItem?.id;
-      if (heldItem === 'choice-band' && isPhysical) stat *= 1.5;
-      if (heldItem === 'choice-specs' && isSpecial) stat *= 1.5;
-
-      // Type-boosting items
-      if (heldItem === 'silk-scarf' && moveType === 'normal') stat *= 1.2;
-      if (heldItem === 'charcoal' && moveType === 'fire') stat *= 1.2;
-      if (heldItem === 'mystic-water' && moveType === 'water') stat *= 1.2;
-      if (heldItem === 'miracle-seed' && moveType === 'grass') stat *= 1.2;
-      if (heldItem === 'magnet' && moveType === 'electric') stat *= 1.2;
-      if (heldItem === 'never-melt-ice' && moveType === 'ice') stat *= 1.2;
-      if (heldItem === 'black-belt' && moveType === 'fighting') stat *= 1.2;
-      if (heldItem === 'poison-barb' && moveType === 'poison') stat *= 1.2;
-      if (heldItem === 'soft-sand' && moveType === 'ground') stat *= 1.2;
-      if (heldItem === 'sharp-beak' && moveType === 'flying') stat *= 1.2;
-      if (heldItem === 'twisted-spoon' && moveType === 'psychic') stat *= 1.2;
-      if (heldItem === 'silver-powder' && moveType === 'bug') stat *= 1.2;
-      if (heldItem === 'hard-stone' && moveType === 'rock') stat *= 1.2;
-      if (heldItem === 'spell-tag' && moveType === 'ghost') stat *= 1.2;
-      if (heldItem === 'dragon-fang' && moveType === 'dragon') stat *= 1.2;
-      if (heldItem === 'black-glasses' && moveType === 'dark') stat *= 1.2;
-      if (heldItem === 'metal-coat' && moveType === 'steel') stat *= 1.2;
-
-      return stat;
-  };
-
-  // --- STAT CALCULATION (DEFENSIVE) ---
-  const getDefensiveStat = (): number => {
-      let statName: StatName = isPhysical ? 'defense' : 'special-defense';
-      
-      if (name === 'psyshock' || name === 'psystrike' || name === 'secret sword') {
-          statName = 'defense';
-      }
-
-      let stat = defender.stats[statName];
-      const stage = defender.statStages?.[statName] || 0;
-
-      if (atkAbility !== 'Unaware' && atkAbility !== 'ChipAway' && atkAbility !== 'SacredSword' && atkAbility !== 'Infiltrator' && !(atkAbility === 'AetherSkin' && moveType === 'dragon')) { 
-          if (stage > 0) stat *= (1 + 0.5 * stage);
-          if (stage < 0) stat *= (1 / (1 + 0.5 * Math.abs(stage)));
-      }
-
-      if (defAbility === 'MarvelScale' && defender.status && isPhysical) stat *= 1.5;
-      if (defAbility === 'FurCoat' && isPhysical) stat *= 2;
-      if (defAbility === 'IceScales' && isSpecial) stat *= 2;
-      if (defAbility === 'GrassPelt' && isPhysical) stat *= 1.5;
-      if (defAbility === 'SyncShield') stat *= 1.3; // Base boost, but we'll add more in calculateDamage if meter > 50
-      if (defAbility === 'LivingShield' && defender.currentHp === defender.stats.hp) stat *= 2;
-      if (defAbility === 'SiltArmor' && weather === 'sand') stat *= 1.5;
-      if (defAbility === 'BorealCoat' && weather === 'snow') stat *= 1.5;
-      if (weather === 'snow' && defender.types.includes('ice')) stat *= 1.5;
-      
-      if (defAbility === 'SolarGuard' && weather === 'sun') {
-          // Handled in effectiveness check or final damage
-      }
-
-      if (defAbility === 'AetherSkin' && moveType === 'dragon') {
-          // Ignore Sp. Def boosts
-          if (isSpecial && stage > 0) stat = defender.stats[statName];
-      }
-      
-      if (atkAbility === 'ArmorMelt' && isSpecial && stage > 0) {
-          stat = defender.stats[statName];
-      }
-
-      // Item Modifiers
-      const heldItem = defender.heldItem?.id;
-      if (heldItem === 'assault-vest' && isSpecial) stat *= 1.5;
-      if (heldItem === 'eviolite') {
-          // Simplified: assume if it has an evolution, it gets the boost
-          // In a real game we'd check if it's the final stage
-          stat *= 1.5;
-      }
-
-      return stat;
-  }
-
-  let a = getOffensiveStat() || 1;
-  let d = getDefensiveStat() || 1;
-
-  if (isNaN(a) || a <= 0) a = 1;
-  if (isNaN(d) || d <= 0) d = 1;
+  // --- STAT CALCULATION PLACEHOLDER (Will be calculated after crit check) ---
+  let a = 1;
+  let d = 1;
 
   // --- POWER CALCULATION ---
   let power = basePower || 0;
@@ -1725,7 +1581,6 @@ export const calculateDamage = (
   if (atkAbility === 'IronFist' && move.isPunching) power *= 1.2;
   if (atkAbility === 'StrongJaw' && move.isBiting) power *= 1.5;
   if (atkAbility === 'MegaLauncher' && move.isPulse) power *= 1.5;
-  if (atkAbility === 'VenomSpite' && (attacker.status === 'poison' || attacker.status === 'toxic')) power *= 1.3;
   if (atkAbility === 'RazorTread' && move.isSlicing) power *= 1.3;
   if (atkAbility === 'Sharpness' && move.isSlicing) power *= 1.5;
   if (atkAbility === 'PunkRock' && move.isSound) power *= 1.3;
@@ -1754,16 +1609,16 @@ export const calculateDamage = (
   if (atkAbility === 'SyncBoost') power *= 1.1;
   if (atkAbility === 'TempoSync') power *= 1.2;
   if (atkAbility === 'AnchorSync') power *= 1.3;
+  if (atkAbility === 'MagneticField' && moveType === 'steel') power *= 1.3;
+  if (atkAbility === 'IronBlood' && moveType === 'steel') power *= 1.2;
   if (atkAbility === 'Relentless') power *= 1.2;
   if (atkAbility === 'WildHunt') power *= 1.3;
   if (atkAbility === 'DuelistSWill') power *= 1.2;
   if (atkAbility === 'PiercingWill') power *= 1.2;
   if (atkAbility === 'GaleHarness' && moveType === 'flying' && ((isPlayer && tailwindTurns > 0) || (!isPlayer && enemyTailwindTurns > 0))) power *= 1.3;
   if (atkAbility === 'AuroraSpirit' && weather === 'snow' && moveType === 'fairy') power *= 1.2;
-  if (atkAbility === 'HarmonyEngine' && move.isFusion) power *= 1.4;
   if (atkAbility === 'Aftershock' && moveType === 'electric' && defender.currentHp < defender.maxHp) power *= 1.2;
   if (atkAbility === 'TorrentSync' && attacker.nextMoveDamageBoost) power *= 1.2;
-  if (atkAbility === 'HexDrive' && defender.status) power *= 1.3;
   if (atkAbility === 'BondBreaker' && defender.lastMoveWasLink) power *= 1.2;
 
   // Item Modifiers
@@ -1839,6 +1694,7 @@ export const calculateDamage = (
   }
 
   if (atkAbility === 'LastGambitPlus' && attacker.currentHp <= attacker.maxHp * 0.25) power += 20;
+  if (atkAbility === 'OverheatDrive' && moveType === 'fire') power *= 1.5;
   if (atkAbility === 'SlowPulse' && attacker.stats.speed < defender.stats.speed) power *= 1.2;
   if (atkAbility === 'Counterweight' && !isMovingFirst && isPhysical) power *= 1.2;
   if (atkAbility === 'NightBloom' && weather === 'none' && (moveType === 'dark' || moveType === 'grass')) power *= 1.2;
@@ -1987,7 +1843,7 @@ export const calculateDamage = (
 
   // Modifiers
   let critChance = 0.0625; // 1/16
-  const highCritMoves = ['Emberlance', 'Permafrost Ray', 'Basalt Burst', 'Eclipse Beam', 'Night Slash', 'Leaf Blade', 'Stone Edge', 'Cross Chop', 'Air Cutter', 'Slash', 'Psycho Cut', 'Shadow Claw'];
+  const highCritMoves = ['Fighting Snap of Driving Strike', 'Dragon Torrent of Scaled Fury', 'Emberlance', 'Permafrost Ray', 'Basalt Burst', 'Eclipse Beam', 'Night Slash', 'Leaf Blade', 'Stone Edge', 'Cross Chop', 'Air Cutter', 'Slash', 'Psycho Cut', 'Shadow Claw'];
   if (highCritMoves.includes(move.name)) critChance = 0.125;
   
   if (attacker.heldItem?.id === 'scope-lens') critChance = (critChance === 0.125) ? 0.25 : 0.125;
@@ -1995,17 +1851,22 @@ export const calculateDamage = (
   if (atkAbility === 'PressurePoint') critChance = (critChance === 0.25) ? 0.5 : (critChance === 0.125 ? 0.25 : 0.125);
   if (atkAbility === 'KeenFlare' && attacker.turnCount === 1) critChance = 1.0;
   if (atkAbility === 'SyncStrike' && (isPlayer ? playerMeter > 50 : enemyMeter > 50)) critChance = 0.25;
-  if (atkAbility === 'HexDrive' && defender.status) critChance = 0.25;
+  if (atkAbility === 'HexDrive' && defender.status) {
+      if (critChance === 0.0625) critChance = 0.125;
+      else if (critChance === 0.125) critChance = 0.25;
+      else if (critChance === 0.25) critChance = 0.5;
+  }
   if (atkAbility === 'BrittleFreeze' && moveType === 'ice') critChance = 0.125;
   if (atkAbility === 'BladeDance' && move.max_hits && move.max_hits > 1) critChance = 0.25; 
   if (atkAbility === 'Merciless' && defender.status === 'poison') critChance = 1.0;
+  if ((move.name.toLowerCase() === 'aether roar' || move.name.toLowerCase() === 'aetherroar') && defender.status) critChance = 1.0;
   
   // Rift Upgrade Crit Boost
   if (isPlayer) critChance += (critBoost * 0.02);
   
   let isCritical = Math.random() < critChance;
   if (atkAbility === 'Merciless' && defender.status === 'poison') isCritical = true;
-  if (move.name === 'Aether Roar' && defender.status) isCritical = true;
+  if ((move.name.toLowerCase() === 'aether roar' || move.name.toLowerCase() === 'aetherroar') && defender.status) isCritical = true;
   if (defAbility === 'BattleArmor' || defAbility === 'ShellArmor' || (defAbility === 'EarthenVeil' && weather === 'sand') || (defAbility === 'StoneVeil' && defender.currentHp === defender.maxHp)) isCritical = false;
   if (isPlayer && enemyBacklineGuard && (move.target === 'Both foes' || move.target === 'all-opponents')) isCritical = false;
   if (!isPlayer && playerBacklineGuard && (move.target === 'Both foes' || move.target === 'all-opponents')) isCritical = false;
@@ -2018,6 +1879,155 @@ export const calculateDamage = (
   let stabMultiplier = isStab ? 1.5 : 1;
   if (isStab && atkAbility === 'Adaptability') stabMultiplier = 2; 
   if (atkAbility === 'Protean' || atkAbility === 'Libero') stabMultiplier = 1.5; 
+
+  // --- STAT CALCULATION (OFFENSIVE) ---
+  const getOffensiveStat = (): number => {
+      let statName: StatName = isPhysical ? 'attack' : 'special-attack';
+      
+      if (atkAbility === 'MindOverMatter' && isPhysical) statName = 'special-attack';
+      
+      if (name === 'body press') statName = 'defense';
+      if (name === 'foul play') {
+          let stat = defender.stats.attack;
+          const stage = defender.statStages?.attack || 0;
+          // Crits ignore negative offensive stages
+          if (stage > 0) stat *= (1 + 0.5 * stage);
+          else if (stage < 0 && !isCritical) stat *= (1 / (1 + 0.5 * Math.abs(stage)));
+          return stat;
+      }
+
+      let stat = attacker.stats[statName];
+      const stage = attacker.statStages?.[statName] || 0;
+      
+      // Unaware (Defender) ignores attacker boosts
+      // Crits ignore negative offensive stages
+      if (defAbility !== 'Unaware') {
+          if (stage > 0) stat *= (1 + 0.5 * stage);
+          else if (stage < 0 && !isCritical) stat *= (1 / (1 + 0.5 * Math.abs(stage)));
+      }
+
+      // Ability Modifiers
+      if (atkAbility === 'HugePower' || atkAbility === 'PurePower') stat *= 2;
+      if (atkAbility === 'GorillaTactics' && isPhysical) stat *= 1.5;
+      if (atkAbility === 'Hustle' && isPhysical) stat *= 1.5;
+      if (atkAbility === 'Guts' && isPhysical && attacker.status) stat *= 1.5;
+      if (atkAbility === 'Swarm' && moveType === 'bug' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
+      if (atkAbility === 'Torrent' && moveType === 'water' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
+      if (atkAbility === 'Blaze' && moveType === 'fire' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
+      if (atkAbility === 'Overgrow' && moveType === 'grass' && attacker.currentHp <= attacker.maxHp / 3) stat *= 1.5;
+      if (atkAbility === 'FlashFire' && moveType === 'fire' && attacker.status === 'flash-fire-boost') stat *= 1.5; 
+      if (atkAbility === 'SolarPower' && isSpecial && weather === 'sun') stat *= 1.5;
+      if (atkAbility === 'SlowStart' && isPhysical && attacker.turnCount !== undefined && attacker.turnCount <= 5) stat *= 0.5; 
+      if (atkAbility === 'Defeatist' && attacker.currentHp <= attacker.maxHp / 2) stat *= 0.5;
+      if (atkAbility === 'Protosynthesis' && (weather === 'sun' || attacker.isBoosterEnergyActive)) stat *= 1.3;
+      if (atkAbility === 'QuarkDrive' && (weather === 'electric' || attacker.isBoosterEnergyActive)) stat *= 1.3; 
+      
+      // New Abilities
+      if (atkAbility === 'Overclock' && isSpecial && isMovingFirst) stat *= 1.2;
+      if (atkAbility === 'ArcSurge' && moveType === 'electric') stat *= 1.2;
+      if (atkAbility === 'AetherPresence' && (moveType === 'dragon' || moveType === 'psychic')) stat *= 1.3;
+      if (atkAbility === 'BasaltArmor' && moveType === 'rock') stat *= 1.2;
+      if (atkAbility === 'FusionMaster' && (move.isFusion || move.name.toLowerCase().includes('sync'))) stat *= 1.5;
+      if (atkAbility === 'Amplifier' && (move.isPulse || move.name.toLowerCase().includes('pulse'))) stat *= 1.3;
+      if (atkAbility === 'Battery' && moveType === 'electric') stat *= 1.3;
+      if (atkAbility === 'SlowPulse' && attackerSpeed < defenderSpeed) stat *= 1.2;
+      if (atkAbility === 'NightBloom' && weather === 'none' && (moveType === 'dark' || moveType === 'grass')) stat *= 1.2;
+      if (atkAbility === 'Counterweight' && isPhysical && !isMovingFirst) stat *= 1.2;
+      if (atkAbility === 'FeverRush' && attacker.status === 'burn') {
+          // Speed is doubled, handled in speed calc but also boost offense slightly for flavor
+          stat *= 1.1;
+      }
+
+      // Partner Boost: Ally Attack boost when user is at full HP
+      const myAlly = isPlayer ? playerTeam.find(p => p && !p.isFainted && p.id !== attacker.id) : enemyTeam.find(p => p && !p.isFainted && p.id !== attacker.id);
+      if (myAlly && myAlly.ability.name === 'PartnerBoost' && myAlly.currentHp === myAlly.maxHp && isPhysical) {
+          stat *= 1.3;
+      }
+
+      // Item Modifiers
+      const heldItem = attacker.heldItem?.id;
+      if (heldItem === 'choice-band' && isPhysical) stat *= 1.5;
+      if (heldItem === 'choice-specs' && isSpecial) stat *= 1.5;
+
+      // Type-boosting items
+      if (heldItem === 'silk-scarf' && moveType === 'normal') stat *= 1.2;
+      if (heldItem === 'charcoal' && moveType === 'fire') stat *= 1.2;
+      if (heldItem === 'mystic-water' && moveType === 'water') stat *= 1.2;
+      if (heldItem === 'miracle-seed' && moveType === 'grass') stat *= 1.2;
+      if (heldItem === 'magnet' && moveType === 'electric') stat *= 1.2;
+      if (heldItem === 'never-melt-ice' && moveType === 'ice') stat *= 1.2;
+      if (heldItem === 'black-belt' && moveType === 'fighting') stat *= 1.2;
+      if (heldItem === 'poison-barb' && moveType === 'poison') stat *= 1.2;
+      if (heldItem === 'soft-sand' && moveType === 'ground') stat *= 1.2;
+      if (heldItem === 'sharp-beak' && moveType === 'flying') stat *= 1.2;
+      if (heldItem === 'twisted-spoon' && moveType === 'psychic') stat *= 1.2;
+      if (heldItem === 'silver-powder' && moveType === 'bug') stat *= 1.2;
+      if (heldItem === 'hard-stone' && moveType === 'rock') stat *= 1.2;
+      if (heldItem === 'spell-tag' && moveType === 'ghost') stat *= 1.2;
+      if (heldItem === 'dragon-fang' && moveType === 'dragon') stat *= 1.2;
+      if (heldItem === 'black-glasses' && moveType === 'dark') stat *= 1.2;
+      if (heldItem === 'metal-coat' && moveType === 'steel') stat *= 1.2;
+
+      return stat;
+  };
+
+  // --- STAT CALCULATION (DEFENSIVE) ---
+  const getDefensiveStat = (): number => {
+      let statName: StatName = isPhysical ? 'defense' : 'special-defense';
+      
+      if (name === 'psyshock' || name === 'psystrike' || name === 'secret sword') {
+          statName = 'defense';
+      }
+
+      let stat = defender.stats[statName];
+      const stage = defender.statStages?.[statName] || 0;
+
+      // Crits ignore positive defender stage boosts
+      if (atkAbility !== 'Unaware' && atkAbility !== 'ChipAway' && atkAbility !== 'SacredSword' && atkAbility !== 'Infiltrator' && !(atkAbility === 'AetherSkin' && moveType === 'dragon')) { 
+          if (stage > 0 && !isCritical) stat *= (1 + 0.5 * stage);
+          else if (stage < 0) stat *= (1 / (1 + 0.5 * Math.abs(stage)));
+      }
+
+      if (defAbility === 'MarvelScale' && defender.status && isPhysical) stat *= 1.5;
+      if (defAbility === 'FurCoat' && isPhysical) stat *= 2;
+      if (defAbility === 'IceScales' && isSpecial) stat *= 2;
+      if (defAbility === 'GrassPelt' && isPhysical) stat *= 1.5;
+      if (defAbility === 'SyncShield') stat *= 1.3; // Base boost, but we'll add more in calculateDamage if meter > 50
+      if (defAbility === 'LivingShield' && defender.currentHp === defender.stats.hp) stat *= 2;
+      if (defAbility === 'SiltArmor' && weather === 'sand') stat *= 1.5;
+      if (defAbility === 'BorealCoat' && weather === 'snow') stat *= 1.5;
+      if (weather === 'snow' && defender.types.includes('ice')) stat *= 1.5;
+      
+      if (defAbility === 'SolarGuard' && weather === 'sun') {
+          // Handled in effectiveness check or final damage
+      }
+
+      if (defAbility === 'AetherSkin' && moveType === 'dragon') {
+          // Ignore Sp. Def boosts
+          if (isSpecial && stage > 0) stat = defender.stats[statName];
+      }
+      
+      if (atkAbility === 'ArmorMelt' && isSpecial && stage > 0) {
+          stat = defender.stats[statName];
+      }
+
+      // Item Modifiers
+      const heldItem = defender.heldItem?.id;
+      if (heldItem === 'assault-vest' && isSpecial) stat *= 1.5;
+      if (heldItem === 'eviolite') {
+          // Simplified: assume if it has an evolution, it gets the boost
+          // In a real game we'd check if it's the final stage
+          stat *= 1.5;
+      }
+
+      return stat;
+  }
+
+  a = getOffensiveStat() || 1;
+  d = getDefensiveStat() || 1;
+
+  if (isNaN(a) || a <= 0) a = 1;
+  if (isNaN(d) || d <= 0) d = 1;
 
   if (atkAbility === 'WildHunt' && defender.status) power *= 1.3;
   if (atkAbility === 'LastAnchor' && (isPlayer ? playerTeam.filter(p => !p.isFainted).length === 1 : enemyTeam.filter(p => !p.isFainted).length === 1)) power *= 1.5;
@@ -2106,6 +2116,7 @@ export const calculateDamage = (
 
   if (atkAbility === 'TintedLens' && typeMultiplier < 1) abilityDefMod *= 2;
   if (atkAbility === 'BondBreaker' && defender.lastMoveWasLink) abilityDefMod *= 1.2; 
+  if (defAbility === 'BasaltArmor' && typeMultiplier > 1) abilityDefMod *= 0.75;
 
   if (defender.isProtected && !attacker.ignoresProtect) {
       if (atkAbility === 'Ironstorm' && moveType === 'steel') {
@@ -2458,7 +2469,8 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
                   terrainChange: (moveData as any).terrainChange as any,
                   flinchChance: moveData.flinchChance,
                   min_hits: moveData.min_hits,
-                  max_hits: moveData.max_hits
+                  max_hits: moveData.max_hits,
+                  sfx: moveData.sfx
               };
               populateMoveFlags(newMove);
               moves.push(newMove);
@@ -2631,7 +2643,8 @@ export const fetchCompetitivePokemon = async (id: number, level: number = 50): P
                     terrainChange: (moveData as any).terrainChange as any,
                     flinchChance: moveData.flinchChance,
                     min_hits: moveData.min_hits,
-                    max_hits: moveData.max_hits
+                    max_hits: moveData.max_hits,
+                    sfx: moveData.sfx
                 };
                 populateMoveFlags(newMove);
                 // Add to moveset if not already there
@@ -2810,7 +2823,19 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
 };
 
 export const getTrainerTeam = async (count: number, level: number, biome: string = 'forest', difficulty: number = 1): Promise<Pokemon[]> => {
-    const pool = [...BIOME_POOLS[biome] || BIOME_POOLS.forest, ...UNCOMMON_IDS, ...RARE_IDS];
+    let basePool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
+    let pool: number[] = [];
+    
+    if (level < 18) {
+        pool = basePool.filter(id => EARLY_IDS.includes(id));
+        if (pool.length === 0) pool = EARLY_IDS;
+    } else if (level < 35) {
+        pool = basePool.filter(id => EARLY_IDS.includes(id) || MID_IDS.includes(id));
+        if (pool.length === 0) pool = [...EARLY_IDS, ...MID_IDS];
+    } else {
+        pool = [...basePool, ...UNCOMMON_IDS, ...RARE_IDS];
+    }
+
     const team: Pokemon[] = [];
     
     for (let i = 0; i < count; i++) {
@@ -2841,8 +2866,14 @@ export const getTrainerTeam = async (count: number, level: number, biome: string
 
 export const getStarters = async (unlockedPacks: string[] = [], shinyBoost: number = 0): Promise<Pokemon[]> => {
     const choices = new Set<number>();
-    const POOL_REGULAR = [...COMMON_IDS, ...UNCOMMON_IDS];
-    const POOL_LUCKY = RARE_IDS;
+    // Starters should ONLY be base forms from the early pool
+    const POOL_REGULAR = EARLY_IDS;
+    const LUCKY_STARTER_IDS = [147, 246, 371, 374, 443, 633, 704, 782, 885, 996, 151, 251, 385, 494, 802]; // Rare/Pseudo/Mythic base forms
+    const POOL_LUCKY = EARLY_IDS.filter(id => LUCKY_STARTER_IDS.includes(id)); 
+    if (POOL_LUCKY.length === 0) {
+        // Fallback if filter fails for some reason
+        LUCKY_STARTER_IDS.forEach(id => { if(EARLY_IDS.includes(id)) POOL_LUCKY.push(id); });
+    }
 
     // Add pack-specific starters if unlocked
     const PACK_IDS: Record<string, number[]> = {
@@ -2861,7 +2892,7 @@ export const getStarters = async (unlockedPacks: string[] = [], shinyBoost: numb
 
     while(choices.size < 9) {
         const isLucky = Math.random() < 0.15; 
-        const pool = isLucky ? POOL_LUCKY : POOL_REGULAR;
+        const pool = isLucky && POOL_LUCKY.length > 0 ? POOL_LUCKY : POOL_REGULAR;
         const pick = pool[Math.floor(Math.random() * pool.length)];
         choices.add(pick);
     }
@@ -2872,39 +2903,50 @@ export const getStarters = async (unlockedPacks: string[] = [], shinyBoost: numb
 
 export const getWildPokemon = async (count: number, levelRange: [number, number], biome: string = 'forest', tileType: number = 2, shinyBoost: number = 0, difficulty: number = 1): Promise<Pokemon[]> => {
   const promises = Array(count).fill(0).map(() => {
-      let pool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
+      let basePool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
       
       // Tile specific overrides
       if (tileType === 3) { // Water
-          pool = BIOME_POOLS.lake;
+          basePool = BIOME_POOLS.lake;
       } else if (tileType === 19) { // Danger floor
-          pool = [...pool, ...RARE_IDS];
+          basePool = [...basePool, ...LATE_IDS];
       }
 
+      const level = Math.floor(Math.random() * (levelRange[1] - levelRange[0] + 1)) + levelRange[0];
       const roll = Math.random();
-      const dist = (levelRange[0] - 5) / 2.5; // Approximate distance from levelBase
+      const dist = (levelRange[0] - 5) / 2.5; 
 
-      // Legendary chance at high distances or in the Rift
+      let pool: number[] = [];
+
+      // Progression Filtering
+      if (level < 18) {
+          pool = basePool.filter(id => EARLY_IDS.includes(id));
+          if (pool.length === 0) pool = EARLY_IDS; // Fallback
+      } else if (level < 35) {
+          pool = basePool.filter(id => EARLY_IDS.includes(id) || MID_IDS.includes(id));
+          if (pool.length === 0) pool = [...EARLY_IDS, ...MID_IDS];
+      } else {
+          pool = basePool;
+      }
+
+      // Rarity Roll
       if (dist > 40 || biome === 'canyon' && dist > 30) {
           if (roll > 0.995) pool = LEGENDARY_IDS;
-          else if (roll > 0.95) pool = RARE_IDS;
-          else if (roll > 0.80) pool = UNCOMMON_IDS;
+          else if (roll > 0.95) pool = LATE_IDS;
+          else if (roll > 0.80) pool = MID_IDS;
       } else {
-          // Super Rare: 0.1% chance for ANY Pokemon in the Pokedex
           if (roll > 0.999) {
               const randomId = Math.floor(Math.random() * 1025) + 1;
-              const level = Math.floor(Math.random() * (levelRange[1] - levelRange[0] + 1)) + levelRange[0];
               return fetchPokemon(randomId, level, false, shinyBoost, difficulty);
           }
           
-          if (roll > 0.98) pool = RARE_IDS; 
-          else if (roll > 0.85) pool = UNCOMMON_IDS;
-          else if (roll > 0.50) pool = pool; // Biome pool
-          else pool = COMMON_IDS; // Global common pool
+          if (roll > 0.98) pool = LATE_IDS; 
+          else if (roll > 0.85) pool = MID_IDS;
+          else if (roll > 0.50) pool = pool; // Biome pool (already filtered)
+          else pool = EARLY_IDS; 
       }
       
       const id = pool[Math.floor(Math.random() * pool.length)];
-      const level = Math.floor(Math.random() * (levelRange[1] - levelRange[0] + 1)) + levelRange[0];
       return fetchPokemon(id, level, false, shinyBoost, difficulty);
   });
   return Promise.all(promises);

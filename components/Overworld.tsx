@@ -1166,9 +1166,13 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     {layout && layout.map((row, y) => <div key={y} className="flex">{row && row.map((tile, x) => renderTile(tile, x, y))}</div>)}
                 </div>
 
-                {/* Remote Players */}
-                {Array.from(remotePlayers.entries()).map(([id, player]) => (
-                    player.mapId === mapId && (
+                {/* Remote Players (Other than P1/P2) */}
+                {Array.from(remotePlayers.entries()).map(([id, player]) => {
+                    // In a 2-player game, we skip the other player because we render them via p1Pos/p2Pos
+                    if (networkRole === 'host' && !player.isHost) return null;
+                    if (networkRole === 'client' && player.isHost) return null;
+                    
+                    return player.mapId === mapId && (
                         <PlayerCharacter 
                             key={id} 
                             pos={player.position} 
@@ -1177,26 +1181,24 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             spriteUrl={player.spriteUrl || "https://play.pokemonshowdown.com/sprites/trainers/blue.png"}
                             onClick={() => onChallenge?.(id, player)}
                         />
-                    )
-                ))}
+                    );
+                })}
 
-                {/* Local Players (P1 and P2) */}
-                {/* Render P1 if on this map and it's not a remote player we already see */}
-                { (myPlayerId === 1 || networkRole === null) && (
+                {/* Local Players (P1 and P2) - Real-time sync */}
+                { p1Pos.x !== -100 && (
                     <PlayerCharacter 
                         pos={p1Pos} 
                         isLocal={myPlayerId === 1} 
-                        label={myPlayerId === 1 ? "Me" : "P1"}
+                        label={myPlayerId === 1 ? "Me" : "Host"}
                         spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/red.png" 
                     />
                 )}
                 
-                {/* Render P2 if on this map and it's not a remote player we already see */}
-                { (myPlayerId === 2 || networkRole === null) && (
+                { p2Pos.x !== -100 && (
                     <PlayerCharacter 
                         pos={p2Pos} 
                         isLocal={myPlayerId === 2} 
-                        label={myPlayerId === 2 ? "Me" : "P2"}
+                        label={myPlayerId === 2 ? "Me" : "Friend"}
                         spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/leaf.png" 
                     />
                 )}

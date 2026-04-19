@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A multiplayer game room",
+      "type": "object",
+      "properties": {
+        "hostId": { "type": "string", "description": "UID of the room host" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastActive": { "type": "string", "format": "date-time" }
+      },
+      "required": ["hostId", "createdAt"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "State of a player in a room",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "state": { "type": "object", "description": "Serialized player game state (pos, sprite, etc.)" },
+        "lastUpdate": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "state", "lastUpdate"]
+    },
+    "Battle": {
+      "title": "Battle",
+      "description": "A shared battle session between two players",
+      "type": "object",
+      "properties": {
+        "challengerId": { "type": "string" },
+        "acceptorId": { "type": "string" },
+        "challengerInfo": { "type": "object" },
+        "acceptorInfo": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "active", "completed"] },
+        "lastAction": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["challengerId", "acceptorId", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Multiplayer rooms"
+    },
+    "/rooms/{roomId}/players/{playerId}": {
+      "schema": "Player",
+      "description": "Players in a room"
+    },
+    "/rooms/{roomId}/battles/{battleId}": {
+      "schema": "Battle",
+      "description": "Battles in a room"
+    }
+  }
+}

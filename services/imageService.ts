@@ -46,7 +46,7 @@ const BATTLE_BACKGROUNDS: Record<string, string[]> = {
 // Cache for generated backgrounds to avoid redundant API calls during a session
 const generatedBackgroundsCache: Record<string, string> = {};
 
-export const generateBattleBackground = async (biome: string, tileType?: number): Promise<string> => {
+export const generateBattleBackground = async (biome: string, tileType?: number, forceStatic?: boolean): Promise<string> => {
     const cacheKey = `${biome}_${tileType || 'default'}`;
     
     // 1. Check Cache first
@@ -56,8 +56,8 @@ export const generateBattleBackground = async (biome: string, tileType?: number)
 
     const apiKey = process.env.GEMINI_API_KEY;
 
-    // 2. If no API key, use the high-quality static anime library immediately
-    if (!apiKey) {
+    // 2. If no API key or forceStatic (multiplayer), use the high-quality static anime library immediately
+    if (!apiKey || forceStatic) {
         const backgrounds = BATTLE_BACKGROUNDS[biome] || BATTLE_BACKGROUNDS.forest;
         return backgrounds[Math.floor(Math.random() * backgrounds.length)];
     }
