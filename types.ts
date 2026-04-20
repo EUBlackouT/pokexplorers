@@ -338,6 +338,7 @@ export interface BattleState {
     type: string, 
     target: 'player' | 'enemy', 
     index: number, 
+    moveName?: string,
     damage?: number, 
     isCrit?: boolean,
     isMiss?: boolean,

@@ -23,6 +23,7 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
     const [error, setError] = useState<string | null>(null);
     const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
     const [isInviting, setIsInviting] = useState(false);
+    const [codeCopied, setCodeCopied] = useState(false);
 
     // Sync ref
     React.useEffect(() => {
@@ -251,12 +252,15 @@ export const StarterSelect: React.FC<Props> = ({ onSelect, unlockedPacks, shinyB
                                         onClick={() => {
                                             if (multiplayer?.roomId) {
                                                 navigator.clipboard.writeText(multiplayer.roomId);
+                                                setCodeCopied(true);
+                                                window.setTimeout(() => setCodeCopied(false), 1800);
                                             }
                                         }}
-                                        className="bg-white/10 hover:bg-white/20 p-3 rounded-xl transition-colors text-xl"
-                                        title="Copy Code"
+                                        className={`p-3 rounded-xl transition-colors text-xl ${codeCopied ? 'bg-emerald-500/30 text-emerald-300' : 'bg-white/10 hover:bg-white/20'}`}
+                                        title={codeCopied ? 'Copied!' : 'Copy Code'}
+                                        aria-label={codeCopied ? 'Room code copied to clipboard' : 'Copy room code to clipboard'}
                                     >
-                                        📋
+                                        {codeCopied ? '✓' : '📋'}
                                     </button>
                                 </div>
                                 <div className="flex items-center gap-2">

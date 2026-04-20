@@ -21,1167 +21,35 @@ import {
     getEvolutionTarget,
     TYPE_COLORS
 } from './services/pokeService';
-import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, playTestBeep, clearAudioFails } from './services/soundService';
+import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx } from './services/soundService';
 import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE } from './services/mapData';
 import { ITEMS } from './services/itemData';
 import { generateBattleBackground } from './services/imageService';
 import { multiplayer, NetworkPayload } from './services/multiplayer';
-import { auth, loginWithGoogle } from './firebase';
+import { auth, signInAnon } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { HealthBar } from './components/HealthBar';
 import { PokemonSprite } from './components/PokemonSprite';
 import { StarterSelect } from './components/StarterSelect';
 import { Overworld } from './components/Overworld';
+import { ActionButton } from './components/ui/ActionButton';
+import { MoveButton } from './components/ui/MoveButton';
+import { MoveVFX } from './components/ui/MoveVFX';
+import { EmoteOverlay } from './components/ui/EmoteOverlay';
+import { SyncGauge } from './components/ui/SyncGauge';
+import { AudioWidget } from './components/ui/AudioWidget';
+import { QuestLog } from './components/screens/QuestLog';
+import { PerkSelect } from './components/screens/PerkSelect';
+import { OnlineMenu } from './components/screens/OnlineMenu';
+import { ShopMenu } from './components/screens/ShopMenu';
+import { MetaMenu } from './components/screens/MetaMenu';
+import { PokemonSummary } from './components/screens/PokemonSummary';
+import { PauseMenu } from './components/screens/PauseMenu';
+import { MAIN_QUESTS } from './data/quests';
 
-// --- Helper Components ---
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
-interface ActionButtonProps { label: string; onClick: () => void; disabled: boolean; color: string; subLabel?: string; pulse?: boolean; }
-const ActionButton: React.FC<ActionButtonProps> = ({ label, onClick, disabled, color, subLabel, pulse }) => (
-    <button onClick={onClick} disabled={disabled} className={`${color} w-full py-3 rounded-xl shadow-[0_4px_0_rgba(0,0,0,0.3)] text-white font-bold text-xs uppercase tracking-wide border-b-4 active:border-b-0 active:translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden group ${pulse ? 'animate-pulse' : ''}`}>
-      <span className="relative z-10">{label}</span>{subLabel && <span className="block text-[8px] opacity-80 relative z-10">{subLabel}</span>}
-      <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-    </button>
-);
-
-interface MoveButtonProps { move: PokemonMove; onClick: () => void; disabled: boolean; type: string; }
-const MoveButton: React.FC<MoveButtonProps> = ({ move, onClick, disabled, type }) => {
-  const color = TYPE_COLORS[type.toLowerCase()] || '#777';
-  return (
-    <button 
-      onClick={onClick} 
-      disabled={disabled} 
-      style={{ backgroundColor: color, borderColor: `${color}88` }}
-      className="w-full py-3 md:py-4 rounded-xl shadow-[0_4px_0_rgba(0,0,0,0.3)] text-white font-bold text-[10px] md:text-xs uppercase border-b-4 active:border-b-0 active:translate-y-1 transition-all"
-    >
-      <div className="flex flex-col items-center">
-        <span>{move.name.replace('-', ' ')}</span>
-        <span className="text-[8px] opacity-80">{type}</span>
-      </div>
-    </button>
-  );
-};
-
-const MoveVFX = ({ vfx }: { vfx: NonNullable<BattleState['vfx']> }) => {
-    const { type, target, index, damage, isCrit, isMiss, isSuperEffective, isNotVeryEffective } = vfx;
-    const colors: Record<string, string> = {
-        fire: 'bg-red-600',
-        water: 'bg-blue-500',
-        electric: 'bg-yellow-400',
-        grass: 'bg-green-500',
-        ice: 'bg-blue-200',
-        fighting: 'bg-orange-800',
-        normal: 'bg-white',
-        poison: 'bg-purple-600',
-        psychic: 'bg-pink-500',
-        ghost: 'bg-violet-800',
-        dragon: 'bg-indigo-700',
-        steel: 'bg-slate-400',
-        fairy: 'bg-pink-300',
-        bug: 'bg-lime-500',
-        rock: 'bg-stone-600',
-        ground: 'bg-amber-700',
-        flying: 'bg-sky-300',
-        'stat-up': 'bg-red-500',
-        'stat-down': 'bg-blue-500',
-        burn: 'bg-red-600',
-        freeze: 'bg-blue-300',
-        paralysis: 'bg-yellow-400',
-        poison_status: 'bg-purple-600',
-        sleep: 'bg-gray-400'
-    };
-
-    if (damage !== undefined) {
-        return (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[100]">
-                <motion.div
-                    initial={{ y: 0, opacity: 0, scale: 0.5 }}
-                    animate={{ y: -100, opacity: [0, 1, 1, 0], scale: [0.5, 1.5, 1.5, 1] }}
-                    transition={{ duration: 1, times: [0, 0.2, 0.8, 1] }}
-                    className="flex flex-col items-center"
-                >
-                    {isCrit && (
-                        <motion.div 
-                            animate={{ scale: [1, 1.2, 1] }}
-                            transition={{ repeat: Infinity, duration: 0.5 }}
-                            className="text-yellow-400 font-black text-xl uppercase italic drop-shadow-md mb-1"
-                        >
-                            CRITICAL HIT!
-                        </motion.div>
-                    )}
-                    <div className={`text-6xl font-black italic ${isCrit ? 'text-yellow-400 scale-125' : 'text-white'} drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)]`}>
-                        {damage}
-                    </div>
-                    <div className="flex gap-2 mt-2">
-                        {isSuperEffective && <span className="bg-green-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Super Effective!</span>}
-                        {isNotVeryEffective && <span className="bg-gray-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Not very effective...</span>}
-                    </div>
-                </motion.div>
-            </div>
-        );
-    }
-
-    if (isMiss) {
-        return (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[100]">
-                <motion.div
-                    initial={{ x: -20, opacity: 0 }}
-                    animate={{ x: 20, opacity: [0, 1, 0] }}
-                    transition={{ duration: 0.8 }}
-                    className="text-4xl font-black text-gray-400 uppercase italic drop-shadow-lg"
-                >
-                    MISS!
-                </motion.div>
-            </div>
-        );
-    }
-
-    if (type === 'stat-up' || type === 'stat-down') {
-        return (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <motion.div
-                    initial={{ y: type === 'stat-up' ? 20 : -20, opacity: 0, scale: 0.5 }}
-                    animate={{ y: type === 'stat-up' ? -40 : 40, opacity: [0, 1, 0], scale: [0.5, 1.5, 0.5] }}
-                    transition={{ duration: 0.8, ease: "easeOut" }}
-                    className="flex flex-col items-center"
-                >
-                    <div className={`text-4xl font-black ${type === 'stat-up' ? 'text-red-500' : 'text-blue-500'} drop-shadow-[0_0_10px_rgba(255,255,255,0.8)]`}>
-                        {type === 'stat-up' ? '▲▲▲' : '▼▼▼'}
-                    </div>
-                </motion.div>
-            </div>
-        );
-    }
-
-    if (['burn', 'freeze', 'paralysis', 'poison_status', 'sleep'].includes(type)) {
-        return (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <motion.div
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: [1, 2.5, 0], opacity: [0, 1, 0], rotate: [0, 180, 360] }}
-                    transition={{ duration: 1 }}
-                    className={`w-32 h-32 rounded-full blur-2xl ${colors[type] || 'bg-white'} opacity-60`}
-                />
-                <motion.div
-                    initial={{ y: 0, opacity: 0 }}
-                    animate={{ y: -50, opacity: [0, 1, 0] }}
-                    transition={{ duration: 1 }}
-                    className="absolute text-2xl font-black uppercase italic text-white drop-shadow-lg"
-                >
-                    {type.replace('_status', '').toUpperCase()}!
-                </motion.div>
-            </div>
-        );
-    }
-
-    return (
-        <motion.div 
-            initial={{ scale: 0, opacity: 0 }}
-            animate={{ scale: [1, 2, 0], opacity: [1, 0.8, 0] }}
-            transition={{ duration: 0.5 }}
-            className={`absolute z-50 w-32 h-32 rounded-full blur-xl ${colors[type] || 'bg-white'}`}
-        />
-    );
-};
-
-const EmoteOverlay = ({ emote }: { emote: string | null }) => { if (!emote) return null; return <div className="absolute top-1/4 left-1/2 -translate-x-1/2 z-50 animate-bounce text-6xl">{emote}</div>; };
-
-const SyncGauge = ({ value, label, color }: { value: number, label: string, color: 'yellow' | 'red' }) => {
-    const safeValue = isNaN(value) ? 0 : value;
-    const isFull = safeValue >= 100;
-
-    return (
-        <div className="relative z-50 pointer-events-none mb-1">
-            <motion.div 
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="relative"
-            >
-                <AnimatePresence>
-                    {isFull && (
-                        <motion.div 
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: [0.2, 0.5, 0.2], scale: [1, 1.1, 1] }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 2, repeat: Infinity }}
-                            className={`absolute -inset-6 ${color === 'yellow' ? 'bg-yellow-500/20' : 'bg-red-500/20'} blur-3xl rounded-full`}
-                        />
-                    )}
-                </AnimatePresence>
-                
-                <div className={`p-2 transition-all duration-500 min-w-[180px]`}>
-                    <div className="flex justify-between items-center mb-1">
-                        <div className="flex items-center gap-1.5">
-                            <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${color === 'yellow' ? 'bg-yellow-400 text-black' : 'bg-red-600 text-white'} shadow-lg border border-white/20 transform -rotate-2`}>
-                                <span className="text-[10px] font-black italic">S</span>
-                            </div>
-                            <div className="flex flex-col">
-                                <motion.span 
-                                    animate={isFull ? { scale: [1, 1.05, 1] } : {}}
-                                    transition={{ duration: 1, repeat: Infinity }}
-                                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${color === 'yellow' ? 'text-yellow-400' : 'text-red-400'} drop-shadow-[0_2px_4px_rgba(0,0,0,1)]`}
-                                >
-                                    {label}
-                                </motion.span>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[7px] text-white/60 font-bold tracking-widest uppercase drop-shadow-md">Sync Link</span>
-                                    <div className={`h-[1px] w-8 ${color === 'yellow' ? 'bg-yellow-400/20' : 'bg-red-400/20'}`}></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="flex items-baseline gap-1 px-1">
-                            <motion.span 
-                                key={Math.floor(safeValue)}
-                                initial={{ y: -5, opacity: 0 }}
-                                animate={{ y: 0, opacity: 1 }}
-                                className={`text-lg font-black ${color === 'yellow' ? 'text-yellow-400' : 'text-red-400'} italic tabular-nums drop-shadow-[0_2px_4px_rgba(0,0,0,1)]`}
-                            >
-                                {Math.floor(safeValue)}
-                            </motion.span>
-                            <span className={`text-[8px] font-bold ${color === 'yellow' ? 'text-yellow-500' : 'text-red-500'} drop-shadow-md`}>%</span>
-                        </div>
-                    </div>
-                    
-                    <div className="relative h-3 bg-black/40 backdrop-blur-sm rounded-full overflow-hidden border border-white/10 p-[1.5px] shadow-lg">
-                        <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${safeValue}%` }}
-                            transition={{ type: 'spring', stiffness: 40, damping: 12 }}
-                            className={`h-full rounded-full relative overflow-hidden
-                                ${isFull 
-                                    ? (color === 'yellow' ? 'bg-gradient-to-r from-yellow-400 via-orange-300 to-white' : 'bg-gradient-to-r from-red-600 via-red-400 to-white') 
-                                    : (color === 'yellow' ? 'bg-gradient-to-r from-yellow-600 to-orange-500' : 'bg-gradient-to-r from-red-800 to-red-500')
-                                }`}
-                        >
-                            <motion.div 
-                                animate={{ x: ['-100%', '400%'] }}
-                                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                                className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent w-1/4 skew-x-[45deg]"
-                            />
-                        </motion.div>
-                    </div>
-                </div>
-            </motion.div>
-        </div>
-    );
-};
-
-const MetaMenu = ({ state, setState, onBack }: { state: PlayerGlobalState, setState: React.Dispatch<React.SetStateAction<PlayerGlobalState>>, onBack: () => void }) => {
-    const upgrades = [
-        { id: 'startingMoney', name: 'Amulet Coin', desc: 'Start with more money', cost: 5, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/amulet-coin.png' },
-        { id: 'attackBoost', name: 'Muscle Band', desc: '+5% Damage per level', cost: 10, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/muscle-band.png' },
-        { id: 'defenseBoost', name: 'Focus Band', desc: '-5% Damage taken per level', cost: 10, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/focus-band.png' },
-        { id: 'speedBoost', name: 'Swift Wing', desc: '+5% Speed per level', cost: 10, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/swift-wing.png' },
-        { id: 'critBoost', name: 'Scope Lens', desc: '+2% Crit chance per level', cost: 15, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/scope-lens.png' },
-        { id: 'healingBoost', name: 'Shell Bell', desc: '+5% Healing effectiveness', cost: 12, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/shell-bell.png' },
-        { id: 'xpMultiplier', name: 'Lucky Egg', desc: 'Earn more XP from battles', cost: 8, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/lucky-egg.png' },
-        { id: 'startingPermits', name: 'Permit Bag', desc: 'Start with more Capture Permits', cost: 15, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/poke-ball.png' },
-        { id: 'captureBoost', name: 'Catching Charm', desc: '+5% Catch rate per level', cost: 15, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/catching-charm.png' },
-        { id: 'essenceMultiplier', name: 'Relic Gold', desc: '+10% Essence earned per level', cost: 20, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/relic-gold.png' },
-        { id: 'shinyChance', name: 'Shiny Charm', desc: 'Higher shiny encounter rate', cost: 12, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/shiny-charm.png' },
-        { id: 'lootQuality', name: 'Dowsing Machine', desc: 'Better items from battle drops', cost: 10, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/dowsing-machine.png' },
-        { id: 'riftStability', name: 'Timer Ball', desc: 'Slower overworld level scaling', cost: 20, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/timer-ball.png' },
-        { id: 'mercenaryGuild', name: 'Choice Band', desc: 'Start with random held items', cost: 15, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/choice-band.png' },
-        { id: 'evolutionaryInsight', name: 'Member Card', desc: 'Cheaper items in all shops', cost: 12, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/member-card.png' },
-    ];
-
-    const getUpgradeCost = (baseCost: number, level: number) => {
-        return Math.floor(baseCost * Math.pow(1.6, level));
-    };
-
-    const packs = [
-        { id: 'sinnoh', name: 'Sinnoh Pack', desc: 'Unlock Turtwig, Chimchar, Piplup', cost: 25, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/lunar-wing.png' },
-        { id: 'johto', name: 'Johto Pack', desc: 'Unlock Chikorita, Cyndaquil, Totodile', cost: 25, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/rainbow-wing.png' },
-        { id: 'hoenn', name: 'Hoenn Pack', desc: 'Unlock Treecko, Torchic, Mudkip', cost: 25, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/red-orb.png' },
-        { id: 'pseudo', name: 'Dragon Den', desc: 'Unlock Dratini, Larvitar, Bagon', cost: 50, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/dragon-fang.png' },
-        { id: 'mythic', name: 'Mythical Rift', desc: 'Unlock Mew, Celebi, Jirachi', cost: 100, icon: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/azure-flute.png' },
-    ];
-
-    const buyUpgrade = (id: string, cost: number) => {
-        if (state.meta.riftEssence < cost) return;
-        playSound('https://www.soundjay.com/button/sounds/button-16.mp3'); // Existing correct call
-        setState(prev => ({
-            ...prev,
-            meta: {
-                ...prev.meta,
-                riftEssence: prev.meta.riftEssence - cost,
-                upgrades: {
-                    ...prev.meta.upgrades,
-                    [id]: (prev.meta.upgrades[id as keyof typeof prev.meta.upgrades] || 0) + 1
-                }
-            }
-        }));
-        playLevelUpSfx();
-    };
-
-    const buyPack = (id: string, cost: number) => {
-        if (state.meta.riftEssence < cost || state.meta.unlockedPacks.includes(id)) return;
-        setState(prev => ({
-            ...prev,
-            meta: {
-                ...prev.meta,
-                riftEssence: prev.meta.riftEssence - cost,
-                unlockedPacks: [...prev.meta.unlockedPacks, id]
-            }
-        }));
-        playLevelUpSfx();
-    };
-
-    return (
-        <div className="min-h-screen bg-[#050505] text-white p-4 md:p-8 font-sans flex flex-col items-center overflow-y-auto relative">
-            {/* Background Effects */}
-            <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
-                <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,#3b0764_0%,transparent_70%)]"></div>
-                <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/20 blur-[120px] rounded-full animate-pulse"></div>
-                <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-600/20 blur-[120px] rounded-full animate-pulse delay-700"></div>
-            </div>
-
-            <div className="max-w-6xl w-full z-10">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-6">
-                    <div>
-                        <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-400">
-                            Rift Upgrades
-                        </h2>
-                        <p className="text-gray-500 text-xs md:text-sm mt-2 uppercase tracking-[0.3em] font-bold">Temporal Enhancement Terminal</p>
-                    </div>
-                    <div className="bg-white/5 backdrop-blur-xl px-6 py-4 rounded-2xl border border-white/10 shadow-2xl flex items-center gap-4">
-                        <div className="w-10 h-10 bg-purple-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(168,85,247,0.5)]">
-                            <span className="text-xl">💎</span>
-                        </div>
-                        <div>
-                            <div className="text-[10px] text-purple-400 font-black uppercase tracking-widest">Available Essence</div>
-                            <div className="text-2xl font-mono font-bold">{state.meta.riftEssence}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    {/* Upgrades Column */}
-                    <div className="lg:col-span-2 space-y-8">
-                        <div className="flex items-center gap-4 mb-6">
-                            <div className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10"></div>
-                            <h3 className="text-xs font-black uppercase tracking-[0.4em] text-white/40">Permanent Enhancements</h3>
-                            <div className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10"></div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {upgrades.map(u => {
-                                const level = state.meta.upgrades[u.id as keyof typeof state.meta.upgrades] || 0;
-                                const currentCost = getUpgradeCost(u.cost, level);
-                                const canAfford = state.meta.riftEssence >= currentCost;
-
-                                return (
-                                    <div key={u.id} className="group relative bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-5 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl overflow-hidden">
-                                        <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity">
-                                            <img src={u.icon} alt="" className="w-16 h-16 grayscale" referrerPolicy="no-referrer" />
-                                        </div>
-                                        
-                                        <div className="flex items-start gap-4 relative z-10">
-                                            <div className="w-14 h-14 bg-black/40 rounded-xl flex items-center justify-center border border-white/5 shadow-inner p-2">
-                                                <img src={u.icon} alt={u.name} className="w-10 h-10 object-contain drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]" referrerPolicy="no-referrer" />
-                                            </div>
-                                            <div className="flex-1">
-                                                <div className="flex justify-between items-start">
-                                                    <h4 className="text-sm font-black uppercase tracking-tight text-white group-hover:text-purple-400 transition-colors">{u.name}</h4>
-                                                    <span className="text-[10px] font-mono font-bold text-purple-500 bg-purple-500/10 px-2 py-0.5 rounded">LVL {level}</span>
-                                                </div>
-                                                <p className="text-[10px] text-gray-500 mt-1 leading-relaxed">{u.desc}</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="mt-6 flex items-center justify-between gap-4 relative z-10">
-                                            <div className="flex-1 h-1 bg-white/5 rounded-full overflow-hidden">
-                                                <div className="h-full bg-purple-500 transition-all duration-500" style={{ width: `${Math.min(100, (level / 10) * 100)}%` }}></div>
-                                            </div>
-                                            <button 
-                                                onClick={() => buyUpgrade(u.id, currentCost)}
-                                                disabled={!canAfford}
-                                                className={`
-                                                    px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all
-                                                    ${canAfford 
-                                                        ? 'bg-white text-black hover:bg-purple-400 hover:text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' 
-                                                        : 'bg-white/5 text-white/20 cursor-not-allowed border border-white/5'}
-                                                `}
-                                            >
-                                                {currentCost} <span className="text-[8px]">ESSENCE</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* Packs Column */}
-                    <div className="space-y-8">
-                        <div className="flex items-center gap-4 mb-6">
-                            <div className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10"></div>
-                            <h3 className="text-xs font-black uppercase tracking-[0.4em] text-white/40">Starter Packs</h3>
-                            <div className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10"></div>
-                        </div>
-
-                        <div className="space-y-4">
-                            {packs.map(p => {
-                                const isUnlocked = state.meta.unlockedPacks.includes(p.id);
-                                const canAfford = state.meta.riftEssence >= p.cost;
-
-                                return (
-                                    <div key={p.id} className={`
-                                        group relative overflow-hidden rounded-2xl border transition-all duration-500
-                                        ${isUnlocked 
-                                            ? 'bg-emerald-500/10 border-emerald-500/30' 
-                                            : 'bg-white/5 border-white/10 hover:border-white/30'}
-                                    `}>
-                                        <div className="p-5 flex items-center gap-4">
-                                            <div className={`
-                                                w-16 h-16 rounded-2xl flex items-center justify-center p-3 transition-transform duration-500 group-hover:scale-110
-                                                ${isUnlocked ? 'bg-emerald-500/20' : 'bg-black/40'}
-                                            `}>
-                                                <img src={p.icon} alt={p.name} className="w-12 h-12 object-contain" referrerPolicy="no-referrer" />
-                                            </div>
-                                            <div className="flex-1">
-                                                <h4 className={`text-sm font-black uppercase tracking-tight ${isUnlocked ? 'text-emerald-400' : 'text-white'}`}>{p.name}</h4>
-                                                <p className="text-[10px] text-gray-500 mt-1">{p.desc}</p>
-                                            </div>
-                                        </div>
-                                        
-                                        <button 
-                                            onClick={() => buyPack(p.id, p.cost)}
-                                            disabled={isUnlocked || !canAfford}
-                                            className={`
-                                                w-full py-3 text-[10px] font-black uppercase tracking-widest transition-all
-                                                ${isUnlocked 
-                                                    ? 'bg-emerald-500/20 text-emerald-400 cursor-default' 
-                                                    : canAfford 
-                                                        ? 'bg-white text-black hover:bg-emerald-400 hover:text-white' 
-                                                        : 'bg-white/5 text-white/20 cursor-not-allowed'}
-                                            `}
-                                        >
-                                            {isUnlocked ? '✓ Unlocked' : `Unlock for ${p.cost} Essence`}
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="mt-16 flex justify-center">
-                    <button 
-                        onClick={onBack} 
-                        className="group relative px-12 py-4 bg-white text-black font-black uppercase tracking-[0.3em] text-xs hover:bg-purple-500 hover:text-white transition-all rounded-full overflow-hidden shadow-2xl"
-                    >
-                        <span className="relative z-10">Return to Terminal</span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const MAIN_QUESTS = [
-    { id: 'q1', title: 'The First Step', desc: 'Reach distance 10 from the origin.', target: 10, type: 'distance' },
-    { id: 'q2', title: 'Badge Collector', desc: 'Defeat a Gym Leader and earn your first badge.', target: 1, type: 'badges' },
-    { id: 'q3', title: 'Rift Explorer', desc: 'Reach distance 50 from the origin.', target: 50, type: 'distance' },
-    { id: 'q4', title: 'Elite Trainer', desc: 'Collect 4 badges to prove your strength.', target: 4, type: 'badges' },
-    { id: 'q5', title: 'Master of the Rift', desc: 'Collect all 8 badges and reach distance 100.', target: 8, type: 'badges' },
-    { id: 'q6', title: 'Legendary Hunter', desc: 'Reach distance 200 and find a Legendary Pokemon.', target: 200, type: 'distance' },
-    { id: 'q7', title: 'Rift Conqueror', desc: 'Reach distance 500. The ultimate challenge.', target: 500, type: 'distance' },
-    { id: 'q8', title: 'Infinite Voyager', desc: 'Reach distance 1000. Become a legend.', target: 1000, type: 'distance' },
-];
-
-const QuestLog = ({ state }: { state: PlayerGlobalState }) => {
-    const distance = Math.floor(Math.sqrt(state.chunkPos.x ** 2 + state.chunkPos.y ** 2));
-    
-    const currentQuest = MAIN_QUESTS.find(q => q.id === state.meta.mainQuestProgress.currentQuestId) || MAIN_QUESTS[0];
-    const questValue = currentQuest.type === 'distance' ? distance : state.badges;
-    const progress = Math.min(100, (questValue / currentQuest.target) * 100);
-
-    return (
-        <div className="absolute bottom-6 right-6 z-40 w-72 bg-black/60 backdrop-blur-xl border border-white/10 p-5 rounded-3xl text-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden group">
-            {/* Animated Scanning Line */}
-            <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-[scan_3s_linear_infinite] opacity-50"></div>
-            
-            <div className="relative z-10">
-                <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_#3b82f6]"></div>
-                        <h3 className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em]">Main Quest</h3>
-                    </div>
-                    <div className="text-[8px] font-mono text-white/40">ID: {currentQuest.id}</div>
-                </div>
-
-                <div className="space-y-4">
-                    <div>
-                        <div className="text-xs font-black uppercase tracking-tight mb-1">{currentQuest.title}</div>
-                        <div className="text-[9px] text-gray-400 leading-relaxed uppercase font-bold tracking-wider italic">{currentQuest.desc}</div>
-                    </div>
-
-                    <div className="space-y-2">
-                        <div className="flex justify-between items-end">
-                            <div className="text-[10px] font-mono font-bold text-blue-400">
-                                {questValue} / {currentQuest.target} 
-                                <span className="text-[8px] text-gray-600 ml-1">{currentQuest.type.toUpperCase()}</span>
-                            </div>
-                            <div className="text-[10px] font-mono font-bold">{Math.floor(progress)}%</div>
-                        </div>
-                        <div className="h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                            <div 
-                                className="h-full bg-gradient-to-r from-blue-600 to-purple-600 transition-all duration-1000 ease-out"
-                                style={{ width: `${progress}%` }}
-                            ></div>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                        <div className="bg-white/5 p-2 rounded-xl border border-white/5">
-                            <div className="text-[8px] font-black uppercase text-gray-500 mb-1">Total Badges</div>
-                            <div className="text-xs font-mono font-bold text-yellow-400">{state.badges} / 8</div>
-                        </div>
-                        <div className="bg-white/5 p-2 rounded-xl border border-white/5">
-                            <div className="text-[8px] font-black uppercase text-gray-500 mb-1">Rift Depth</div>
-                            <div className="text-xs font-mono font-bold text-blue-400">{distance}m</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <style>{`
-                @keyframes scan {
-                    0% { transform: translateY(0); opacity: 0; }
-                    50% { opacity: 0.5; }
-                    100% { transform: translateY(160px); opacity: 0; }
-                }
-            `}</style>
-        </div>
-    );
-};
-
-const PerkSelect = ({ onSelect }: { onSelect: (perk: string) => void }) => {
-    const perks = [
-        { id: 'vampirism', name: 'Vampirism', desc: 'Heal 10% HP on every hit', icon: '🧛' },
-        { id: 'swiftness', name: 'Swiftness', desc: 'Permanent +1 Speed in battle', icon: '👟' },
-        { id: 'scholar', name: 'Scholar', desc: 'Double XP from all sources', icon: '🎓' },
-        { id: 'juggernaut', name: 'Juggernaut', desc: '+20% Max HP for all team', icon: '🛡️' },
-        { id: 'berserker', name: 'Berserker', desc: '+20% Damage when below 50% HP', icon: '🪓' },
-    ];
-
-    // Pick 3 random perks
-    const [choices] = useState(() => {
-        const shuffled = [...perks].sort(() => 0.5 - Math.random());
-        return shuffled.slice(0, 3);
-    });
-
-    return (
-        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4">
-            <div className="max-w-5xl w-full">
-                <div className="text-center mb-16">
-                    <h2 className="text-4xl md:text-7xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-b from-yellow-400 to-yellow-600">
-                        Rift Anomaly Detected
-                    </h2>
-                    <p className="text-gray-500 text-xs md:text-sm uppercase tracking-[0.5em] font-black mt-4">Select a Temporal Perk</p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    {choices.map((p, i) => (
-                        <motion.button
-                            key={p.id}
-                            initial={{ opacity: 0, y: 50 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: i * 0.1 }}
-                            onClick={() => onSelect(p.id)}
-                            className="group relative bg-white/5 border border-white/10 rounded-[2rem] p-10 text-center transition-all duration-500 hover:bg-white/10 hover:border-yellow-400/50 hover:scale-105 hover:shadow-[0_0_50px_rgba(234,179,8,0.2)] overflow-hidden"
-                        >
-                            <div className="absolute inset-0 bg-gradient-to-b from-yellow-400/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                            <div className="text-7xl mb-8 transform group-hover:scale-110 transition-transform duration-500">{p.icon}</div>
-                            <div className="text-2xl font-black text-white mb-4 uppercase tracking-tighter group-hover:text-yellow-400 transition-colors">{p.name}</div>
-                            <div className="text-xs text-gray-500 leading-relaxed font-medium">{p.desc}</div>
-                        </motion.button>
-                    ))}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const OnlineMenu = ({ onBack, onStartGame }: { onBack: () => void, onStartGame: () => void }) => {
-    const [status, setStatus] = useState<'idle' | 'connecting' | 'connected'>('idle');
-    const [roomId, setRoomId] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
-
-    const joinRoom = async () => {
-        const cleanId = roomId.trim().toUpperCase();
-        if (cleanId.length < 4) { setErrorMsg("Enter valid room ID."); return; }
-        setStatus('connecting');
-        setErrorMsg('');
-        try {
-            await multiplayer.joinRoom(cleanId);
-            setStatus('connected');
-            onStartGame();
-        } catch (e: any) { 
-            setErrorMsg(e.message || 'Connection failed.'); 
-            setStatus('idle'); 
-        }
-    };
-
-    return (
-        <div className="min-h-screen bg-[#020617] text-white p-4 md:p-12 font-sans flex flex-col items-center justify-center relative overflow-hidden">
-            {/* Background Effects */}
-            <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
-                <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,#1e3a8a_0%,transparent_70%)]"></div>
-                <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-blue-600/20 blur-[120px] rounded-full animate-pulse"></div>
-            </div>
-
-            <div className="max-w-md w-full z-10 bg-white/5 backdrop-blur-2xl border border-white/10 p-10 rounded-[2.5rem] shadow-2xl">
-                <div className="text-center mb-10">
-                    <h2 className="text-4xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                        Join Friend
-                    </h2>
-                    <p className="text-gray-500 text-[10px] uppercase tracking-[0.4em] font-bold mt-2">Enter the Rift Synchronization Code</p>
-                </div>
-
-                <div className="space-y-6">
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-2">Room ID</label>
-                        <input 
-                            type="text" 
-                            value={roomId}
-                            onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                            placeholder="ENTER CODE"
-                            className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-center text-xl font-mono font-bold tracking-[0.5em] focus:outline-none focus:border-blue-500 transition-colors"
-                        />
-                    </div>
-
-                    {errorMsg && (
-                        <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-bold uppercase p-3 rounded-xl text-center">
-                            {errorMsg}
-                        </div>
-                    )}
-
-                    <div className="flex flex-col gap-3">
-                        <button 
-                            onClick={joinRoom}
-                            disabled={status === 'connecting' || roomId.trim().length < 4}
-                            className={`
-                                w-full py-5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg
-                                ${status === 'connecting' || roomId.trim().length < 4
-                                    ? 'bg-white/5 text-white/20 cursor-not-allowed'
-                                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}
-                            `}
-                        >
-                            {status === 'connecting' ? 'Syncing...' : 'Connect to Rift'}
-                        </button>
-                        <button 
-                            onClick={onBack}
-                            className="w-full py-4 text-gray-500 hover:text-white text-[10px] font-black uppercase tracking-widest transition-colors"
-                        >
-                            Return to Menu
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const ShopMenu = ({ onClose, money, inventory, onBuy, discount = 0 }: { onClose: () => void, money: number, inventory: any, onBuy: (item: string, price: number) => void, discount?: number }) => {
-    const [activeTab, setActiveTab] = useState<'all' | 'pokeball' | 'healing' | 'battle' | 'evolution'>('all');
-    
-    const shopItems = Object.values(ITEMS).map(item => ({
-        ...item,
-        price: Math.floor(item.price * (1 - discount))
-    })).filter(item => activeTab === 'all' || item.category === activeTab);
-
-    return (
-        <div className="absolute inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4 md:p-8">
-            <div className="bg-[#0a0a0a] border border-white/10 rounded-[2.5rem] p-8 w-full max-w-4xl text-white flex flex-col h-[85vh] shadow-[0_50px_100px_rgba(0,0,0,0.8)] relative overflow-hidden">
-                {/* Decorative Elements */}
-                <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/5 blur-[100px] rounded-full -mr-32 -mt-32"></div>
-                <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-600/5 blur-[100px] rounded-full -ml-32 -mb-32"></div>
-
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6 relative z-10">
-                    <div>
-                        <h2 className="text-4xl md:text-5xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                            Poké Mart
-                        </h2>
-                        <p className="text-gray-500 text-[10px] uppercase tracking-[0.4em] font-bold mt-2">Authorized Supply Terminal</p>
-                    </div>
-                    
-                    <div className="bg-white/5 backdrop-blur-xl px-6 py-4 rounded-2xl border border-white/10 flex items-center gap-4">
-                        <div className="w-10 h-10 bg-yellow-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(234,179,8,0.3)]">
-                            <span className="text-xl">💰</span>
-                        </div>
-                        <div>
-                            <div className="text-[10px] text-yellow-500 font-black uppercase tracking-widest">Credits</div>
-                            <div className="text-2xl font-mono font-bold">${money}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex gap-2 mb-8 overflow-x-auto pb-2 scrollbar-hide relative z-10">
-                    {['all', 'pokeball', 'healing', 'battle', 'evolution'].map(tab => (
-                        <button 
-                            key={tab}
-                            onClick={() => setActiveTab(tab as any)}
-                            className={`px-6 py-3 rounded-xl text-[10px] uppercase font-black tracking-widest transition-all border ${
-                                activeTab === tab 
-                                ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' 
-                                : 'bg-white/5 border-white/5 text-gray-500 hover:text-white hover:bg-white/10'
-                            }`}
-                        >
-                            {tab}
-                        </button>
-                    ))}
-                </div>
-                
-                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto pr-2 custom-scrollbar relative z-10">
-                    {shopItems.map(item => (
-                        <button 
-                            key={item.id}
-                            onClick={() => onBuy(item.id, item.price)}
-                            disabled={money < item.price}
-                            className={`group relative p-5 rounded-2xl border transition-all duration-300 flex items-center justify-between overflow-hidden ${
-                                money >= item.price 
-                                ? 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/20 hover:scale-[1.02]' 
-                                : 'bg-white/5 border-white/5 opacity-40 cursor-not-allowed'
-                            }`}
-                        >
-                            <div className="flex items-center gap-4 relative z-10">
-                                <div className="w-16 h-16 bg-black/40 rounded-xl flex items-center justify-center p-3 border border-white/5 group-hover:scale-110 transition-transform duration-500">
-                                    <img src={item.icon} className="w-12 h-12 object-contain drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]" alt={item.name} referrerPolicy="no-referrer" />
-                                </div>
-                                <div className="text-left">
-                                    <div className="font-black uppercase text-xs tracking-tight group-hover:text-blue-400 transition-colors">{item.name}</div>
-                                    <div className="text-[9px] text-gray-500 max-w-[180px] leading-relaxed mt-1 line-clamp-2">{item.description}</div>
-                                    <div className="flex items-center gap-2 mt-2">
-                                        <div className="text-[8px] font-black uppercase text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded">
-                                            Owned: {
-                                                item.id === 'poke-ball' ? inventory.pokeballs : 
-                                                item.id === 'potion' ? inventory.potions : 
-                                                item.id === 'revive' ? inventory.revives :
-                                                item.id === 'rare-candy' ? inventory.rare_candy :
-                                                inventory.items.filter((i: string) => i === item.id).length
-                                            }
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="text-right relative z-10">
-                                <div className="text-xl font-mono font-bold text-white group-hover:text-yellow-400 transition-colors">${item.price}</div>
-                                <div className="text-[8px] font-black uppercase text-gray-600 mt-1">Purchase</div>
-                            </div>
-
-                            {/* Hover Background Effect */}
-                            <div className="absolute inset-0 bg-gradient-to-r from-blue-600/0 via-blue-600/5 to-blue-600/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                        </button>
-                    ))}
-                </div>
-                
-                <div className="mt-8 flex justify-center relative z-10">
-                    <button 
-                        onClick={onClose} 
-                        className="group relative px-16 py-4 bg-white text-black font-black uppercase tracking-[0.4em] text-xs hover:bg-red-600 hover:text-white transition-all rounded-full overflow-hidden shadow-2xl"
-                    >
-                        <span className="relative z-10">Close Terminal</span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-const PokemonSummary = ({ pokemon, inventory, upgrades, onGiveItem, onClose }: { pokemon: Pokemon, inventory: any, upgrades: MetaState['upgrades'], onGiveItem: (itemId: string) => void, onClose: () => void }) => {
-    const [showItemPicker, setShowItemPicker] = useState(false);
-    
-    const getBoostedStat = (key: keyof StatBlock, value: number) => {
-        if (key === 'attack' || key === 'special-attack') return Math.floor(value * (1 + (upgrades.attackBoost * 0.05)));
-        if (key === 'defense' || key === 'special-defense') return Math.floor(value * (1 + (upgrades.defenseBoost * 0.05)));
-        if (key === 'speed') return Math.floor(value * (1 + (upgrades.speedBoost * 0.05)));
-        return value;
-    };
-
-    const stats: { label: string, key: keyof StatBlock }[] = [
-        { label: 'HP', key: 'hp' },
-        { label: 'ATK', key: 'attack' },
-        { label: 'DEF', key: 'defense' },
-        { label: 'SPA', key: 'special-attack' },
-        { label: 'SPD', key: 'special-defense' },
-        { label: 'SPE', key: 'speed' },
-    ];
-
-    const battleItems = inventory.items.filter((id: string) => ITEMS[id]?.category === 'battle' || ITEMS[id]?.category === 'healing' || ITEMS[id]?.category === 'evolution');
-    if (inventory.potions > 0) {
-        battleItems.push('potion');
-    }
-    if (inventory.revives > 0) {
-        battleItems.push('revive');
-    }
-    if (inventory.rare_candy > 0) {
-        battleItems.push('rare-candy');
-    }
-
-    return (
-        <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4 font-press-start overflow-y-auto">
-            {showItemPicker && (
-                <div className="fixed inset-0 z-[110] bg-black/80 flex items-center justify-center p-4">
-                    <div className="bg-gray-800 border-4 border-white p-6 w-full max-w-md text-white">
-                        <h3 className="text-sm mb-4 text-center text-yellow-400 uppercase">SELECT ITEM</h3>
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                            {battleItems.length === 0 && <div className="text-center text-[10px] text-gray-500 py-8">NO BATTLE ITEMS IN INVENTORY</div>}
-                            {battleItems.map((itemId: string, idx: number) => (
-                                <button 
-                                    key={idx}
-                                    onClick={() => { onGiveItem(itemId); setShowItemPicker(false); }}
-                                    className="w-full p-3 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded flex items-center gap-3 transition-colors"
-                                >
-                                    <img src={ITEMS[itemId].icon} className="w-6 h-6 object-contain" alt={ITEMS[itemId].name} />
-                                    <div className="text-left">
-                                        <div className="text-[10px] uppercase font-bold">{ITEMS[itemId].name}</div>
-                                        <div className="text-[7px] text-gray-400">{ITEMS[itemId].description}</div>
-                                        <div className="text-[6px] text-blue-400 font-bold mt-1">
-                                            {ITEMS[itemId].category === 'healing' || ITEMS[itemId].category === 'evolution' ? 'USE ON POKEMON' : 'GIVE TO HOLD'}
-                                        </div>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                        <button onClick={() => setShowItemPicker(false)} className="w-full py-3 bg-red-600 hover:bg-red-500 text-white rounded mt-4 text-[10px] uppercase font-bold">CANCEL</button>
-                    </div>
-                </div>
-            )}
-
-            <div className="bg-gray-800 border-4 border-white p-6 w-full max-w-2xl text-white relative">
-                <button onClick={onClose} className="absolute top-4 right-4 text-red-500 text-xl">X</button>
-                
-                <div className="flex flex-col md:flex-row gap-8 mb-8">
-                    <div className="flex flex-col items-center bg-gray-700 p-4 rounded-xl border-2 border-gray-600">
-                        <img src={pokemon.sprites.front_default} className="w-32 h-32 object-contain pixelated" alt={pokemon.name} />
-                        <h2 className="text-xl text-yellow-400 uppercase mt-2">{pokemon.name}</h2>
-                        <div className="text-xs text-gray-400">Lv. {pokemon.level}</div>
-                        <div className="flex gap-2 mt-2">
-                            {pokemon.types.map(t => (
-                                <span key={t} style={{ backgroundColor: TYPE_COLORS[t] }} className="px-2 py-1 rounded text-[8px] uppercase font-bold border border-white/20">
-                                    {t}
-                                </span>
-                            ))}
-                        </div>
-                        
-                        <div className="mt-6 w-full">
-                            <h3 className="text-[8px] text-blue-400 mb-1 uppercase text-center">HELD ITEM</h3>
-                            <div className="bg-black/30 p-2 rounded border border-white/10 flex flex-col items-center">
-                                {pokemon.heldItem ? (
-                                    <>
-                                        <img src={ITEMS[pokemon.heldItem.id]?.icon} className="w-8 h-8 object-contain mb-1" alt={pokemon.heldItem.name} />
-                                        <div className="text-[8px] uppercase font-bold text-center">{pokemon.heldItem.name}</div>
-                                        <button 
-                                            onClick={() => onGiveItem('')} 
-                                            className="mt-2 text-[6px] text-red-400 hover:text-red-300 uppercase underline"
-                                        >
-                                            Take Item
-                                        </button>
-                                    </>
-                                ) : (
-                                    <div className="text-[8px] text-gray-500 italic py-2">NONE</div>
-                                )}
-                                <button 
-                                    onClick={() => setShowItemPicker(true)}
-                                    className="mt-2 w-full py-1.5 bg-blue-600 hover:bg-blue-500 text-[8px] rounded uppercase font-bold transition-colors"
-                                >
-                                    {pokemon.heldItem ? 'CHANGE' : 'GIVE ITEM'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="flex-1">
-                        <h3 className="text-sm text-blue-400 mb-4 border-b border-blue-400/30 pb-1">STATS</h3>
-                        <div className="grid grid-cols-1 gap-2">
-                            <div className="grid grid-cols-5 text-[8px] text-gray-500 font-bold uppercase mb-1">
-                                <div className="col-span-1">Stat</div>
-                                <div className="text-center">Base</div>
-                                <div className="text-center">IV</div>
-                                <div className="text-center">EV</div>
-                                <div className="text-right">Total</div>
-                            </div>
-                            {stats.map(s => {
-                                const isIncreased = pokemon.nature.increased === s.key;
-                                const isDecreased = pokemon.nature.decreased === s.key;
-                                return (
-                                    <div key={s.key} className="grid grid-cols-5 items-center text-[10px] py-1 border-b border-white/5">
-                                        <div className="col-span-1 text-gray-400 uppercase">{s.label}</div>
-                                        <div className="text-center">{pokemon.baseStats[s.key]}</div>
-                                        <div className="text-center text-green-400">{pokemon.ivs[s.key]}</div>
-                                        <div className="text-center text-orange-400">{pokemon.evs[s.key]}</div>
-                                        <div className={`text-right font-bold ${isIncreased ? 'text-green-400' : isDecreased ? 'text-red-400' : 'text-yellow-400'}`}>
-                                            {getBoostedStat(s.key, pokemon.stats[s.key])}
-                                            {isIncreased && <span className="text-[6px] ml-0.5">▲</span>}
-                                            {isDecreased && <span className="text-[6px] ml-0.5">▼</span>}
-                                            {getBoostedStat(s.key, pokemon.stats[s.key]) > pokemon.stats[s.key] && <span className="text-[6px] ml-0.5 text-blue-400 font-black">+</span>}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                        
-                        <div className="mt-6 grid grid-cols-2 gap-4">
-                            <div>
-                                <h3 className="text-[10px] text-blue-400 mb-1 uppercase">Nature</h3>
-                                <div className="text-xs uppercase">{pokemon.nature.name}</div>
-                                {pokemon.nature.increased && (
-                                    <div className="text-[8px] text-green-400 mt-1">
-                                        + {pokemon.nature.increased.replace('-', ' ')} / - {pokemon.nature.decreased?.replace('-', ' ')}
-                                    </div>
-                                )}
-                            </div>
-                            <div>
-                                <h3 className="text-[10px] text-blue-400 mb-1 uppercase">Ability</h3>
-                                <div className="text-xs uppercase">{pokemon.ability.name.replace('-', ' ')}</div>
-                                {pokemon.ability.isHidden && <div className="text-[8px] text-purple-400 mt-1">HIDDEN ABILITY</div>}
-                                {pokemon.ability.description && <div className="text-[7px] text-gray-400 mt-1 leading-tight">{pokemon.ability.description}</div>}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div>
-                    <h3 className="text-sm text-blue-400 mb-4 border-b border-blue-400/30 pb-1">MOVES</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {pokemon.moves.map((m, i) => (
-                            <div key={i} className="bg-gray-700/50 p-3 rounded border border-white/10 flex justify-between items-center">
-                                <div>
-                                    <div className="text-xs uppercase font-bold">{m.name.replace('-', ' ')}</div>
-                                    <div className="flex gap-2 mt-1">
-                                        <span style={{ backgroundColor: TYPE_COLORS[m.type || 'normal'] }} className="px-1.5 py-0.5 rounded text-[6px] uppercase font-bold">
-                                            {m.type}
-                                        </span>
-                                        <span className="text-[6px] text-gray-400 uppercase">{m.damage_class}</span>
-                                    </div>
-                                </div>
-                                <div className="text-right">
-                                    <div className="text-[8px] text-gray-400">PWR: {m.power || '--'}</div>
-                                    <div className="text-[8px] text-gray-400">ACC: {m.accuracy || '--'}</div>
-                                    <div className="text-[8px] text-gray-400">PP: {m.pp}/{m.pp}</div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                <button onClick={onClose} className="w-full py-4 bg-white text-black mt-8 hover:bg-yellow-400 transition-colors uppercase font-bold">CLOSE SUMMARY</button>
-            </div>
-        </div>
-    );
-};
-
-const PauseMenu = ({ onClose, state, onSwap, onGiveItem }: any) => {
-    const [selectedMon, setSelectedMon] = useState<Pokemon | null>(null);
-    const [activeTab, setActiveTab] = useState<'party' | 'items'>('party');
-
-    return (
-        <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
-            {selectedMon && (
-                <PokemonSummary 
-                    pokemon={selectedMon} 
-                    inventory={state.inventory} 
-                    upgrades={state.meta.upgrades}
-                    onGiveItem={(itemId) => onGiveItem(selectedMon, itemId)}
-                    onClose={() => setSelectedMon(null)} 
-                />
-            )}
-            
-            <div className="bg-gray-800 border-4 border-white p-6 w-full max-w-lg text-white shadow-2xl flex flex-col h-[80vh]">
-                <div className="flex gap-2 mb-6">
-                    <button 
-                        onClick={() => setActiveTab('party')}
-                        className={`flex-1 py-2 text-[10px] uppercase font-bold border-2 transition-all ${activeTab === 'party' ? 'bg-yellow-500 border-white text-black' : 'bg-gray-700 border-gray-600 text-gray-400'}`}
-                    >
-                        PARTY
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('items')}
-                        className={`flex-1 py-2 text-[10px] uppercase font-bold border-2 transition-all ${activeTab === 'items' ? 'bg-yellow-500 border-white text-black' : 'bg-gray-700 border-gray-600 text-gray-400'}`}
-                    >
-                        ITEMS
-                    </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                    {activeTab === 'party' ? (
-                        <div className="space-y-3">
-                            {state.team.map((p: Pokemon, i: number) => (
-                                <div 
-                                    key={i} 
-                                    className="group relative bg-gray-700 hover:bg-gray-600 border-2 border-gray-600 hover:border-yellow-400 p-3 rounded-xl cursor-pointer transition-all flex items-center gap-4"
-                                >
-                                    <div className="w-12 h-12 flex items-center justify-center bg-black/20 rounded-lg" onClick={() => setSelectedMon(p)}>
-                                        <img src={p.sprites.front_default} className="w-10 h-10 object-contain pixelated" alt={p.name} />
-                                    </div>
-                                    
-                                    <div className="flex-1" onClick={() => setSelectedMon(p)}>
-                                        <div className="flex justify-between items-center mb-1">
-                                            <span className="text-xs font-bold uppercase tracking-wide">{p.name}</span>
-                                            <span className="text-[10px] text-gray-400">Lv. {p.level}</span>
-                                        </div>
-                                        <div className="w-full h-2 bg-gray-900 rounded-full overflow-hidden border border-black">
-                                            <div 
-                                                className={`h-full transition-all duration-500 ${p.currentHp / p.maxHp > 0.5 ? 'bg-green-500' : p.currentHp / p.maxHp > 0.2 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                                                style={{ width: `${(p.currentHp / p.maxHp) * 100}%` }}
-                                            />
-                                        </div>
-                                        <div className="flex justify-between mt-1 text-[8px] text-gray-400 font-mono">
-                                            <span>HP: {p.currentHp}/{p.maxHp}</span>
-                                            <div className="flex gap-2">
-                                                {p.heldItem && <span className="text-blue-400">[{p.heldItem.name}]</span>}
-                                                <span>{p.status || 'OK'}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex flex-col gap-1">
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); onSwap(0, i); }} 
-                                            disabled={i === 0}
-                                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 text-[10px] rounded uppercase font-bold shadow-md active:translate-y-0.5 transition-all"
-                                        >
-                                            LEAD
-                                        </button>
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); setSelectedMon(p); }}
-                                            className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 text-[10px] rounded uppercase font-bold shadow-md active:translate-y-0.5 transition-all"
-                                        >
-                                            STATS
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="space-y-2">
-                            <div className="bg-black/20 p-3 rounded border border-white/10 mb-4">
-                                <div className="flex justify-between text-[10px] mb-1">
-                                    <span className="text-gray-400 uppercase">Capture Permits:</span>
-                                    <span className="text-yellow-400 font-bold">{state.run.capturePermits}</span>
-                                </div>
-                                <div className="flex justify-between text-[10px]">
-                                    <span className="text-gray-400 uppercase">Potions:</span>
-                                    <span className="text-yellow-400 font-bold">{state.inventory.potions}</span>
-                                </div>
-                            </div>
-                            
-                            <h3 className="text-[8px] text-blue-400 mb-2 uppercase">Other Items</h3>
-                            {state.inventory.items.length === 0 && <div className="text-center text-[10px] text-gray-500 py-8">INVENTORY EMPTY</div>}
-                            {state.inventory.items.map((itemId: string, idx: number) => (
-                                <div key={idx} className="bg-gray-700/50 p-2 rounded border border-white/5 flex items-center gap-3">
-                                    <img src={ITEMS[itemId]?.icon} className="w-6 h-6 object-contain" alt={itemId} />
-                                    <div className="flex-1">
-                                        <div className="text-[9px] uppercase font-bold">{ITEMS[itemId]?.name || itemId}</div>
-                                        <div className="text-[7px] text-gray-400 leading-tight">{ITEMS[itemId]?.description}</div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                <div className="mt-8 grid grid-cols-2 gap-4">
-                    <button onClick={onClose} className="py-3 bg-red-600 hover:bg-red-500 text-white rounded font-bold uppercase text-xs tracking-widest shadow-lg">CLOSE</button>
-                    <div className="bg-black/40 p-3 rounded flex items-center justify-center text-yellow-400 font-mono text-sm border border-white/10">
-                        ${state.money}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// Utility for async delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const AudioWidget = () => {
-    const [status, setStatus] = useState(getAudioStatus());
-    const [isOpen, setIsOpen] = useState(false);
-
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setStatus(getAudioStatus());
-        }, 1000);
-        return () => clearInterval(interval);
-    }, []);
-
-    const isError = status.state !== 'running';
-
-    return (
-        <div className="fixed bottom-4 left-4 z-[999999] flex flex-col items-start gap-2 font-press-start">
-            <AnimatePresence>
-                {isOpen && (
-                    <motion.div 
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -20 }}
-                        className="bg-slate-900/95 border-2 border-slate-700 p-4 rounded-2xl shadow-2xl backdrop-blur-md w-64 mb-2"
-                    >
-                        <div className="text-[10px] text-yellow-400 font-black mb-3 uppercase tracking-widest border-b border-white/10 pb-2">Audio Diagnostics</div>
-                        
-                        <div className="space-y-3">
-                            <div className="flex justify-between items-center">
-                                <span className="text-[8px] text-slate-400 uppercase">State</span>
-                                <span className={`text-[8px] font-bold px-2 py-0.5 rounded ${status.state === 'running' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                                    {status.state.toUpperCase()}
-                                </span>
-                            </div>
-
-                            <div className="flex justify-between items-center text-[8px] text-slate-300">
-                                <span className="uppercase">Cache</span>
-                                <span className="text-white">{status.cachedBuffers} Buffers</span>
-                            </div>
-
-                            <div className="flex justify-between items-center text-[8px] text-slate-300">
-                                <span className="uppercase">Fails</span>
-                                <span className={status.failedResources > 0 ? 'text-red-400' : 'text-white'}>{status.failedResources} URLs</span>
-                            </div>
-
-                            {status.lastError && (
-                                <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-[7px] text-red-300 break-all leading-tight">
-                                    ERR: {status.lastError}
-                                </div>
-                            )}
-
-                            <div className="pt-2 flex flex-col gap-2">
-                                <button 
-                                    onClick={() => { unlockAudio(); playTestBeep(); }}
-                                    className="bg-yellow-500 hover:bg-yellow-400 text-black text-[9px] font-black py-2 rounded-lg transition-colors uppercase tracking-tight"
-                                >
-                                    Force Restart & Test
-                                </button>
-                                <button 
-                                    onClick={clearAudioFails}
-                                    className="bg-slate-800 hover:bg-slate-700 text-white text-[8px] font-bold py-2 rounded-lg transition-colors uppercase"
-                                >
-                                    Clear Fails
-                                </button>
-                                <button 
-                                    onClick={() => setIsOpen(false)}
-                                    className="bg-slate-800 hover:bg-slate-700 text-white text-[8px] font-bold py-2 rounded-lg transition-colors uppercase"
-                                >
-                                    Minimize
-                                </button>
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            <button 
-                onClick={() => setIsOpen(!isOpen)}
-                className={`p-3 rounded-2xl shadow-lg transition-all active:scale-90 flex items-center gap-2 border-2 ${isError || status.failedResources > 0 ? 'bg-red-950/80 border-red-500 animate-pulse' : 'bg-slate-900/80 border-slate-700'}`}
-            >
-                <span className="text-xl">{(isError || status.failedResources > 0) ? '🔇' : '🔊'}</span>
-                {(isError || status.failedResources > 0) && <span className="text-[8px] font-bold text-red-400 uppercase tracking-tighter">Audio Issues ({status.failedResources})</span>}
-            </button>
-        </div>
-    );
-};
 
 export default function App() {
   console.log('App Rendering: Start');
@@ -1271,14 +139,35 @@ export default function App() {
   const [menuBgUrl] = useState<string>('');
 
   useEffect(() => {
+    // Fail-safe: never let the player get stuck on the loading screen if Firebase
+    // Auth takes too long or anonymous sign-in is disabled. Single-player works
+    // without a signed-in user; only multiplayer needs auth.currentUser.uid.
+    const failsafe = window.setTimeout(() => setAuthLoading(false), 4000);
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
       if (u) {
-        setPlayerState(prev => ({ ...prev, name: u.displayName || 'Trainer' }));
+        setUser(u);
+        setAuthLoading(false);
+        window.clearTimeout(failsafe);
+        if (u.displayName) {
+          setPlayerState(prev => ({ ...prev, name: u.displayName || 'Trainer' }));
+        }
+      } else {
+        // Kick off a silent anonymous sign-in. onAuthStateChanged will fire again
+        // with the anonymous user when it succeeds.
+        signInAnon().catch(() => {
+          // Anonymous Auth disabled in the Firebase project — unblock the UI so
+          // the player can at least play single-player.
+          setAuthLoading(false);
+          window.clearTimeout(failsafe);
+        });
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      window.clearTimeout(failsafe);
+      unsubscribe();
+    };
   }, []);
 
   const [challengeState, setChallengeState] = useState<{
@@ -3020,9 +1909,10 @@ export default function App() {
          await delay(ms); 
     }
 
-    const setVFX = async (type: string, target: 'player' | 'enemy', index: number) => {
-        setBattleState(prev => ({ ...prev, vfx: { type, target, index } }));
-        await delay(500);
+    const setVFX = async (type: string, target: 'player' | 'enemy', index: number, moveName?: string) => {
+        setBattleState(prev => ({ ...prev, vfx: { type, target, index, moveName } }));
+        // Showdown sprite animations run ~900ms; old hard-coded 500 ms cut them off.
+        await delay(900);
         setBattleState(prev => ({ ...prev, vfx: null }));
     }
 
@@ -3776,7 +2666,7 @@ export default function App() {
                 
                 playMoveSfx(action.move.type || 'normal', action.move.name, action.move.sfx);
                 const realTargetIndex = targetTeam.findIndex(mon => mon === target);
-                await setVFX(action.move.type, action.isPlayer ? 'enemy' : 'player', realTargetIndex);
+                await setVFX(action.move.type, action.isPlayer ? 'enemy' : 'player', realTargetIndex, action.move.name);
                 await syncState(400); // Wait for attack
 
                 // Iron Blood Ability (Immunity)
@@ -4515,19 +3405,19 @@ export default function App() {
                     }
                 }
 
-                // Spectator’s Roar Ability
+                // Spectator's Roar Ability
                 if (actor.ability.name === 'SpectatorSRoar' && res.isCritical) {
                     const allyIdx = 1 - action.actorIndex;
                     const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
                     if (actor.statStages) actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
                     if (ally && !ally.isFainted && ally.statStages) ally.statStages.speed = Math.min(6, (ally.statStages.speed || 0) + 1);
-                    tempLogs.push(`${actor.name}'s Spectator’s Roar boosted Speed!`);
+                    tempLogs.push(`${actor.name}'s Spectator's Roar boosted Speed!`);
                 }
 
-                // Gladiator’s Spirit Ability
+                // Gladiator's Spirit Ability
                 if (actor.ability.name === 'GladiatorSSpirit' && target.currentHp === 0) {
                     if (actor.statStages) actor.statStages.defense = Math.min(6, (actor.statStages.defense || 0) + 1);
-                    tempLogs.push(`${actor.name}'s Gladiator’s Spirit raised its Defense!`);
+                    tempLogs.push(`${actor.name}'s Gladiator's Spirit raised its Defense!`);
                     
                     const allyIdx = 1 - action.actorIndex;
                     const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
@@ -7523,6 +6413,25 @@ export default function App() {
       }
   }, [phase, musicStarted]);
 
+  // Pre-fetch the official move SFX for every move that either side might use
+  // as soon as we enter a battle. The first play is then gapless instead of
+  // hitting the procedural fallback while GitHub's raw CDN responds.
+  useEffect(() => {
+      if (phase !== GamePhase.BATTLE) return;
+      const mons = [
+          ...(battleState.playerTeam || []),
+          ...(battleState.opponentTeam || [])
+      ];
+      const moves: Array<{ type?: string; name?: string; sfx?: string }> = [];
+      for (const m of mons) {
+          if (!m || !m.moves) continue;
+          for (const mv of m.moves) {
+              if (mv && mv.name) moves.push({ name: mv.name, type: mv.type, sfx: mv.sfx });
+          }
+      }
+      if (moves.length) prefetchMoveSfx(moves);
+  }, [phase, battleState.playerTeam, battleState.opponentTeam]);
+
   useEffect(() => {
       if (phase === GamePhase.MENU && !musicStarted) {
           const startMusic = () => {
@@ -7539,45 +6448,6 @@ export default function App() {
         if (authLoading) return (
             <div className="min-h-screen bg-black flex items-center justify-center">
                 <div className="text-yellow-400 animate-pulse font-press-start uppercase tracking-widest">Initialising Rift...</div>
-            </div>
-        );
-
-        if (!user) return (
-            <div className="min-h-screen bg-[#0a1a0a] flex flex-col items-center justify-center p-6 font-press-start relative overflow-hidden">
-                <div className="absolute inset-0 z-0 bg-[radial-gradient(circle_at_50%_50%,#1a3a1a_0%,#050a05_100%)] opacity-50"></div>
-                
-                <motion.div 
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    className="z-10 text-center max-w-md w-full bg-black/60 backdrop-blur-xl p-12 rounded-[3rem] border border-white/10 shadow-2xl"
-                >
-                    <h1 className="text-4xl font-black italic mb-8 tracking-tighter leading-tight"
-                        style={{ 
-                            color: '#ffcb05',
-                            textShadow: '0 4px 0 #3c5aa6',
-                            WebkitTextStroke: '1.5px #3c5aa6',
-                            paintOrder: 'stroke fill'
-                        }}
-                    >
-                        POKÉMON<br/>EXPLORERS
-                    </h1>
-                    
-                    <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-12 leading-relaxed">
-                        Secure your trainer profile to access the multiplayer rift.
-                    </p>
-
-                    <button 
-                        onClick={() => loginWithGoogle()}
-                        className="w-full group relative bg-white text-black px-8 py-5 rounded-2xl font-bold uppercase text-xs tracking-widest hover:bg-yellow-400 transition-all flex items-center justify-center gap-4 shadow-xl active:translate-y-1"
-                    >
-                        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
-                        LOGIN WITH GOOGLE
-                    </button>
-                    
-                    <div className="mt-8 text-[8px] text-gray-600 uppercase tracking-widest">
-                        Powered by Firebase Realtime Rift
-                    </div>
-                </motion.div>
             </div>
         );
 
@@ -7672,7 +6542,7 @@ export default function App() {
                         className="group relative bg-emerald-600 hover:bg-emerald-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-emerald-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(16,185,129,0.3)]"
                     >
                         <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">🌐</span> Join Friend
+                            <span className="text-2xl">🌍</span> Join Friend
                         </span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
                     </button>

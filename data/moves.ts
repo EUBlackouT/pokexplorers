@@ -1,4 +1,4 @@
-
+﻿
 export interface MoveData {
     type: string;
     category: 'Physical' | 'Special' | 'Status';
@@ -34,7 +34,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "May burn the target.",
     "flavor": "The user hardens flame into a lance and dashes forward in a blazing thrust.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/firepunch.mp3",
+    "sfx": "pgo:fire-punch",
     "meta": { "ailment": { "name": "burn" }, "ailment_chance": 20, "category": { "name": "damage+ailment" } }
   },
   "Iron Waltz": {
@@ -49,7 +49,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["multi-hit"],
     "effect": "Hits twice.",
     "flavor": "The user dances with ringing steel, striking in a measured duet.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/geargrind.mp3",
+    "sfx": "pgo:bullet-punch",
     "min_hits": 2,
     "max_hits": 2,
     "meta": { "category": { "name": "damage" } }
@@ -66,7 +66,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["sub-pierce"],
     "effect": "May frostbite; hits through Substitute.",
     "flavor": "A frigid beam that seeps into every gap, chilling even hidden foes.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/icebeam.mp3",
+    "sfx": "pgo:ice-beam",
     "meta": { "ailment": { "name": "frostbite" }, "ailment_chance": 20, "category": { "name": "damage+ailment" } }
   },
   "Mind Fracture": {
@@ -81,7 +81,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["spdef-drop"],
     "effect": "Lowers the target’s Sp. Def.",
     "flavor": "A sharp psionic spike shatters the foe’s focus from within.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/psychic.mp3",
+    "sfx": "pgo:psychic",
     "stat_changes": [{ "stat": { "name": "special-defense" }, "change": -1 }],
     "meta": { "stat_chance": 100, "category": { "name": "damage+lower" } }
   },
@@ -97,7 +97,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "May cause the target to flinch.",
     "flavor": "The user detonates jagged stone in a brutal close-range burst.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/rockblast.mp3",
+    "sfx": "pgo:rock-blast",
     "flinchChance": 30,
     "meta": { "category": { "name": "damage" } }
   },
@@ -113,7 +113,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["spread"],
     "effect": "Hits both foes; may lower Sp. Atk.",
     "flavor": "A tempest of buzzing wings and cutting scales batters the field.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/bugbuzz.mp3",
+    "sfx": "pgo:bug-buzz",
     "stat_changes": [{ "stat": { "name": "special-attack" }, "change": -1 }],
     "meta": { "stat_chance": 30, "category": { "name": "damage+lower" } }
   },
@@ -129,7 +129,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "Steals 10% Sync Gauge from the opponent.",
     "flavor": "The user siphons the opponent's energy to fuel its own Sync Gauge.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/darkpulse.mp3",
+    "sfx": "pgo:dark-pulse",
     "meta": { "category": { "name": "damage" } }
   },
   "Shield Bash": {
@@ -144,7 +144,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "Raises the user's Defense by 1 stage.",
     "flavor": "The user slams the target with its shield, hardening its own defenses.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/ironhead.mp3",
+    "sfx": "pgo:iron-head",
     "stat_changes": [{ "stat": { "name": "defense" }, "change": 1 }],
     "meta": { "stat_chance": 100, "category": { "name": "damage+raise" } }
   },
@@ -160,7 +160,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["tailwind-after"],
     "effect": "Sets Tailwind after dealing damage.",
     "flavor": "A sharp cross-breeze lifts the team’s wings after the strike.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/gust.mp3",
+    "sfx": "pgo:gust",
     "meta": { "category": { "name": "damage" } }
   },
   "Gravebind": {
@@ -175,7 +175,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["trap"],
     "effect": "Traps the target for four turns; seals its last move for two.",
     "flavor": "A spiteful tether of spirit matter binds the foe and chokes its options.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/shadowball.mp3",
+    "sfx": "pgo:shadow-ball",
     "meta": { "ailment": { "name": "trapped" }, "ailment_chance": 100, "category": { "name": "damage+ailment" } }
   },
   "Arc Cannon": {
@@ -190,7 +190,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": [],
     "effect": "May paralyze the target.",
     "flavor": "A condensed blast of charged particles tears through the air before erupting.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/zapcannon.mp3",
+    "sfx": "pgo:zap-cannon",
     "meta": { "ailment": { "name": "paralysis" }, "ailment_chance": 30, "category": { "name": "damage+ailment" } }
   },
   "Aether Roar": {
@@ -205,7 +205,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["crit-vs-status"],
     "effect": "Always critical on statused targets.",
     "flavor": "An ancient, echoing roar that tears open weak spots.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/roaroftime.mp3",
+    "sfx": "pgo:roar-of-time",
     "meta": { "category": { "name": "damage" } }
   },
   "Soul Resonance": {
@@ -220,7 +220,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["signature", "slow-start"],
     "effect": "Always moves last; heals both users for a little after damage.",
     "flavor": "Two kindred spirits harmonize their power into a single, world-shaking note.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/hypervoice.mp3",
+    "sfx": "pgo:dragon-pulse",
     "meta": { "category": { "name": "damage" } }
   },
   "Eclipse Beam": {
@@ -235,7 +235,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["signature", "field"],
     "effect": "Sets Trick Room or Tailwind depending on the field state.",
     "flavor": "A sun–moon ray bends time or wind as it carves through the opposition.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/flashcannon.mp3",
+    "sfx": "pgo:flash-cannon",
     "meta": { "category": { "name": "damage" } }
   },
   "Lucky Bark": {
@@ -250,7 +250,7 @@ export const NEW_MOVES: Record<string, MoveData> = {
     "flags": ["flinch"],
     "effect": "30% chance to flinch the target.",
     "flavor": "The user barks in a lucky rhythm, startling the foe.",
-    "sfx": "https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/snarl.mp3",
+    "sfx": "pgo:snarl",
     "flinchChance": 30,
     "meta": { "category": { "name": "damage" } }
   },
