@@ -21,6 +21,55 @@ import { MOVE_SFX_BASE, MOVE_SFX_FILES, MOVE_TYPE_SFX_BASE, MOVE_TYPE_SFX_TYPES 
 import { LOCAL_MOVE_SFX_BASE, LOCAL_MOVE_SFX_FILES } from '../data/localMoveSounds';
 import { MOVE_SFX_ALIASES } from '../data/moveSfxAliases';
 
+// -----------------------------------------------------------------------------
+// Volume controls.
+// Module-level multipliers applied on top of the per-sample `volume` values.
+// `sfxVolume` affects all short sample playback (moves, cries, UI clicks).
+// `bgmVolume` affects the looped background music. Both are 0..1 linear;
+// 1.0 means "play at the developer-tuned level", 0.0 silences.
+// Persisted to localStorage under `pokexplorers_audio_v1` so preferences
+// survive reload without the player needing to tweak sliders every run.
+// -----------------------------------------------------------------------------
+const AUDIO_PREF_KEY = 'pokexplorers_audio_v1';
+interface AudioPrefs { sfx: number; bgm: number; muted: boolean }
+const loadAudioPrefs = (): AudioPrefs => {
+    if (typeof window === 'undefined') return { sfx: 1, bgm: 1, muted: false };
+    try {
+        const raw = window.localStorage.getItem(AUDIO_PREF_KEY);
+        if (!raw) return { sfx: 1, bgm: 1, muted: false };
+        const p = JSON.parse(raw) as Partial<AudioPrefs>;
+        return {
+            sfx: typeof p.sfx === 'number' ? Math.max(0, Math.min(1, p.sfx)) : 1,
+            bgm: typeof p.bgm === 'number' ? Math.max(0, Math.min(1, p.bgm)) : 1,
+            muted: !!p.muted,
+        };
+    } catch { return { sfx: 1, bgm: 1, muted: false }; }
+};
+const persistAudioPrefs = (p: AudioPrefs): void => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem(AUDIO_PREF_KEY, JSON.stringify(p)); } catch { /* noop */ }
+};
+let _audioPrefs: AudioPrefs = loadAudioPrefs();
+export const getSfxVolume = (): number => _audioPrefs.muted ? 0 : _audioPrefs.sfx;
+export const getBgmVolume = (): number => _audioPrefs.muted ? 0 : _audioPrefs.bgm;
+export const getMuted = (): boolean => _audioPrefs.muted;
+export const setSfxVolume = (v: number): void => {
+    _audioPrefs = { ..._audioPrefs, sfx: Math.max(0, Math.min(1, v)) };
+    persistAudioPrefs(_audioPrefs);
+};
+export const setBgmVolume = (v: number): void => {
+    _audioPrefs = { ..._audioPrefs, bgm: Math.max(0, Math.min(1, v)) };
+    persistAudioPrefs(_audioPrefs);
+    _applyLiveBgm();
+};
+export const setMuted = (m: boolean): void => {
+    _audioPrefs = { ..._audioPrefs, muted: m };
+    persistAudioPrefs(_audioPrefs);
+    _applyLiveBgm();
+};
+// Defined later in the file once `bgmGain` exists; this is a noop until then.
+let _applyLiveBgm: () => void = () => { /* replaced after bgmGain is defined */ };
+
 // Real gameplay samples from the pokebedrock Minecraft resource pack (community
 // rips under fair-use / educational). Used as upgrades over procedural SFX for
 // moments that happen often during a battle. All failures silently fall back
@@ -68,6 +117,14 @@ export const BGM_TRACKS = {
 let audioCtx: AudioContext | null = null;
 let bgmSource: AudioBufferSourceNode | null = null;
 let bgmGain: GainNode | null = null;
+// `bgmBaseGain` is the developer-intended level for the currently-playing
+// track (computed at play time). We multiply by `getBgmVolume()` when
+// setting the real node gain so that settings sliders can live-adjust
+// without destroying the per-track tuning.
+let bgmBaseGain: number = 1;
+_applyLiveBgm = () => {
+    try { if (bgmGain) bgmGain.gain.value = bgmBaseGain * getBgmVolume(); } catch { /* noop */ }
+};
 let currentBgmUrl: string | null = null;
 let audioUnlocked = false;
 
@@ -375,7 +432,7 @@ const playCascadingSound = async (file: string, mirrorList: string[], ext: strin
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         const gain = ctx.createGain();
-        gain.gain.value = volume;
+        gain.gain.value = volume * getSfxVolume();
         source.connect(gain).connect(ctx.destination);
         source.start(0);
         return true;
@@ -400,7 +457,7 @@ export const playSound = async (url: string, volume: number = 0.5) => {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         const gain = ctx.createGain();
-        gain.gain.value = volume;
+        gain.gain.value = volume * getSfxVolume();
         source.connect(gain).connect(ctx.destination);
         source.start(0);
     } catch {}
@@ -454,7 +511,7 @@ const playDecoded = (buffer: AudioBuffer, volume: number) => {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         const gain = ctx.createGain();
-        gain.gain.value = volume;
+        gain.gain.value = volume * getSfxVolume();
         source.connect(gain).connect(ctx.destination);
         source.start(0);
     } catch (e) {
@@ -647,6 +704,38 @@ export const playBattleWinSfx = () => {
     playSample(PBR_SAMPLES.battleWin, 0.55, () => triggerProceduralSound('levelup'));
 };
 
+/**
+ * Cinematic evolution sequence SFX. Three cues stacked on a timeline so a
+ * UI component can just call `playEvolutionStart()`, let the animation run,
+ * and call `playEvolutionComplete()` at the reveal frame.
+ */
+export const playEvolutionStart = (): void => {
+    const ctx = initAudio();
+    if (!ctx || ctx.state !== 'running') return;
+    // Rising arpeggio -- classic evolution "here we go" riff.
+    [392, 523.25, 659.25, 783.99, 987.77].forEach((f, i) =>
+        playTone(ctx, 'triangle', f, f, 0.22, 0.22 * getSfxVolume(), i * 0.11));
+    // Low shimmer bed.
+    playNoise(ctx, 2.8, 'bandpass', 1400, 6, 0.08 * getSfxVolume(), { to: 2200, time: 2.8 });
+};
+
+export const playEvolutionPulse = (): void => {
+    const ctx = initAudio();
+    if (!ctx || ctx.state !== 'running') return;
+    // Short shimmer used per silhouette flip.
+    playTone(ctx, 'sine', 1200, 1800, 0.18, 0.12 * getSfxVolume());
+};
+
+export const playEvolutionComplete = (): void => {
+    const ctx = initAudio();
+    if (!ctx || ctx.state !== 'running') return;
+    // Ta-da! Big major-chord release.
+    [523.25, 659.25, 783.99, 1046.50, 1318.51].forEach((f, i) =>
+        playTone(ctx, 'triangle', f, f, 0.45, 0.26 * getSfxVolume(), i * 0.04));
+    // Noise burst punctuation.
+    playNoise(ctx, 0.25, 'highpass', 3000, 0.6, 0.15 * getSfxVolume());
+};
+
 export const playMoveClickSfx = () => {
     playSample(PBR_SAMPLES.moveClick, 0.4, () => triggerProceduralSound('beep'));
 };
@@ -826,7 +915,8 @@ const startProceduralBGM = (theme: string, volume: number) => {
 
     procBgmActive = theme;
     bgmGain = ctx.createGain();
-    bgmGain.gain.value = volume * spec.volume / 0.2;
+    bgmBaseGain = volume * spec.volume / 0.2;
+    bgmGain.gain.value = bgmBaseGain * getBgmVolume();
     bgmGain.connect(ctx.destination);
 
     const loopBeats = Math.max(totalBeats(spec.melody), totalBeats(spec.bass));
@@ -866,7 +956,8 @@ export const playBGM = async (url: string, volume: number = 0.3) => {
         bgmSource.buffer = buffer;
         bgmSource.loop = true;
         bgmGain = ctx.createGain();
-        bgmGain.gain.value = volume;
+        bgmBaseGain = volume;
+        bgmGain.gain.value = bgmBaseGain * getBgmVolume();
         bgmSource.connect(bgmGain).connect(ctx.destination);
         bgmSource.start(0);
         console.log("[Audio] BGM Started:", url);

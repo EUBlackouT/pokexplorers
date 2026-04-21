@@ -14,7 +14,7 @@ import {
 import { db, auth } from '../firebase';
 
 export interface NetworkPayload {
-    type: 'SYNC_STATE' | 'GAME_SYNC' | 'MAP_DATA_SYNC' | 'INPUT_MOVE' | 'INPUT_BATTLE_ACTION' | 'INPUT_MENU' | 'INPUT_EMOTE' | 'BATTLE_REQUEST' | 'BATTLE_ACCEPT' | 'BATTLE_ACTION' | 'BATTLE_START';
+    type: 'SYNC_STATE' | 'GAME_SYNC' | 'MAP_DATA_SYNC' | 'INPUT_MOVE' | 'INPUT_BATTLE_ACTION' | 'INPUT_MENU' | 'INPUT_EMOTE' | 'BATTLE_REQUEST' | 'BATTLE_ACCEPT' | 'BATTLE_ACTION' | 'BATTLE_START' | 'TRADE_EVENT';
     payload: any;
 }
 
@@ -49,6 +49,7 @@ export class MultiplayerService {
     private persistentDataCache: Map<string, NetworkPayload> = new Map();
     private lastProcessedInputTimestamps: Map<string, number> = new Map();
     private lastProcessedSyncTimestamps: Map<string, number> = new Map();
+    private lastProcessedTradeTimestamps: Map<string, number> = new Map();
     remotePlayers: Map<string, any> = new Map();
     onRemotePlayerUpdate: ((players: Map<string, any>) => void) | null = null;
     private unsubscribers: (() => void)[] = [];
@@ -176,6 +177,13 @@ export class MultiplayerService {
                         if (data.lastInput && (!this.lastProcessedInputTimestamps.has(data.uid) || data.lastInput.timestamp?.toMillis() > this.lastProcessedInputTimestamps.get(data.uid))) {
                             this.lastProcessedInputTimestamps.set(data.uid, data.lastInput.timestamp?.toMillis() || 0);
                             this.emitData({ type: data.lastInput.type, payload: data.lastInput.payload });
+                        }
+
+                        // Handle Trade Events (separate channel from normal inputs so stray trade
+                        // chatter can't clobber per-tick movement inputs and vice versa).
+                        if (data.lastTradeInput && (!this.lastProcessedTradeTimestamps.has(data.uid) || data.lastTradeInput.timestamp?.toMillis() > this.lastProcessedTradeTimestamps.get(data.uid))) {
+                            this.lastProcessedTradeTimestamps.set(data.uid, data.lastTradeInput.timestamp?.toMillis() || 0);
+                            this.emitData({ type: 'TRADE_EVENT', payload: { ...data.lastTradeInput.payload, fromUid: data.uid } });
                         }
                     }
                 }
@@ -340,6 +348,14 @@ export class MultiplayerService {
                             type: 'BATTLE_START',
                             ...this.sanitizeData(data.payload)
                         },
+                        timestamp: serverTimestamp()
+                    }
+                });
+            } else if (data.type === 'TRADE_EVENT') {
+                const playerRef = doc(db, 'rooms', this.roomId, 'players', uid);
+                await updateDoc(playerRef, {
+                    lastTradeInput: {
+                        payload: this.sanitizeData(data.payload),
                         timestamp: serverTimestamp()
                     }
                 });

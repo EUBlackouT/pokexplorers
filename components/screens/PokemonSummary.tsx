@@ -3,6 +3,7 @@ import { Pokemon, StatBlock, MetaState } from '../../types';
 import { ITEMS } from '../../services/itemData';
 import { TYPE_COLORS } from '../../services/pokeService';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
+import { describeMove } from '../../utils/moveDescriptions';
 
 export const PokemonSummary: React.FC<{
     pokemon: Pokemon;
@@ -155,9 +156,27 @@ export const PokemonSummary: React.FC<{
                             </div>
                             <div>
                                 <h3 className="text-[10px] text-blue-400 mb-1 uppercase">Ability</h3>
-                                <div className="text-xs uppercase">{pokemon.ability.name.replace('-', ' ')}</div>
-                                {pokemon.ability.isHidden && <div className="text-[8px] text-purple-400 mt-1">HIDDEN ABILITY</div>}
-                                {pokemon.ability.description && <div className="text-[7px] text-gray-400 mt-1 leading-tight">{pokemon.ability.description}</div>}
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-xs uppercase text-yellow-200 font-bold">{pokemon.ability.name.replace('-', ' ')}</span>
+                                    {pokemon.ability.isHidden && (
+                                        <span className="px-1.5 py-0.5 bg-purple-700/80 border border-purple-400 text-purple-100 text-[6px] uppercase tracking-widest rounded">Hidden</span>
+                                    )}
+                                    {pokemon.ability.category && (
+                                        <span className="px-1.5 py-0.5 bg-gray-700 border border-gray-500 text-gray-200 text-[6px] uppercase tracking-widest rounded">{pokemon.ability.category}</span>
+                                    )}
+                                </div>
+                                {pokemon.ability.description && (
+                                    <div className="mt-2 p-2 bg-black/30 border border-white/10 rounded text-[8px] text-gray-300 leading-relaxed italic">
+                                        {pokemon.ability.description}
+                                    </div>
+                                )}
+                                {pokemon.ability.tags && pokemon.ability.tags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                        {pokemon.ability.tags.slice(0, 4).map((t) => (
+                                            <span key={t} className="text-[6px] text-cyan-300/90 uppercase tracking-widest">#{t}</span>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -166,24 +185,40 @@ export const PokemonSummary: React.FC<{
                 <div>
                     <h3 className="text-sm text-blue-400 mb-4 border-b border-blue-400/30 pb-1">MOVES</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {pokemon.moves.map((m, i) => (
-                            <div key={i} className="bg-gray-700/50 p-3 rounded border border-white/10 flex justify-between items-center">
-                                <div>
-                                    <div className="text-xs uppercase font-bold">{m.name.replace('-', ' ')}</div>
-                                    <div className="flex gap-2 mt-1">
-                                        <span style={{ backgroundColor: TYPE_COLORS[m.type || 'normal'] }} className="px-1.5 py-0.5 rounded text-[6px] uppercase font-bold">
-                                            {m.type}
-                                        </span>
-                                        <span className="text-[6px] text-gray-400 uppercase">{m.damage_class}</span>
+                        {pokemon.moves.map((m, i) => {
+                            const desc = describeMove(m);
+                            return (
+                                <div key={i} className="bg-gray-700/50 p-3 rounded border border-white/10 flex flex-col gap-2">
+                                    <div className="flex justify-between items-start">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-xs uppercase font-bold truncate">{m.name.replace(/-/g, ' ')}</div>
+                                            <div className="flex gap-2 mt-1 flex-wrap">
+                                                <span style={{ backgroundColor: TYPE_COLORS[m.type || 'normal'] }} className="px-1.5 py-0.5 rounded text-[6px] uppercase font-bold border border-white/20">
+                                                    {m.type}
+                                                </span>
+                                                <span className="text-[6px] text-gray-300 uppercase bg-black/40 px-1.5 py-0.5 rounded border border-white/10">{m.damage_class}</span>
+                                                {m.isFusion && <span className="text-[6px] text-fuchsia-300 uppercase bg-fuchsia-900/40 px-1.5 py-0.5 rounded border border-fuchsia-400/40">Fusion</span>}
+                                                {m.priority !== undefined && m.priority !== 0 && (
+                                                    <span className={`text-[6px] uppercase px-1.5 py-0.5 rounded border ${m.priority > 0 ? 'bg-emerald-900/40 border-emerald-400/40 text-emerald-200' : 'bg-rose-900/40 border-rose-400/40 text-rose-200'}`}>
+                                                        {m.priority > 0 ? `+${m.priority}` : m.priority} pri
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="text-right shrink-0 ml-2">
+                                            <div className="text-[8px] text-gray-400">PWR {m.power || '--'}</div>
+                                            <div className="text-[8px] text-gray-400">ACC {m.accuracy || '--'}</div>
+                                            <div className="text-[8px] text-gray-400">PP {m.pp}/{m.pp}</div>
+                                        </div>
                                     </div>
+                                    {desc && (
+                                        <div className="text-[7px] text-gray-300 leading-relaxed bg-black/30 border border-white/5 rounded px-2 py-1.5 italic">
+                                            {desc}
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-[8px] text-gray-400">PWR: {m.power || '--'}</div>
-                                    <div className="text-[8px] text-gray-400">ACC: {m.accuracy || '--'}</div>
-                                    <div className="text-[8px] text-gray-400">PP: {m.pp}/{m.pp}</div>
-                                </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
 

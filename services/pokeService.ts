@@ -1,5 +1,5 @@
 
-import { Pokemon, PokemonMove, MovePoolItem, StatBlock, Nature, StatName, Ability, WeatherType, TerrainType, StatStages, BattleState, MoveSecondaryEffect } from '../types';
+import { Pokemon, PokemonMove, MovePoolItem, StatBlock, Nature, StatName, Ability, WeatherType, TerrainType, StatStages, BattleState, MoveSecondaryEffect, GymMonLoadout } from '../types';
 import { NEW_ABILITIES } from '../data/abilities';
 import { NEW_MOVES } from '../data/moves';
 import { POKEMON_ASSIGNMENTS } from '../data/assignments';
@@ -2950,4 +2950,152 @@ export const getWildPokemon = async (count: number, levelRange: [number, number]
       return fetchPokemon(id, level, false, shinyBoost, difficulty);
   });
   return Promise.all(promises);
+};
+
+// --- Gym Loadout System -------------------------------------------------
+// Applies hand-authored competitive overrides (ability, held item, guaranteed
+// moves) to a Pokemon returned by fetchPokemon(). Used for gym leaders so each
+// fight has a designed identity instead of random moves.
+
+const normalizeMoveName = (name: string): string =>
+    name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+
+const buildMoveFromNewMoves = (moveName: string): PokemonMove | null => {
+    const moveData = NEW_MOVES[moveName];
+    if (!moveData) return null;
+    const m: PokemonMove = {
+        name: moveName,
+        url: '',
+        power: moveData.power,
+        accuracy: moveData.accuracy,
+        type: moveData.type.toLowerCase(),
+        damage_class: moveData.category.toLowerCase() as any,
+        pp: moveData.pp,
+        priority: moveData.priority,
+        target: moveData.target,
+        stat_changes: moveData.stat_changes || [],
+        meta: moveData.meta || { ailment: { name: 'none' }, category: { name: 'damage' } },
+        weatherChange: (moveData as any).weatherChange as any,
+        terrainChange: (moveData as any).terrainChange as any,
+        flinchChance: moveData.flinchChance,
+        min_hits: moveData.min_hits,
+        max_hits: moveData.max_hits,
+        sfx: moveData.sfx,
+    };
+    populateMoveFlags(m);
+    return m;
+};
+
+const buildMoveFromPokeApi = async (slug: string): Promise<PokemonMove | null> => {
+    try {
+        const mData = await fetchJson(`${BASE_URL}/move/${slug}`);
+        const m: PokemonMove = {
+            name: mData.name,
+            url: `${BASE_URL}/move/${slug}`,
+            power: mData.power || 0,
+            accuracy: mData.accuracy ?? 100,
+            type: mData.type.name,
+            damage_class: mData.damage_class?.name || 'physical',
+            pp: mData.pp,
+            priority: mData.priority || 0,
+            target: mData.target?.name,
+            stat_changes: mData.stat_changes,
+            meta: mData.meta,
+        };
+        populateMoveFlags(m);
+        return m;
+    } catch {
+        return null;
+    }
+};
+
+/** Given a move name (NEW_MOVES key OR pokeapi slug), return a hydrated PokemonMove. */
+export const hydrateMoveByName = async (name: string): Promise<PokemonMove | null> => {
+    if (NEW_MOVES[name]) return buildMoveFromNewMoves(name);
+    // Case-insensitive NEW_MOVES lookup
+    const foundNew = Object.keys(NEW_MOVES).find((k) => k.toLowerCase() === name.toLowerCase());
+    if (foundNew) return buildMoveFromNewMoves(foundNew);
+    return buildMoveFromPokeApi(normalizeMoveName(name));
+};
+
+/**
+ * Apply a gym loadout to an already-hydrated Pokemon. Overrides ability,
+ * held item, and ensures the listed moves are in the final moveset (replacing
+ * weakest slots if necessary). Recalculates stats to reflect any IV/EV changes.
+ */
+export const applyGymLoadout = async (mon: Pokemon, loadout: GymMonLoadout): Promise<Pokemon> => {
+    // Ability
+    if (loadout.ability) {
+        const abilityData = NEW_ABILITIES[loadout.ability];
+        if (abilityData) {
+            mon.ability = {
+                name: loadout.ability,
+                url: '',
+                isHidden: false,
+                description: abilityData.description,
+                category: abilityData.category,
+                tags: abilityData.tags,
+                notes: abilityData.notes,
+            };
+        } else {
+            // Unknown ability name -- still set it so battle effects recognize the string.
+            mon.ability = {
+                name: loadout.ability,
+                url: '',
+                isHidden: false,
+                description: `Ability: ${loadout.ability}`,
+            };
+        }
+    }
+
+    // Held item
+    if (loadout.heldItem) {
+        mon.heldItem = { ...loadout.heldItem };
+    }
+
+    // Shiny override
+    if (loadout.shiny) mon.isShiny = true;
+
+    // Ensure moves
+    if (loadout.ensureMoves && loadout.ensureMoves.length > 0) {
+        const hydrated: PokemonMove[] = [];
+        for (const name of loadout.ensureMoves) {
+            const already = mon.moves.find((m) => m.name.toLowerCase() === name.toLowerCase());
+            if (already) {
+                hydrated.push(already);
+                continue;
+            }
+            const m = await hydrateMoveByName(name);
+            if (m) hydrated.push(m);
+        }
+        // Merge: start with hydrated (guaranteed), pad with strongest existing moves not yet present.
+        const final: PokemonMove[] = [...hydrated];
+        const existing = [...mon.moves].sort((a, b) => (b.power || 0) - (a.power || 0));
+        for (const m of existing) {
+            if (final.length >= 4) break;
+            if (!final.find((x) => x.name.toLowerCase() === m.name.toLowerCase())) {
+                final.push(m);
+            }
+        }
+        mon.moves = final.slice(0, 4);
+    }
+
+    return mon;
+};
+
+/**
+ * Build a gym team from loadouts. Applies levelDelta per-mon and recalculates
+ * stats so the ace is visibly stronger. Returns the fully hydrated team.
+ */
+export const hydrateGymTeam = async (
+    baseLevel: number,
+    loadouts: GymMonLoadout[],
+    difficulty: number = 1,
+): Promise<Pokemon[]> => {
+    const team = await Promise.all(loadouts.map(async (ld) => {
+        const level = Math.max(1, baseLevel + (ld.levelDelta ?? 0));
+        const mon = await fetchPokemon(ld.id, level, true, 0, difficulty);
+        return applyGymLoadout(mon, ld);
+    }));
+    return team;
 };

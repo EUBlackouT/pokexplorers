@@ -4,6 +4,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { verifyFirebaseIdToken, AuthVerificationError } from "./server/authVerify";
+import * as LB from "./server/leaderboardService";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +98,77 @@ async function startServer() {
 
   app.get("/api/audio-proxy", mediaProxy);
   app.get("/api/media-proxy", mediaProxy);
+
+  // --- LEADERBOARD (tamper-proof) ---
+  //
+  // Clients never submit a pre-computed score; they submit a raw ScoreInputs
+  // snapshot and we re-run the weighted formula server-side. Every request is
+  // authenticated with a Firebase ID token (verified via Google JWKS) and the
+  // board is keyed on the verified UID so impersonation is impossible. See
+  // server/leaderboardService.ts for the clamps + plausibility gate + journal.
+  await LB.loadLeaderboard();
+
+  app.use(express.json({ limit: "16kb" }));
+
+  type AuthedRequest = express.Request & { auth?: { uid: string; isAnonymous: boolean } };
+
+  const requireAuth: express.RequestHandler = async (req, res, next) => {
+    const header = req.header("authorization") || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (!token) {
+      res.status(401).json({ error: "missing-token" });
+      return;
+    }
+    try {
+      const verified = await verifyFirebaseIdToken(token);
+      (req as AuthedRequest).auth = { uid: verified.uid, isAnonymous: verified.isAnonymous };
+      next();
+    } catch (err) {
+      const reason = err instanceof AuthVerificationError ? err.reason : "unknown";
+      res.status(401).json({ error: "unauthorized", reason });
+    }
+  };
+
+  app.post("/api/leaderboard/session/start", requireAuth, (req, res) => {
+    const { uid } = (req as AuthedRequest).auth!;
+    const session = LB.startSession(uid);
+    res.json(session);
+  });
+
+  app.post("/api/leaderboard/submit", requireAuth, async (req, res) => {
+    const { uid, isAnonymous } = (req as AuthedRequest).auth!;
+    const body = (req.body ?? {}) as {
+      sessionId?: string;
+      name?: string;
+      inputs?: Record<string, unknown>;
+    };
+    if (typeof body.sessionId !== "string" || !body.inputs || typeof body.inputs !== "object") {
+      res.status(400).json({ error: "invalid-payload" });
+      return;
+    }
+    const result = await LB.submit({
+      uid,
+      name: String(body.name || "Anon"),
+      sessionId: body.sessionId,
+      isAnonymous,
+      inputs: body.inputs as Partial<Parameters<typeof LB.submit>[0]["inputs"]>,
+    });
+    if (result.ok === false) {
+      res.status(409).json({ error: result.reason });
+      return;
+    }
+    res.json({ entry: result.entry, isNewBest: result.isNewBest });
+  });
+
+  app.get("/api/leaderboard/top", (req, res) => {
+    const limit = parseInt((req.query.limit as string) || "50", 10);
+    const windowParam = (req.query.window as string) === "weekly" ? "weekly" : "all";
+    res.json({ entries: LB.top(limit, windowParam), window: windowParam });
+  });
+
+  app.get("/api/leaderboard/stats", (_req, res) => {
+    res.json(LB.stats());
+  });
 
   // --- Healthcheck (for Render/Fly/Railway) ---
   app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));

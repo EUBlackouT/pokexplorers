@@ -24,7 +24,7 @@ import {
 import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx } from './services/soundService';
 import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE } from './services/mapData';
 import { ITEMS } from './services/itemData';
-import { generateBattleBackground } from './services/imageService';
+import { generateBattleBackground, MENU_BACKGROUND_URL, getStaticBackground } from './services/imageService';
 import { multiplayer, NetworkPayload } from './services/multiplayer';
 import { auth, signInAnon } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -46,6 +46,19 @@ import { MetaMenu } from './components/screens/MetaMenu';
 import { PokemonSummary } from './components/screens/PokemonSummary';
 import { PauseMenu } from './components/screens/PauseMenu';
 import { MAIN_QUESTS } from './data/quests';
+import { ToastStack, ToastEntry, ToastTier, makeToast } from './components/ui/Toast';
+import { getPlayerLevelCap, getWildLevelCap, getPartyFloor, autoScaleTeamToFloor } from './utils/progression';
+import { getDailyEvent } from './utils/dailyEvent';
+import { computeExplorerScore, getNewlyUnlockedPerks, TITLES } from './utils/explorerScore';
+import { LeaderboardScreen } from './components/screens/LeaderboardScreen';
+import { submitScore as submitExplorerScore, getSession as warmLeaderboardSession, getLastSubmittedName as getExplorerName } from './utils/leaderboard';
+import { BIOME_LORE } from './data/biomeLore';
+import { getHourlyMerchantChunk, getRoamingLegendary } from './utils/worldEvents';
+import { BattlePopupLayer } from './components/ui/BattlePopupLayer';
+import { popupAbility, popupStat, popupStatus, popupWeather, popupCrit, popupEffective, popupImmunity, popupItem, popupCustom } from './utils/battlePopupBus';
+import { writeSave, loadSave, hasSave, deleteSave, exportSaveToString, importSaveFromString, getLastSavedAt, formatSavedAt } from './utils/saveGame';
+import { EvolutionScene } from './components/screens/EvolutionScene';
+import { TradeScreen, TradeOffer, TradeSession, makeEmptyOffer } from './components/screens/TradeScreen';
 
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
@@ -98,7 +111,17 @@ export default function App() {
           maxDistanceReached: 0,
           badgesEarned: 0,
           perks: []
-      }
+      },
+      lifetime: {
+          shiniesCaught: 0,
+          trainersDefeated: 0,
+          biggestStreak: 0,
+          currentStreak: 0,
+          totalMoneyEarned: 0,
+          graveyardsVisited: 0,
+          visitedBiomes: [],
+          riftStabilityCleared: false,
+      },
   });
   const [battleState, setBattleState] = useState<BattleState>({
     playerTeam: [], 
@@ -129,12 +152,120 @@ export default function App() {
   const [riftLayout, setRiftLayout] = useState<number[][] | null>(null);
   const [loadedChunks, setLoadedChunks] = useState<Record<string, any>>({});
   const [isPaused, setIsPaused] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [networkRole, setNetworkRole] = useState<'none' | 'host' | 'client'>('none');
   const [currentEmote, setCurrentEmote] = useState<string | null>(null);
   const [comboVfx, setComboVfx] = useState<boolean>(false);
   const [dialogue, setDialogue] = useState<string[] | null>(null);
+  const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const showToast = useCallback((message: string, tier: ToastTier = 'info', opts: { kicker?: string; ttl?: number } = {}) => {
+    setToasts((prev) => [...prev, makeToast(message, tier, opts)]);
+  }, []);
+  const expireToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+  const dailyEventShown = useRef(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanCooldown, setScanCooldown] = useState(0);
+  // Evolution cinematic queue. Each entry has a `before` snapshot, the
+  // fully-built `after` Pokemon, and an `onDone` callback that commits the
+  // evolution (or the cancellation) to player state. The scene renders the
+  // head of the queue; `onDone` shifts it.
+  const [evolutionQueue, setEvolutionQueue] = useState<Array<{
+      before: Pokemon;
+      after: Pokemon;
+      monUid: string | number;
+      onDone?: (final: Pokemon) => void;
+  }>>([]);
+  const queueEvolution = useCallback((before: Pokemon, after: Pokemon, onDone?: (final: Pokemon) => void) => {
+      setEvolutionQueue((prev) => [...prev, { before, after, monUid: before.id + ':' + before.name, onDone }]);
+  }, []);
+  // Save system: `hasExistingSave` is only read on the title screen so we
+  // track it in state to trigger re-render after we write/delete.
+  const [hasExistingSave, setHasExistingSave] = useState<boolean>(() => hasSave());
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(() => getLastSavedAt());
+
+  const refreshSaveMeta = useCallback(() => {
+      setHasExistingSave(hasSave());
+      setLastSavedAt(getLastSavedAt());
+  }, []);
+
+  const handleManualSave = useCallback(() => {
+      const file = writeSave(playerState);
+      if (file) {
+          refreshSaveMeta();
+          showToast('Game saved.', 'reward', { kicker: 'SAVE', ttl: 1800 });
+      } else {
+          showToast('Save failed -- storage may be full.', 'info', { kicker: 'SAVE' });
+      }
+  }, [playerState, refreshSaveMeta, showToast]);
+
+  const handleLoadGame = useCallback(() => {
+      const file = loadSave();
+      if (!file) {
+          showToast('No save found.', 'info', { kicker: 'LOAD' });
+          return;
+      }
+      setPlayerState(file.player);
+      setPhase(GamePhase.OVERWORLD);
+      setMusicStarted(true);
+      showToast(`Welcome back, ${file.player.name || 'Trainer'}.`, 'reward', { kicker: 'LOAD', ttl: 2400 });
+  }, [showToast]);
+
+  const handleDeleteSave = useCallback(() => {
+      deleteSave();
+      refreshSaveMeta();
+      showToast('Save erased.', 'info', { kicker: 'DELETE' });
+  }, [refreshSaveMeta, showToast]);
+
+  const handleExportSave = useCallback((): string | null => {
+      // Always snapshot latest state first, then export -- otherwise players
+      // could export a stale copy if they hadn't autosaved recently.
+      writeSave(playerState);
+      refreshSaveMeta();
+      return exportSaveToString();
+  }, [playerState, refreshSaveMeta]);
+
+  const handleImportSave = useCallback((payload: string): boolean => {
+      const file = importSaveFromString(payload);
+      if (!file) return false;
+      setPlayerState(file.player);
+      refreshSaveMeta();
+      showToast('Save imported.', 'reward', { kicker: 'IMPORT' });
+      return true;
+  }, [refreshSaveMeta, showToast]);
+
+  // Autosave: debounced snapshot whenever meaningful player-progression
+  // fields change. We intentionally DON'T save mid-battle (phase check)
+  // because battleState snapshots would stomp animation/turn timers on
+  // restore. Menu and Overworld are the only safe phases.
+  const autosaveTimer = useRef<number | null>(null);
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      if (!playerState.team || playerState.team.length === 0) return;
+      if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = window.setTimeout(() => {
+          const file = writeSave(playerState);
+          if (file) {
+              setLastSavedAt(file.savedAt);
+              setHasExistingSave(true);
+          }
+      }, 2500);
+      return () => {
+          if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
+      };
+  }, [
+      phase,
+      playerState.badges,
+      playerState.team,
+      playerState.money,
+      playerState.inventory,
+      playerState.run.maxDistanceReached,
+      playerState.run.totalCaptures,
+      playerState.discoveredChunks.length,
+      playerState.defeatedTrainers.length,
+      playerState.meta.riftEssence,
+  ]);
   // Using a beautiful atmospheric gradient to avoid "real-life" photo issues and ensure it works for everyone
   const [menuBgUrl] = useState<string>('');
 
@@ -152,6 +283,9 @@ export default function App() {
         if (u.displayName) {
           setPlayerState(prev => ({ ...prev, name: u.displayName || 'Trainer' }));
         }
+        // Warm the leaderboard session as soon as auth is available so the
+        // duration-gate timer reflects total play-time, not time-since-submit.
+        void warmLeaderboardSession();
       } else {
         // Kick off a silent anonymous sign-in. onAuthStateChanged will fire again
         // with the anonymous user when it succeeds.
@@ -170,6 +304,48 @@ export default function App() {
     };
   }, []);
 
+  // --- Leaderboard auto-submit --------------------------------------------
+  // Once the player has opted in by submitting a name at least once, we quietly
+  // push their running score every couple of minutes (and on badge/shiny gain)
+  // so the public board always reflects recent progress without forcing them
+  // to open the pause menu. Server-side clamps/duration-gate mean this can't
+  // be abused; if any of the inputs actually regressed we skip.
+  const lastAutoSnapshotRef = useRef<string>('');
+  useEffect(() => {
+      const savedName = getExplorerName();
+      if (!savedName) return; // player hasn't submitted manually yet
+      const inputs = {
+          farthestDistance: playerState.run.maxDistanceReached,
+          chunksDiscovered: playerState.discoveredChunks.length,
+          badges: playerState.badges,
+          totalCaptures: playerState.run.totalCaptures,
+          shiniesCaught: playerState.lifetime?.shiniesCaught ?? 0,
+          trainersDefeated: playerState.lifetime?.trainersDefeated ?? playerState.defeatedTrainers.length,
+          biggestStreak: playerState.lifetime?.biggestStreak ?? 0,
+          totalMoneyEarned: playerState.lifetime?.totalMoneyEarned ?? 0,
+          riftStabilityCleared: playerState.lifetime?.riftStabilityCleared ?? false,
+      };
+      const signature = JSON.stringify(inputs);
+      if (signature === lastAutoSnapshotRef.current) return;
+      // Debounce: wait 20s before firing to avoid thrashing on every tick.
+      const handle = window.setTimeout(() => {
+          lastAutoSnapshotRef.current = signature;
+          void submitExplorerScore(inputs, savedName).catch(() => { /* silent */ });
+      }, 20_000);
+      return () => window.clearTimeout(handle);
+  }, [
+      playerState.run.maxDistanceReached,
+      playerState.discoveredChunks.length,
+      playerState.badges,
+      playerState.run.totalCaptures,
+      playerState.lifetime?.shiniesCaught,
+      playerState.lifetime?.trainersDefeated,
+      playerState.lifetime?.biggestStreak,
+      playerState.lifetime?.totalMoneyEarned,
+      playerState.lifetime?.riftStabilityCleared,
+      playerState.defeatedTrainers.length,
+  ]);
+
   const [challengeState, setChallengeState] = useState<{
       type: 'speed' | 'stealth' | 'none';
       endTime?: number;
@@ -187,6 +363,16 @@ export default function App() {
 
   const [remotePlayers, setRemotePlayers] = useState<Map<string, any>>(new Map());
   const [battleChallenge, setBattleChallenge] = useState<{ challengerId: string, playerInfo: any } | null>(null);
+
+  // --- Trading ---
+  // `playerContextMenu`: when a player clicks a remote sprite, show Battle/Trade choices.
+  // `tradeRequest`: incoming "X wants to trade" prompt on the receiving side.
+  // `tradeSession`: active trade UI state once both sides accept.
+  const [playerContextMenu, setPlayerContextMenu] = useState<{ id: string; info: any } | null>(null);
+  const [tradeRequest, setTradeRequest] = useState<{ fromId: string; fromName: string } | null>(null);
+  const [tradeSession, setTradeSession] = useState<TradeSession | null>(null);
+  const tradeSessionRef = useRef<TradeSession | null>(null);
+  useEffect(() => { tradeSessionRef.current = tradeSession; }, [tradeSession]);
   const [isMultiplayerBattle, setIsMultiplayerBattle] = useState(false);
   const lastProcessedLogIndexRef = useRef(0);
   const [opponentId, setOpponentId] = useState<string | null>(null);
@@ -252,12 +438,17 @@ export default function App() {
           if (itemId === 'rare-candy') {
               const canEvolve = await checkEvolution(pokemon);
               if (canEvolve) {
-                  const evo = await evolvePokemon(pokemon);
-                  setPlayerState(prev => ({
-                      ...prev,
-                      team: prev.team.map(p => p.id === pokemon.id ? evo : p)
-                  }));
-                  setDialogue([`${pokemon.name} evolved into ${evo.name}!`]);
+                  // Build the evolved form now (off the post-level-up snapshot
+                  // so stat recomputation uses the new level) and queue the
+                  // cinematic. The `onDone` callback writes back to state.
+                  const postLevelMon = { ...pokemon, level: Math.min(100, pokemon.level + 1) };
+                  const evo = await evolvePokemon(postLevelMon);
+                  queueEvolution(postLevelMon, evo, (final) => {
+                      setPlayerState(prev => ({
+                          ...prev,
+                          team: prev.team.map(p => p.id === pokemon.id && p.name === pokemon.name ? final : p),
+                      }));
+                  });
               }
           }
           return;
@@ -266,8 +457,9 @@ export default function App() {
       if (item.category === 'evolution') {
           const targetId = await getEvolutionTarget(pokemon, itemId);
           if (targetId) {
-              const evo = await evolvePokemon(pokemon, itemId); 
-              
+              const evo = await evolvePokemon(pokemon, itemId);
+
+              // Burn the stone first so it's gone even if the player cancels.
               setPlayerState(prev => {
                   const newInventory = { ...prev.inventory };
                   const idx = newInventory.items.indexOf(itemId);
@@ -276,14 +468,14 @@ export default function App() {
                       updatedItems.splice(idx, 1);
                       newInventory.items = updatedItems;
                   }
-                  return {
-                      ...prev,
-                      team: prev.team.map(p => p.id === pokemon.id ? evo : p),
-                      inventory: newInventory
-                  };
+                  return { ...prev, inventory: newInventory };
               });
-              playLevelUpSfx();
-              setDialogue([`${pokemon.name} evolved into ${evo.name}!`]);
+              queueEvolution(pokemon, evo, (final) => {
+                  setPlayerState(prev => ({
+                      ...prev,
+                      team: prev.team.map(p => p.id === pokemon.id && p.name === pokemon.name ? final : p),
+                  }));
+              });
           } else {
               setDialogue([`It had no effect...`]);
           }
@@ -448,6 +640,139 @@ export default function App() {
     }
     setBattleChallenge(null);
   };
+
+  /* ----------------------------- Trading ------------------------------- */
+
+  // Initiate a trade against a remote player.
+  const handleStartTrade = useCallback((targetId: string, info: any) => {
+    multiplayer.send({
+        type: 'TRADE_EVENT',
+        payload: { kind: 'REQUEST', targetId, fromName: playerState.name },
+    });
+    showToast(`Trade request sent to ${info?.name || 'Trainer'}...`, 'info', { ttl: 2500 });
+    // Optimistic: open our own session waiting for accept.
+    setPlayerContextMenu(null);
+  }, [playerState.name, showToast]);
+
+  // Local player responds to an incoming trade request.
+  const handleTradeRequestResponse = useCallback((accept: boolean) => {
+    if (!tradeRequest) return;
+    if (accept) {
+        // Open session on our side.
+        setTradeSession({
+            partnerId: tradeRequest.fromId,
+            partnerName: tradeRequest.fromName || 'Trainer',
+            myOffer: makeEmptyOffer(),
+            partnerOffer: makeEmptyOffer(),
+            phase: 'choose',
+        });
+        multiplayer.send({
+            type: 'TRADE_EVENT',
+            payload: { kind: 'ACCEPT', targetId: tradeRequest.fromId, fromName: playerState.name },
+        });
+    } else {
+        multiplayer.send({
+            type: 'TRADE_EVENT',
+            payload: { kind: 'DECLINE', targetId: tradeRequest.fromId },
+        });
+    }
+    setTradeRequest(null);
+  }, [tradeRequest, playerState.name]);
+
+  // Local player updated their offer -> broadcast to partner + update local session.
+  const handleTradeOfferChange = useCallback((offer: TradeOffer) => {
+    setTradeSession(prev => prev ? { ...prev, myOffer: offer } : prev);
+    multiplayer.send({
+        type: 'TRADE_EVENT',
+        payload: { kind: 'OFFER', offer },
+    });
+  }, []);
+
+  // Cancel the trade session on our side and notify partner.
+  const handleTradeCancel = useCallback(() => {
+    if (!tradeSession) return;
+    multiplayer.send({
+        type: 'TRADE_EVENT',
+        payload: { kind: 'CANCEL' },
+    });
+    showToast('Trade cancelled.', 'info', { ttl: 2500 });
+    setTradeSession(null);
+  }, [tradeSession, showToast]);
+
+  // Apply the trade atomically to our playerState, then close.
+  // Both sides independently apply their own delta; the wire state is already
+  // in sync because every OFFER broadcast carries the full offer payload.
+  const handleTradeCommit = useCallback(() => {
+    const session = tradeSessionRef.current;
+    if (!session) return;
+    const { myOffer, partnerOffer, partnerName } = session;
+
+    setPlayerState(prev => {
+        let team = [...prev.team];
+
+        // 1. Remove the Pokemon we offered (using teamIndex captured at offer time).
+        if (myOffer.pokemon) {
+            const idx = typeof myOffer.pokemonTeamIndex === 'number'
+                ? myOffer.pokemonTeamIndex
+                : team.findIndex(m => m.id === myOffer.pokemon!.id && m.name === myOffer.pokemon!.name);
+            if (idx >= 0) team.splice(idx, 1);
+        }
+        // 2. Add partner's Pokemon (as a freshly owned mon).
+        if (partnerOffer.pokemon) {
+            // Tag the mon so the player knows where it came from if we ever surface that.
+            team.push({ ...partnerOffer.pokemon, animationState: 'idle' });
+        }
+        // Safety: never allow zero team (shouldn't hit this due to UI guard, but keep it.)
+        if (team.length === 0) team = [...prev.team];
+
+        // 3. Items delta
+        const inv = { ...prev.inventory, items: [...prev.inventory.items] };
+        const stackKey: Record<string, keyof typeof inv> = {
+            'poke-ball': 'pokeballs' as any,
+            'potion': 'potions' as any,
+            'revive': 'revives' as any,
+            'rare-candy': 'rare_candy' as any,
+        };
+        // Out-flow
+        for (const it of myOffer.items) {
+            if (it.stackable) {
+                const k = stackKey[it.id];
+                if (k) (inv as any)[k] = Math.max(0, ((inv as any)[k] || 0) - it.qty);
+            } else {
+                for (let n = 0; n < it.qty; n++) {
+                    const idx = inv.items.indexOf(it.id);
+                    if (idx >= 0) inv.items.splice(idx, 1);
+                }
+            }
+        }
+        // In-flow
+        for (const it of partnerOffer.items) {
+            if (it.stackable) {
+                const k = stackKey[it.id];
+                if (k) (inv as any)[k] = ((inv as any)[k] || 0) + it.qty;
+            } else {
+                for (let n = 0; n < it.qty; n++) inv.items.push(it.id);
+            }
+        }
+
+        return { ...prev, team, inventory: inv };
+    });
+
+    // Cry the received Pokemon once they land home.
+    if (partnerOffer.pokemon) {
+        const mon = partnerOffer.pokemon;
+        setTimeout(() => { try { playCry(mon.id, mon.name); } catch { /* noop */ } }, 400);
+    }
+
+    const summary: string[] = [];
+    if (partnerOffer.pokemon) summary.push(partnerOffer.pokemon.name);
+    if (partnerOffer.items.length > 0) summary.push(`${partnerOffer.items.length} item(s)`);
+    showToast(
+        summary.length > 0 ? `Received ${summary.join(' + ')} from ${partnerName}!` : `Trade complete with ${partnerName}!`,
+        'reward', { ttl: 4500 }
+    );
+    setTradeSession(null);
+  }, [showToast]);
 
 
 
@@ -1131,7 +1456,7 @@ export default function App() {
                   const dist = Math.sqrt(ncx*ncx + ncy*ncy);
                   const isLandmark = ncx % 5 === 0 && ncy % 5 === 0 && (ncx !== 0 || ncy !== 0);
                   const discoveryXp = (100 + Math.floor(dist * 20)) * (isLandmark ? 8 : 1); // Increased XP
-                  const playerLevelCap = 15 + playerState.badges * 10;
+                  const playerLevelCap = getPlayerLevelCap(playerState.badges);
                   const avgLevel = playerState.team.length > 0 ? playerState.team.reduce((a, b) => a + b.level, 0) / playerState.team.length : 0;
                   
                   const updatedTeam = await Promise.all(playerState.team.map(async (p) => {
@@ -1148,6 +1473,10 @@ export default function App() {
                       bonusMoney = 10000; // Increased money
                   }
 
+                  // Depth milestone perks -- unlocked when the farthest distance
+                  // crosses specific thresholds. Additive: perks are never lost.
+                  const newPerks = getNewlyUnlockedPerks(distFloor, playerState.storyFlags);
+
                   setPlayerState(prev => ({
                       ...prev,
                       mapId: nextChunkId,
@@ -1158,16 +1487,51 @@ export default function App() {
                       discoveredChunks: [...prev.discoveredChunks, nextChunkId],
                       discoveryPoints: prev.discoveryPoints + bonusPoints,
                       team: updatedTeam,
+                      storyFlags: newPerks.length > 0
+                          ? [...prev.storyFlags, ...newPerks.map(p => p.flag)]
+                          : prev.storyFlags,
                       run: {
                           ...prev.run,
                           maxDistanceReached: Math.max(prev.run.maxDistanceReached, distFloor),
                           capturePermits: prev.run.capturePermits + permitsEarned
                       }
                   }));
-                  
-                  const msgs = [`Discovered ${nextChunkId.toUpperCase()}!${landmarkMsg}`, `Your team gained ${isLandmark ? 'MASSIVE ' : ''}Discovery XP!${bonusMoney > 0 ? ` Found $${bonusMoney}!` : ''}`];
-                  if (permitsEarned > 0) msgs.push("You earned a Capture Permit for reaching a distance milestone!");
-                  setDialogue(msgs);
+
+                  // First-time biome lore toast -- each biome announces itself once.
+                  const curBiome = currentMap?.biome ?? 'forest';
+                  const visited = playerState.lifetime?.visitedBiomes ?? [];
+                  if (!visited.includes(curBiome)) {
+                      const lore = BIOME_LORE[curBiome];
+                      if (lore) {
+                          showToast(lore.body, 'story', { kicker: lore.kicker, ttl: 5000 });
+                      }
+                      setPlayerState(prev => {
+                          const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
+                          return { ...prev, lifetime: { ...lt, visitedBiomes: [...lt.visitedBiomes, curBiome] } };
+                      });
+                  }
+
+                  // Non-blocking toast stack -- chunk discovery should never
+                  // steal focus or require Enter to dismiss.
+                  if (isLandmark) {
+                      showToast(
+                          `${nextChunkId.toUpperCase()} — MAJOR LANDMARK${bonusMoney > 0 ? ` (+$${bonusMoney.toLocaleString()})` : ''}`,
+                          'reward',
+                          { kicker: 'Discovered', ttl: 3000 }
+                      );
+                  } else {
+                      showToast(`${nextChunkId.toUpperCase()}`, 'info', { kicker: 'Discovered' });
+                  }
+                  if (permitsEarned > 0) {
+                      showToast('Capture Permit earned', 'reward', { kicker: 'Milestone' });
+                  }
+                  newPerks.forEach((perk) => {
+                      showToast(
+                          `${perk.title} — ${perk.description}`,
+                          'reward',
+                          { kicker: `Depth ${perk.dist}`, ttl: 4500 }
+                      );
+                  });
                   return;
               }
 
@@ -1189,12 +1553,13 @@ export default function App() {
                   }
               }));
               
-              if (permitsEarned > 0) setDialogue(["You earned a Capture Permit for reaching a distance milestone!"]);
-              
-              // Story trigger
+              if (permitsEarned > 0) showToast('Capture Permit earned', 'reward', { kicker: 'Milestone' });
+
+              // Story beats fire as story-tier toasts so they're still
+              // highlighted but never interrupt movement.
               const dist = Math.sqrt(ncx*ncx + ncy*ncy);
               if (dist > 10 && !playerState.storyFlags.includes('mid_game_story')) {
-                  setDialogue(["The air feels different here...", "The monsters are getting stronger."]);
+                  showToast('The air feels different here. The monsters are getting stronger.', 'story', { kicker: 'Rift shifts' });
                   setPlayerState(p => ({ ...p, storyFlags: [...p.storyFlags, 'mid_game_story'] }));
               }
               return;
@@ -1271,6 +1636,27 @@ export default function App() {
               setDialogue(["You smashed the rock!", "Found a Hard Stone! (+$500)"]);
               setPlayerState(prev => ({ ...prev, money: prev.money + 500 }));
               return;
+          }
+      }
+
+      // Lava hazard -- each step on a lava tile scorches your lead mon unless
+      // it's a Fire/Rock/Ground type, or the player unlocked the Stable Rifts
+      // perk (depth 100) which extends to all field hazards.
+      if (tileType === 28) {
+          const lead = playerState.team.find(p => !p.isFainted);
+          if (lead) {
+              const immuneType = lead.types.some(t => ['fire', 'rock', 'ground'].includes(t.toLowerCase()));
+              const riftsafe = playerState.storyFlags.includes('perk_riftsafe');
+              if (!immuneType && !riftsafe) {
+                  const dmg = Math.max(1, Math.floor(lead.maxHp / 16));
+                  setPlayerState(prev => ({
+                      ...prev,
+                      team: prev.team.map(p => (p.id === lead.id && !p.isFainted)
+                          ? { ...p, currentHp: Math.max(0, p.currentHp - dmg), isFainted: p.currentHp - dmg <= 0 }
+                          : p),
+                  }));
+                  showToast(`${lead.name} is scorched by lava! -${dmg} HP`, 'info', { kicker: 'Hazard', ttl: 1800 });
+              }
           }
       }
 
@@ -1386,13 +1772,14 @@ export default function App() {
       const trainerData = currentMap.trainers?.[trainerKey];
       if (trainerData && !playerState.defeatedTrainers.includes(trainerData.id)) { startBattle(0, false, true, trainerData); return; }
 
-      // Level Cap Logic
-      const badgeCount = playerState.badges.length;
-      const levelCap = 10 + badgeCount * 10;
+      // Per-step exploration XP trickle. Old code did `playerState.badges.length`
+      // on a number which silently produced NaN and disabled this whole loop.
+      // With centralized helpers + the auto-scale floor, this is a small bonus
+      // on top of the floor, not the main progression mechanic.
+      const levelCap = getPlayerLevelCap(playerState.badges);
 
       const updatedTeam = playerState.team.map(p => {
           if (p.currentHp <= 0) return p;
-          // Small XP gain for exploration
           if (p.level < levelCap) {
               let xpMult = 1;
               if (p.heldItem?.id === 'lucky-egg') xpMult = 1.5;
@@ -1420,6 +1807,9 @@ export default function App() {
       
       let encounterRateMult = 1;
       if (playerState.team[0]?.heldItem?.id === 'cleanse-tag') encounterRateMult = 0.5;
+      // Daily world event can push encounters up or down. Keeps the world
+      // feeling different on different days without mechanical whiplash.
+      encounterRateMult *= getDailyEvent().encounterMult;
 
       if (tileType === 2 && Math.random() < (0.15 * encounterRateMult)) {
           startBattle(2, playerState.nextEncounterRare || false, false, undefined, currentMap.biome, tileType);
@@ -1451,8 +1841,34 @@ export default function App() {
       if (!currentMap) return;
 
       const isMultiplayer = !!multiplayer.roomId;
-      const bgUrl = await generateBattleBackground(biome || currentMap.biome || 'forest', tileType, isMultiplayer);
-      console.log('Setting Battle Background URL:', bgUrl);
+      const isGym = !!(trainerData && trainerData.isGymLeader);
+      // Scenario detection for battle art. Each special trainer gets the
+      // arena it deserves, based on predictable id patterns or flags:
+      //   Rift Champion  (badgeId === 9) -> champion throne room
+      //   Ghost Trainer  (id starts with 'ghost_trainer_') -> haunted mansion
+      //   Roaming Legendary (id starts with 'legendary_roam_<speciesId>_')
+      //       -> thematic arena (ice_palace / thunder_peak / sky_pillar / ...)
+      const isChampion = !!(trainerData && trainerData.badgeId === 9);
+      const isHaunted = !!(trainerData && trainerData.id?.startsWith('ghost_trainer_'));
+      let legendarySpeciesId: number | undefined;
+      if (trainerData && trainerData.id?.startsWith('legendary_roam_')) {
+          const m = trainerData.id.match(/^legendary_roam_(\d+)_/);
+          if (m) legendarySpeciesId = parseInt(m[1], 10);
+      }
+      const isLegendary = legendarySpeciesId !== undefined;
+      const bgUrl = await generateBattleBackground(
+          biome || currentMap.biome || 'forest',
+          tileType,
+          isMultiplayer,
+          {
+              gym: isGym,
+              champion: isChampion,
+              haunted: isHaunted,
+              legendary: isLegendary,
+              legendarySpeciesId,
+          },
+      );
+      console.log('Setting Battle Background URL:', bgUrl, { isGym, isChampion, isHaunted, legendarySpeciesId });
       
       // Calculate Difficulty Scaling
       const distance = Math.floor(Math.sqrt(playerState.chunkPos.x ** 2 + playerState.chunkPos.y ** 2));
@@ -1472,11 +1888,15 @@ export default function App() {
       let enemies: Pokemon[];
       if (trainerData) {
           if (trainerData.isGymLeader) {
-              const { fetchCompetitivePokemon } = await import('./services/pokeService');
-              // Gym Leaders always have at least 2 pokemon for 2v2
-              enemies = await Promise.all(trainerData.team.map(id => fetchCompetitivePokemon(id, trainerData.level)));
-              // Competitive pokemon don't use the standard fetchPokemon difficulty boost by default, 
-              // but we can apply a multiplier to their stats here if needed.
+              if (trainerData.loadout && trainerData.loadout.length > 0) {
+                  // Hand-authored competitive set from data/gymTeams.ts.
+                  const { hydrateGymTeam } = await import('./services/pokeService');
+                  enemies = await hydrateGymTeam(trainerData.level, trainerData.loadout, difficulty);
+              } else {
+                  const { fetchCompetitivePokemon } = await import('./services/pokeService');
+                  enemies = await Promise.all(trainerData.team.map(id => fetchCompetitivePokemon(id, trainerData.level)));
+              }
+              // Apply difficulty scaling on top of whatever competitive set we built.
               enemies.forEach(e => {
                   Object.keys(e.stats).forEach(stat => {
                       e.stats[stat as keyof StatBlock] = Math.floor(e.stats[stat as keyof StatBlock] * difficulty);
@@ -1487,15 +1907,19 @@ export default function App() {
               enemies = await Promise.all(trainerData.team.map(id => fetchPokemon(id, trainerData.level, true, 0, difficulty)));
           }
       } else {
-          // Wild level cap: 10 + badges * 10
-          const wildCap = 10 + playerState.badges * 10;
+          const wildCap = getWildLevelCap(playerState.badges, distance);
           const minLvl = Math.min(wildCap, currentMap.wildLevelRange[0]);
           const maxLvl = Math.min(wildCap, currentMap.wildLevelRange[1]);
-          enemies = await getWildPokemon(enemyCount, [minLvl, maxLvl], biome, tileType, playerState.meta.upgrades.shinyChance, difficulty);
+          // Daily event bumps shiny odds on top of meta upgrade.
+          const effectiveShiny = playerState.meta.upgrades.shinyChance * getDailyEvent().shinyMult;
+          enemies = await getWildPokemon(enemyCount, [minLvl, maxLvl], biome, tileType, effectiveShiny, difficulty);
           if (isBoss) {
-              enemies.forEach(e => { 
-                  e.level += 5; 
-                  e.maxHp *= 1.5; 
+              // Boss wilds used to get +5 levels, which routinely broke the
+              // "wild cap" contract and forced grinding. +2 keeps them a real
+              // threat without feeling unfair.
+              enemies.forEach(e => {
+                  e.level += 2;
+                  e.maxHp = Math.floor(e.maxHp * 1.35);
                   e.currentHp = e.maxHp;
               });
           }
@@ -1883,6 +2307,89 @@ export default function App() {
     let tempETeam = JSON.parse(JSON.stringify(enemyTeam));
     let tempLogs = [...battleState.logs];
 
+    // --- LOG-TO-POPUP INTERCEPTOR ------------------------------------------
+    // The battle code has hundreds of `tempLogs.push(...)` sites for status
+    // inflictions, stat changes, item procs, etc. Wiring a popup emit into
+    // each of them would be nuclear-grade invasive, so instead we patch the
+    // array's push method once and parse each log line for well-known
+    // patterns. Anything we don't recognize silently falls through -- the
+    // log box still gets the line, we just don't show a banner for it.
+    // This is additive: explicit popup emits at specific sites (e.g. crit,
+    // switch-in abilities) still run and stack above the auto-parsed ones.
+    const resolveMon = (name: string): { side: 'player' | 'enemy'; slot: 0 | 1 } | null => {
+        for (let i = 0; i < Math.min(2, tempPTeam.length); i++) {
+            if (tempPTeam[i] && tempPTeam[i].name === name) return { side: 'player', slot: i as 0 | 1 };
+        }
+        for (let i = 0; i < Math.min(2, tempETeam.length); i++) {
+            if (tempETeam[i] && tempETeam[i].name === name) return { side: 'enemy', slot: i as 0 | 1 };
+        }
+        return null;
+    };
+    const STAT_KEYWORD: Record<string, 'attack' | 'defense' | 'special-attack' | 'special-defense' | 'speed' | 'accuracy' | 'evasion'> = {
+        Attack: 'attack', Defense: 'defense', 'Sp. Atk': 'special-attack', 'Sp. Def': 'special-defense',
+        'Special Attack': 'special-attack', 'Special Defense': 'special-defense',
+        Speed: 'speed', Accuracy: 'accuracy', Evasion: 'evasion',
+    };
+    const STATUS_KEYWORD: Record<string, 'burn' | 'poison' | 'sleep' | 'freeze' | 'paralysis' | 'confusion'> = {
+        burned: 'burn', poisoned: 'poison', 'fast asleep': 'sleep', asleep: 'sleep',
+        frozen: 'freeze', paralyzed: 'paralysis', confused: 'confusion',
+    };
+    const dispatchLogPopup = (line: string): void => {
+        try {
+            // "X was <status>" / "X was <status> by Y's ..."
+            for (const [kw, st] of Object.entries(STATUS_KEYWORD)) {
+                const re = new RegExp(`^([^']+?) was ${kw}`);
+                const m = line.match(re);
+                if (m) {
+                    const who = resolveMon(m[1].trim());
+                    if (who) popupStatus(who.side, who.slot, st as any);
+                    return;
+                }
+            }
+            // "X's <Stat> rose/fell/sharply rose/sharply fell/was raised/was lowered"
+            for (const [label, stat] of Object.entries(STAT_KEYWORD)) {
+                // generic "raised/lowered <stat>" e.g. "X's Intimidate lowered Y's Attack!"
+                const reLower = new RegExp(`lowered\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
+                const reRaise = new RegExp(`(raised|boosted)\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
+                const reSharplyLower = new RegExp(`sharply lowered\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
+                const reSharplyRaise = new RegExp(`(sharply (raised|boosted))\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
+                let m = line.match(reSharplyLower);
+                if (m) { const w = resolveMon(m[1].trim()); if (w) popupStat(w.side, w.slot, stat, -2); return; }
+                m = line.match(reSharplyRaise);
+                if (m) { const w = resolveMon(m[3].trim()); if (w) popupStat(w.side, w.slot, stat, 2); return; }
+                m = line.match(reLower);
+                if (m) { const w = resolveMon(m[1].trim()); if (w) popupStat(w.side, w.slot, stat, -1); return; }
+                m = line.match(reRaise);
+                if (m) { const w = resolveMon(m[2].trim()); if (w) popupStat(w.side, w.slot, stat, 1); return; }
+            }
+            // "X's <Stat> was lowered/raised" (reflexive)
+            for (const [label, stat] of Object.entries(STAT_KEYWORD)) {
+                const re = new RegExp(`^([^']+?)'s ${label.replace(/\\./g, '\\\\.')} was (raised|lowered|sharply raised|sharply lowered)`);
+                const m = line.match(re);
+                if (m) {
+                    const w = resolveMon(m[1].trim());
+                    if (w) {
+                        const mag = m[2].startsWith('sharply') ? 2 : 1;
+                        popupStat(w.side, w.slot, stat, m[2].endsWith('raised') ? mag : -mag);
+                    }
+                    return;
+                }
+            }
+            // "X flinched!"
+            const flinch = line.match(/^([^!]+?) flinched/);
+            if (flinch) {
+                const w = resolveMon(flinch[1].trim());
+                if (w) popupCustom(w.side, w.slot, 'FLINCHED', 'from-gray-700 to-gray-500', '\u273d');
+                return;
+            }
+        } catch { /* parsing never throws visibly */ }
+    };
+    const origLogPush = tempLogs.push.bind(tempLogs);
+    (tempLogs as { push: (...items: string[]) => number }).push = (...items: string[]) => {
+        for (const item of items) dispatchLogPopup(item);
+        return origLogPush(...items);
+    };
+
     // Reset turn flags
     tempPTeam.forEach((p: Pokemon) => { if (p) { p.hasMovedThisTurn = false; p.tookDamageThisTurn = false; p.isProtected = false; } });
     tempETeam.forEach((p: Pokemon) => { if (p) { p.hasMovedThisTurn = false; p.tookDamageThisTurn = false; p.isProtected = false; } });
@@ -1919,7 +2426,14 @@ export default function App() {
     const setDamageVFX = async (target: 'player' | 'enemy', index: number, damage: number, isCrit: boolean, effectiveness: number) => {
         const isSuper = effectiveness > 1;
         const isNotVery = effectiveness < 1 && effectiveness > 0;
-        
+
+        // Fire popups near the defender so the player can actually see that
+        // their crit/SE mattered without having to read the log box.
+        const slot = (index === 1 ? 1 : 0) as 0 | 1;
+        if (isCrit) popupCrit(target, slot);
+        if (isSuper) popupEffective(target, slot, 'super');
+        else if (isNotVery) popupEffective(target, slot, 'resist');
+
         setBattleState(prev => ({ 
             ...prev, 
             vfx: { 
@@ -2153,8 +2667,67 @@ export default function App() {
                 }
                 
                 const p = newMon;
+                const ownSide: 'player' | 'enemy' = isPlayer ? 'player' : 'enemy';
+                const ownSlot = ((action.actorIndex ?? 0) === 1 ? 1 : 0) as 0 | 1;
                 // --- HAZARDS ---
                 applyHazards(newMon, isPlayer, isPlayer ? (battleState.playerHazards || []) : (battleState.enemyHazards || []), tempLogs);
+
+                // --- POPUP BANNERS (ability activations) ---------------------
+                // Every meaningful on-entry ability gets a yellow "ABILITY"
+                // banner near the Pokemon. The more interesting effects also
+                // fire secondary popups (stat arrows, weather plates, status
+                // icons) on whichever mon is actually affected.
+                const ABILITY_LABELS: Record<string, string> = {
+                    Intimidate: 'Intimidate', Drizzle: 'Drizzle', Drought: 'Drought',
+                    SandStream: 'Sand Stream', SnowWarning: 'Snow Warning',
+                    ArcSurge: 'Arc Surge', Ashstorm: 'Ashstorm', Jetstream: 'Jetstream',
+                    SyncBoost: 'Sync Boost', AegisField: 'Aegis Field', BacklineGuard: 'Backline Guard',
+                    RuneWard: 'Rune Ward', MysticFog: 'Mystic Fog', MysticHusk: 'Mystic Husk',
+                    TideTurner: 'Tide Turner', GloomWard: 'Gloom Ward', ScaleAegis: 'Scale Aegis',
+                    Protosynthesis: 'Protosynthesis', QuarkDrive: 'Quark Drive',
+                    ThreatMatrix: 'Threat Matrix', QuietZone: 'Quiet Zone',
+                    PartnerBoost: 'Partner Boost', ShieldWall: 'Shield Wall', Vanguard: 'Vanguard',
+                    BatteryPack: 'Battery Pack', SmogLung: 'Smog Lung', VenomousAura: 'Venomous Aura',
+                    GlacialAura: 'Glacial Aura', GravityWell: 'Gravity Well', RiftWalker: 'Rift Walker',
+                    HazardEater: 'Hazard Eater', TagCleanse: 'Tag Cleanse', AntibodyRelay: 'Antibody Relay',
+                    FusionMaster: 'Fusion Master', TypeTwist: 'Type Twist', PressurePoint: 'Pressure Point',
+                    PrimalHunger: 'Primal Hunger', GrudgeEngine: 'Grudge Engine', ShadowTagger: 'Shadow Tagger',
+                };
+                if (p.ability?.name && ABILITY_LABELS[p.ability.name]) {
+                    popupAbility(ownSide, ownSlot, ABILITY_LABELS[p.ability.name]);
+                }
+                // Weather abilities also get a weather plate.
+                if (p.ability?.name === 'Drought') popupWeather(ownSide, ownSlot, 'sun');
+                else if (p.ability?.name === 'Drizzle') popupWeather(ownSide, ownSlot, 'rain');
+                else if (p.ability?.name === 'SandStream') popupWeather(ownSide, ownSlot, 'sand');
+                else if (p.ability?.name === 'SnowWarning') popupWeather(ownSide, ownSlot, 'snow');
+                // Intimidate's per-target Atk drop is emitted by the log
+                // interceptor (which parses "X's Intimidate lowered Y's
+                // Attack!"), so we only need the ability banner here.
+                // Self-buff on switch-in.
+                if (p.ability?.name === 'Vanguard') {
+                    popupStat(ownSide, ownSlot, 'attack', 1);
+                    popupStat(ownSide, ownSlot, 'speed', 1);
+                }
+                if (p.ability?.name === 'ShieldWall') {
+                    popupStat(ownSide, ownSlot, 'defense', 1);
+                    popupStat(ownSide, ownSlot, 'special-defense', 1);
+                    popupStat(ownSide, ownSlot === 0 ? 1 : 0, 'defense', 1);
+                    popupStat(ownSide, ownSlot === 0 ? 1 : 0, 'special-defense', 1);
+                }
+                if (p.ability?.name === 'TideTurner' && battleState.weather === 'rain') {
+                    popupStat(ownSide, ownSlot, 'speed', 1);
+                }
+                // Tailwind custom plate.
+                if (p.ability?.name === 'Jetstream') {
+                    popupCustom(ownSide, ownSlot, 'TAILWIND', 'from-sky-500 to-cyan-500', '\u27a4');
+                }
+                if (p.ability?.name === 'QuietZone') {
+                    popupCustom(ownSide, ownSlot, 'QUIET ZONE', 'from-slate-700 to-slate-500', '\u266a');
+                }
+                if (p.ability?.name === 'AegisField' || p.ability?.name === 'BacklineGuard') {
+                    popupCustom(ownSide, ownSlot, 'SHIELDED', 'from-blue-600 to-indigo-500', '\u2748');
+                }
 
                 // --- ENTRY ABILITIES ON SWITCH ---
                 if (p.ability.name === 'RiftWalker') {
@@ -2466,7 +3039,7 @@ export default function App() {
 
                         // Catch XP Bonus for the whole team - Massively boosted to encourage catching over grinding
                         const catchXp = Math.floor((target.baseStats.hp * target.level) * 12);
-                        const playerLevelCap = 15 + playerState.badges * 10;
+                        const playerLevelCap = getPlayerLevelCap(playerState.badges);
                         const avgLevel = playerState.team.reduce((a, b) => a + b.level, 0) / playerState.team.length;
                         
                         for (const p of tempPTeam) {
@@ -2480,12 +3053,19 @@ export default function App() {
                         newMon.isFainted = false;
                         newMon.currentHp = newMon.maxHp;
                         newMon.status = undefined;
-                        
+
                         setPlayerState(prev => {
+                            const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
+                            const shinyBump = newMon.isShiny ? 1 : 0;
+                            const nextLifetime = { ...lt, shiniesCaught: lt.shiniesCaught + shinyBump };
                             if (prev.team.length < 6) {
-                                return { ...prev, team: [...prev.team, newMon] };
+                                // Auto-scale the catch to the party floor so a
+                                // caught mon is immediately usable, not a
+                                // grind project.
+                                const scaledNew = autoScaleTeamToFloor([newMon], prev.badges, prev.run.maxDistanceReached)[0];
+                                return { ...prev, team: [...prev.team, scaledNew], lifetime: nextLifetime };
                             }
-                            return prev;
+                            return { ...prev, lifetime: nextLifetime };
                         });
 
                         if (tempETeam.every((p: Pokemon) => p.isFainted)) {
@@ -2765,6 +3345,8 @@ export default function App() {
                 if (actor.ability.name === 'SourSap' && action.move.type === 'grass' && Math.random() < 0.2) {
                     if (target.statStages) {
                         target.statStages['special-defense'] = Math.max(-6, (target.statStages['special-defense'] || 0) - 1);
+                        const aSide: 'player' | 'enemy' = action.isPlayer ? 'player' : 'enemy';
+                        popupAbility(aSide, (action.actorIndex === 1 ? 1 : 0) as 0 | 1, 'Sour Sap');
                         tempLogs.push(`${actor.name}'s Sour Sap lowered ${target.name}'s Sp. Def!`);
                     }
                 }
@@ -2773,6 +3355,8 @@ export default function App() {
                 if (actor.ability.name === 'BlindingSand' && battleState.weather === 'sand' && Math.random() < 0.1) {
                     if (target.statStages) {
                         target.statStages.accuracy = Math.max(-6, (target.statStages.accuracy || 0) - 1);
+                        const aSide: 'player' | 'enemy' = action.isPlayer ? 'player' : 'enemy';
+                        popupAbility(aSide, (action.actorIndex === 1 ? 1 : 0) as 0 | 1, 'Blinding Sand');
                         tempLogs.push(`${actor.name}'s Blinding Sand lowered ${target.name}'s Accuracy!`);
                     }
                 }
@@ -2792,7 +3376,9 @@ export default function App() {
                     // Frostbite Skin Ability
                     if (target.ability.name === 'FrostbiteSkin' && !target.status && Math.random() < 0.2) {
                         target.status = 'freeze';
-                        tempLogs.push(`${target.name}'s Frostbite Skin froze ${actor.name}!`);
+                        const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
+                        popupAbility(tSide, realTargetIndex as 0 | 1, 'Frostbite Skin');
+                        tempLogs.push(`${actor.name} was frozen by ${target.name}'s Frostbite Skin!`);
                     }
 
                     // Wound Leak Ability
@@ -2805,12 +3391,16 @@ export default function App() {
                     // Static Charge Ability
                     if (target.ability.name === 'StaticCharge' && !actor.status && Math.random() < 0.3) {
                         actor.status = 'paralysis';
+                        const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
+                        popupAbility(tSide, realTargetIndex as 0 | 1, 'Static Charge');
                         tempLogs.push(`${actor.name} was paralyzed by ${target.name}'s Static Charge!`);
                     }
 
                     // Flame Body Ability
                     if (target.ability.name === 'FlameBody' && !actor.status && Math.random() < 0.3) {
                         actor.status = 'burn';
+                        const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
+                        popupAbility(tSide, realTargetIndex as 0 | 1, 'Flame Body');
                         tempLogs.push(`${actor.name} was burned by ${target.name}'s Flame Body!`);
                     }
 
@@ -2818,6 +3408,8 @@ export default function App() {
                     if (target.ability.name === 'IronBarbs' || target.ability.name === 'RoughSkin') {
                         const dmg = Math.floor(actor.maxHp / 8);
                         actor.currentHp = Math.max(0, actor.currentHp - dmg);
+                        const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
+                        popupAbility(tSide, realTargetIndex as 0 | 1, target.ability.name === 'IronBarbs' ? 'Iron Barbs' : 'Rough Skin');
                         tempLogs.push(`${actor.name} was hurt by ${target.name}'s ${target.ability.name}!`);
                     }
 
@@ -2825,6 +3417,8 @@ export default function App() {
                     if (target.ability.name === 'Gooey' || target.ability.name === 'TanglingHair') {
                         if (actor.statStages) {
                             actor.statStages.speed = Math.max(-6, (actor.statStages.speed || 0) - 1);
+                            const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
+                            popupAbility(tSide, realTargetIndex as 0 | 1, target.ability.name === 'Gooey' ? 'Gooey' : 'Tangling Hair');
                             tempLogs.push(`${actor.name}'s Speed was lowered by ${target.name}'s ${target.ability.name}!`);
                         }
                     }
@@ -3995,8 +4589,8 @@ export default function App() {
                         const streakBonus = 1 + Math.min(1, battleState.battleStreak * 0.1);
                         let itemXpMult = 1;
                         if (actor.heldItem?.id === 'lucky-egg') itemXpMult = 1.5;
-                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * (1 + playerState.meta.upgrades.xpMultiplier) * itemXpMult);
-                        const playerLevelCap = 15 + playerState.badges * 10;
+                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * (1 + playerState.meta.upgrades.xpMultiplier) * itemXpMult * getDailyEvent().xpMult);
+                        const playerLevelCap = getPlayerLevelCap(playerState.badges);
                         const avgLevel = playerState.team.reduce((a, b) => a + b.level, 0) / playerState.team.length;
                         const r = await gainExperience(actor, xpGain, playerLevelCap, avgLevel);
                         if (r.leveledUp) {
@@ -4004,11 +4598,14 @@ export default function App() {
                             tempLogs.push(`${actor.name} grew to Lv. ${r.mon.level}!`);
                             Object.assign(actor, r.mon); 
                             if(r.newMoves.length) tempLogs.push(`${actor.name} learned ${r.newMoves.join(', ')}!`);
-                            const canEvo = await checkEvolution(actor);
-                            if(canEvo) {
-                                const evo = await evolvePokemon(actor);
-                                Object.assign(actor, evo);
-                                tempLogs.push(`What? ${actor.name} is evolving!`);
+                            // Mainline Pokemon behavior: don't interrupt the
+                            // battle to evolve. Flag the target species and
+                            // let the post-battle victory block play the
+                            // cinematic after combat wraps up.
+                            const nextId = await getEvolutionTarget(actor);
+                            if (nextId) {
+                                actor.pendingEvolutionId = nextId;
+                                tempLogs.push(`${actor.name} seems ready to evolve...`);
                             }
                             await syncState(1000);
                         } else {
@@ -5778,6 +6375,34 @@ export default function App() {
             return;
         }
 
+        // --- POST-BATTLE EVOLUTION QUEUE ------------------------------------
+        // Any team member that leveled into its evolution during this battle
+        // now gets the cinematic. We build the evolved form up-front but
+        // only commit it to state after the player presses Continue on the
+        // evolution scene (or cancels it).
+        for (let i = 0; i < survivingTeam.length; i++) {
+            const p = survivingTeam[i];
+            if (!p.pendingEvolutionId) continue;
+            const before = { ...p };
+            // Drop the flag before queueing so rerenders don't re-fire.
+            survivingTeam[i] = { ...p, pendingEvolutionId: undefined };
+            try {
+                const evo = await evolvePokemon(p);
+                if (evo && evo.id !== p.id) {
+                    queueEvolution(before, evo, (final) => {
+                        setPlayerState(prev => ({
+                            ...prev,
+                            team: prev.team.map(tp =>
+                                tp.id === before.id && tp.name === before.name ? final : tp
+                            ),
+                        }));
+                    });
+                }
+            } catch (err) {
+                console.warn('[Evolution] Failed to build evolved form:', err);
+            }
+        }
+
         // Loot Drop Logic
         const loot: string[] = [];
         const lootQuality = playerState.meta.upgrades.lootQuality || 0;
@@ -5847,7 +6472,7 @@ export default function App() {
             const baseMoney = isGymLeader ? 2000 : 500;
             let moneyMult = 1;
             if (survivingTeam.some(p => p.heldItem?.id === 'amulet-coin')) moneyMult = 2;
-            const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult);
+            const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult * getDailyEvent().moneyMult);
 
             // Victory Heal: Heal surviving team by 25%
             survivingTeam.forEach(p => {
@@ -5863,11 +6488,20 @@ export default function App() {
                     newItems.push(pool[Math.floor(Math.random() * pool.length)]);
                 }
 
-                return { 
-                    ...prev, 
-                    team: survivingTeam, 
-                    money: prev.money + finalMoney, 
-                    badges: isGymLeader ? prev.badges + 1 : prev.badges,
+                const newBadges = isGymLeader ? prev.badges + 1 : prev.badges;
+                // When a badge is earned, auto-scale the whole team to the new
+                // floor -- so grabbing badge 3 immediately pulls low-level
+                // benched mons up to fighting shape.
+                const finalTeam = isGymLeader
+                    ? autoScaleTeamToFloor(survivingTeam, newBadges, prev.run.maxDistanceReached)
+                    : survivingTeam;
+
+                const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
+                return {
+                    ...prev,
+                    team: finalTeam,
+                    money: prev.money + finalMoney,
+                    badges: newBadges,
                     defeatedTrainers: [...prev.defeatedTrainers, battleState.currentTrainerId!],
                     inventory: { ...prev.inventory, items: newItems },
                     meta: {
@@ -5877,6 +6511,13 @@ export default function App() {
                     run: {
                         ...prev.run,
                         capturePermits: prev.run.capturePermits + permitsEarned
+                    },
+                    lifetime: {
+                        ...lt,
+                        trainersDefeated: lt.trainersDefeated + 1,
+                        totalMoneyEarned: lt.totalMoneyEarned + finalMoney,
+                        currentStreak: newStreak,
+                        biggestStreak: Math.max(lt.biggestStreak, newStreak),
                     }
                 };
             });
@@ -5903,13 +6544,19 @@ export default function App() {
 
             setPlayerState(prev => {
                 const newItems = [...prev.inventory.items, ...loot];
-                return { 
-                    ...prev, 
+                const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
+                return {
+                    ...prev,
                     team: survivingTeam,
                     inventory: { ...prev.inventory, items: newItems },
                     run: {
                         ...prev.run,
                         capturePermits: prev.run.capturePermits + permitsEarned
+                    },
+                    lifetime: {
+                        ...lt,
+                        currentStreak: newStreak,
+                        biggestStreak: Math.max(lt.biggestStreak, newStreak),
                     }
                 };
             });
@@ -5993,14 +6640,37 @@ export default function App() {
     }
   };
 
-  function handleSwapTeam(i1: number, i2: number) { 
-      setPlayerState(prev => { 
-          const t = [...prev.team]; 
-          [t[i1], t[i2]] = [t[i2], t[i1]]; 
-          if (t[0]) playCry(t[0].id, t[0].name);
-          return { ...prev, team: t }; 
-      }); 
+  function handleSwapTeam(i1: number, i2: number) {
+      setPlayerState(prev => {
+          const t = [...prev.team];
+          [t[i1], t[i2]] = [t[i2], t[i1]];
+          // Opportunistic auto-scale: whenever a Pokemon becomes the lead, make
+          // sure it's at least at the party floor so switching in doesn't get
+          // you curb-stomped. Others remain untouched until they also swap in.
+          const scaled = autoScaleTeamToFloor(t, prev.badges, prev.run.maxDistanceReached);
+          if (scaled[0]) playCry(scaled[0].id, scaled[0].name);
+          return { ...prev, team: scaled };
+      });
   };
+
+  // Snap the entire party to the current floor -- player-initiated from the
+  // pause menu. Stays free; it's a no-op for mons already above the floor.
+  function handleSyncPartyToCap() {
+      setPlayerState(prev => ({ ...prev, team: autoScaleTeamToFloor(prev.team, prev.badges, prev.run.maxDistanceReached) }));
+      showToast('Team synced to level floor', 'reward', { kicker: 'Party' });
+  }
+
+  // Apply a move swap from the relearner. Same-shape helper so the pause menu
+  // doesn't need direct setPlayerState access.
+  function handleApplyRelearn(monIndex: number, updated: Pokemon) {
+      setPlayerState(prev => {
+          const t = prev.team.slice();
+          if (monIndex < 0 || monIndex >= t.length) return prev;
+          t[monIndex] = updated;
+          return { ...prev, team: t };
+      });
+      showToast(`${updated.name.toUpperCase()} learned a new move`, 'reward', { kicker: 'Relearner' });
+  }
     function handleBuy(item: string, price: number) {
         if (playerState.money >= price) {
             setPlayerState(prev => {
@@ -6033,12 +6703,198 @@ export default function App() {
 
   useEffect(() => { battleStateRef.current = battleState; }, [battleState]);
   useEffect(() => { networkRoleRef.current = networkRole; }, [networkRole]);
+
+  // Announce the daily world event exactly once per session, the first time
+  // the player reaches the overworld. Stays sticky for a beat so players can
+  // actually read it (4s instead of the default 3.2s story tier).
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD || dailyEventShown.current) return;
+      const ev = getDailyEvent();
+      dailyEventShown.current = true;
+      showToast(`${ev.title} — ${ev.flavor}`, 'story', { kicker: "Today's Event", ttl: 4500 });
+  }, [phase, showToast]);
+
+  // Dynamic world events -- every time the player enters a new chunk, we check
+  // whether it's the hourly merchant's chunk, the current roaming legendary
+  // spot, or a graveyard unlocked for a Ghost Trainer. When a match hits, we
+  // inject the NPC/trainer into the chunk's local dict so interactions work
+  // through the normal handler.
+  const lastEventChunkRef = useRef<string>('');
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      if (!playerState.mapId.startsWith('chunk_')) return;
+      const chunk = loadedChunks[playerState.mapId];
+      if (!chunk) return;
+
+      // Debounce: only inject once per chunk entry.
+      const token = `${playerState.mapId}:${Math.floor(Date.now() / 3600000)}:${playerState.lifetime?.graveyardsVisited ?? 0}:${playerState.discoveredChunks.length}`;
+      if (lastEventChunkRef.current === token) return;
+      lastEventChunkRef.current = token;
+
+      const { cx, cy } = playerState.chunkPos;
+      let mutated = false;
+      const newTrainers = { ...(chunk.trainers ?? {}) };
+      const newNpcs = { ...(chunk.npcs ?? {}) };
+
+      // 1. Hourly merchant
+      const merchantChunk = getHourlyMerchantChunk();
+      if (merchantChunk.cx === cx && merchantChunk.cy === cy) {
+          const merchantId = `merchant_hourly_${Math.floor(Date.now() / 3600000)}`;
+          const slot = '10,10';
+          if (!newNpcs[slot]) {
+              newNpcs[slot] = {
+                  id: merchantId,
+                  name: 'Hourly Merchant',
+                  sprite: 'https://play.pokemonshowdown.com/sprites/trainers/gentleman.png',
+                  dialogue: [
+                      "A traveling merchant has set up shop here for the hour.",
+                      "Check back in an hour -- I'll be somewhere else entirely by then.",
+                      "Rumor is some collectors plan their whole week around my route.",
+                  ],
+                  facing: 'down',
+              };
+              mutated = true;
+              showToast('The Hourly Merchant has set up shop here.', 'reward', { kicker: 'Passing Trade', ttl: 3500 });
+          }
+      }
+
+      // 2. Roaming legendary
+      const legend = getRoamingLegendary(playerState.discoveredChunks.length, playerState.run.maxDistanceReached);
+      if (legend && legend.cx === cx && legend.cy === cy) {
+          const legendId = `legendary_roam_${legend.speciesId}_${Math.floor(playerState.discoveredChunks.length / 15)}`;
+          const slot = '8,8';
+          if (!newTrainers[slot] && !playerState.defeatedTrainers.includes(legendId)) {
+              newTrainers[slot] = {
+                  id: legendId,
+                  name: `A fleeing ${legend.name}`,
+                  sprite: `https://play.pokemonshowdown.com/sprites/ani/${legend.name.toLowerCase()}.gif`,
+                  team: [legend.speciesId],
+                  level: legend.level,
+                  reward: 10000,
+                  dialogue: `A legendary ${legend.name} senses you approach...`,
+                  winDialogue: `The ${legend.name} vanishes in a flash of light. It will reappear elsewhere.`,
+                  isGymLeader: false,
+              };
+              mutated = true;
+              showToast(`A ${legend.name} is here! Catch it before it flees!`, 'story', { kicker: 'Roaming Legendary', ttl: 4500 });
+          }
+      }
+
+      // 3. Ghost Trainer in graveyards after 3 visits
+      const graveyardsVisited = playerState.lifetime?.graveyardsVisited ?? 0;
+      if (chunk.poiTags?.includes('graveyard')) {
+          // Count first visit to each graveyard (by chunk id).
+          const graveyardKey = `graveyard_seen_${chunk.id}`;
+          if (!playerState.storyFlags.includes(graveyardKey)) {
+              setPlayerState(prev => {
+                  const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
+                  return {
+                      ...prev,
+                      storyFlags: [...prev.storyFlags, graveyardKey],
+                      lifetime: { ...lt, graveyardsVisited: lt.graveyardsVisited + 1 },
+                  };
+              });
+          }
+          if (graveyardsVisited >= 3) {
+              const ghostId = `ghost_trainer_${chunk.id}`;
+              const slot = '11,11';
+              if (!newTrainers[slot] && !playerState.defeatedTrainers.includes(ghostId)) {
+                  newTrainers[slot] = {
+                      id: ghostId,
+                      name: 'Pale Trainer',
+                      sprite: 'https://play.pokemonshowdown.com/sprites/trainers/hex.png',
+                      team: [94, 609, 477, 356], // Gengar, Chandelure, Dusknoir, Dusclops
+                      level: Math.min(75, 30 + graveyardsVisited * 3),
+                      reward: 5000,
+                      dialogue: '"...You\'ve wandered too far. The graves remember."',
+                      winDialogue: 'The figure dissipates into mist. You feel lighter.',
+                      isGymLeader: false,
+                  };
+                  mutated = true;
+                  showToast('A pale figure watches from the pillars...', 'story', { kicker: 'Ghost Trainer', ttl: 4000 });
+              }
+          }
+      }
+
+      if (mutated) {
+          const updated: typeof chunk = { ...chunk, trainers: newTrainers, npcs: newNpcs };
+          setLoadedChunks(prev => ({ ...prev, [chunk.id]: updated }));
+      }
+  }, [playerState.mapId, playerState.chunkPos, playerState.discoveredChunks.length, playerState.lifetime?.graveyardsVisited, playerState.defeatedTrainers, loadedChunks, phase, showToast]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { isHostRef.current = multiplayer.isHost; }, [multiplayer.isHost]);
+
+  // Prefetch the hand-crafted battle background for the player's current biome
+  // so the first wild encounter in a new area paints instantly (no spinner flash).
+  // This only fires when the mapId changes, so it's cheap (15 images cached
+  // lazily as the player explores).
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      const map = playerState.mapId.startsWith('chunk_')
+          ? loadedChunks[playerState.mapId]
+          : MAPS[playerState.mapId];
+      const biome = map?.biome;
+      if (!biome) return;
+      const url = getStaticBackground(biome);
+      if (url) {
+          const img = new Image();
+          img.src = url;
+      }
+  }, [playerState.mapId, phase, loadedChunks]);
+
+  // When both players have confirmed, advance the session into the cinematic
+  // phase. This runs on BOTH clients independently - both see the same
+  // my/partner offers (each broadcasts its own), so both start the animation.
+  useEffect(() => {
+    if (!tradeSession) return;
+    if (tradeSession.phase !== 'choose') return;
+    if (tradeSession.myOffer.confirmed && tradeSession.partnerOffer.confirmed && tradeSession.myOffer.locked && tradeSession.partnerOffer.locked) {
+        setTradeSession(prev => prev ? { ...prev, phase: 'committing' } : prev);
+    }
+  }, [tradeSession]);
 
   onDataRef.current = (data) => {
     if (data.type === 'BATTLE_REQUEST') {
         setBattleChallenge(data.payload);
+    } else if (data.type === 'TRADE_EVENT') {
+        const p = data.payload || {};
+        const myUid = auth.currentUser?.uid;
+        const kind = p.kind;
+        const fromId = p.fromUid;
+        // Ignore trade chatter aimed at someone else in a 3+ player room.
+        if (p.targetId && myUid && p.targetId !== myUid) return;
+
+        if (kind === 'REQUEST') {
+            // Incoming trade invite. Ignore if we're already in a trade or battle,
+            // or if a prompt is already up.
+            if (tradeSessionRef.current || phaseRef.current === GamePhase.BATTLE) {
+                // Auto-decline.
+                multiplayer.send({ type: 'TRADE_EVENT', payload: { kind: 'DECLINE', targetId: fromId, reason: 'busy' } });
+                return;
+            }
+            setTradeRequest({ fromId, fromName: p.fromName || 'Trainer' });
+        } else if (kind === 'ACCEPT') {
+            // Partner accepted our trade. Open the session (if we haven't already).
+            if (!tradeSessionRef.current) {
+                setTradeSession({
+                    partnerId: fromId,
+                    partnerName: p.fromName || 'Trainer',
+                    myOffer: makeEmptyOffer(),
+                    partnerOffer: makeEmptyOffer(),
+                    phase: 'choose',
+                });
+            }
+        } else if (kind === 'DECLINE') {
+            if (tradeSessionRef.current) setTradeSession(null);
+            showToast(p.reason === 'busy' ? 'They\'re busy right now.' : 'Trade declined.', 'info', { ttl: 2500 });
+        } else if (kind === 'OFFER') {
+            setTradeSession(prev => prev ? { ...prev, partnerOffer: p.offer } : prev);
+        } else if (kind === 'CANCEL') {
+            if (tradeSessionRef.current) {
+                showToast('Partner cancelled the trade.', 'info', { ttl: 2500 });
+                setTradeSession(null);
+            }
+        }
     } else if (data.type === 'BATTLE_ACCEPT') {
         const { battleId, opponentId, opponentInfo, isLead } = data.payload;
         startMultiplayerBattle(battleId, opponentId, opponentInfo, isLead);
@@ -6351,39 +7207,65 @@ export default function App() {
     }, [battleState.logs?.length, networkRoleRef.current]);
 
   // --- CONTROLS ---
+  // Keyboard mapping (Pokemon-mainline-ish):
+  //   - Arrows / WASD: move
+  //   - Space / E: A-button (interact, advance dialogue)
+  //   - Enter: Start button (toggle pause menu)
+  //   - Esc: closes whichever modal is on top (handled by useEscapeKey)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (phase === GamePhase.OVERWORLD && !isPaused && !dialogue) {
-          if (networkRole === 'client') {
-              let dx = 0, dy = 0;
-              if (e.key === 'ArrowUp' || e.key === 'w') dy = -1;
-              if (e.key === 'ArrowDown' || e.key === 's') dy = 1;
-              if (e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
-              if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
-              if (dx !== 0 || dy !== 0) {
-                  const newPos = { x: playerState.position.x + dx, y: playerState.position.y + dy };
-                  console.log("[CONTROLS] Client sending INPUT_MOVE to", newPos);
-                  multiplayer.send({ type: 'INPUT_MOVE', payload: newPos });
-              }
-              if (e.key === 'Enter' || e.key === 'e' || e.key === 'E') multiplayer.send({ type: 'INPUT_MENU', payload: { type: 'INTERACT' } });
-              if (e.key === ' ') setIsPaused(true);
-          } else {
-              // Host Logic
-              let dx = 0, dy = 0;
-              if (e.key === 'ArrowUp' || e.key === 'w') dy = -1;
-              if (e.key === 'ArrowDown' || e.key === 's') dy = 1;
-              if (e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
-              if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
-              
-              if (dx !== 0 || dy !== 0) {
-                  const target = { x: playerState.position.x + dx, y: playerState.position.y + dy };
-                  handleMapMove(target, 1);
-              }
-              if (e.key === 'Enter' || e.key === 'e' || e.key === 'E') handleInteraction(1);
-              if (e.key === ' ') setIsPaused(true);
-          }
-      } else if (dialogue && (e.key === 'Enter' || e.key === 'e' || e.key === 'E' || e.key === ' ')) {
+      if (phase !== GamePhase.OVERWORLD) return;
+
+      // Enter toggles the pause menu globally in the overworld, regardless
+      // of whether a dialogue is up. If a dialogue is open it still closes
+      // on Enter via the dialogue-advance branch below.
+      // Guard: don't steal Enter when the user is typing in a form field
+      // (import-save textarea, chat, etc.) -- otherwise hitting Enter would
+      // close the menu *and* swallow the newline/confirm.
+      const target = e.target as HTMLElement | null;
+      const isTyping = !!target && (
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable
+      );
+      if (e.key === 'Enter' && !dialogue && !isTyping) {
+          e.preventDefault();
+          setIsPaused(prev => !prev);
+          return;
+      }
+
+      if (dialogue && (e.key === 'Enter' || e.key === 'e' || e.key === 'E' || e.key === ' ')) {
           setDialogue(null);
+          return;
+      }
+
+      if (isPaused) return;
+
+      if (networkRole === 'client') {
+          let dx = 0, dy = 0;
+          if (e.key === 'ArrowUp' || e.key === 'w') dy = -1;
+          if (e.key === 'ArrowDown' || e.key === 's') dy = 1;
+          if (e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
+          if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
+          if (dx !== 0 || dy !== 0) {
+              const newPos = { x: playerState.position.x + dx, y: playerState.position.y + dy };
+              console.log("[CONTROLS] Client sending INPUT_MOVE to", newPos);
+              multiplayer.send({ type: 'INPUT_MOVE', payload: newPos });
+          }
+          if (e.key === ' ' || e.key === 'e' || e.key === 'E') multiplayer.send({ type: 'INPUT_MENU', payload: { type: 'INTERACT' } });
+      } else {
+          // Host Logic
+          let dx = 0, dy = 0;
+          if (e.key === 'ArrowUp' || e.key === 'w') dy = -1;
+          if (e.key === 'ArrowDown' || e.key === 's') dy = 1;
+          if (e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
+          if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
+
+          if (dx !== 0 || dy !== 0) {
+              const target = { x: playerState.position.x + dx, y: playerState.position.y + dy };
+              handleMapMove(target, 1);
+          }
+          if (e.key === ' ' || e.key === 'e' || e.key === 'E') handleInteraction(1);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -6409,7 +7291,10 @@ export default function App() {
       } else if (phase === GamePhase.BATTLE) {
           playBGM(BGM_TRACKS.BATTLE);
       } else if (phase === GamePhase.OVERWORLD) {
-          playBGM(BGM_TRACKS.OVERWORLD);
+          // Overworld is silent by design -- the procedural chiptune was placeholder
+          // and will be replaced with a real track later. stopBGM() ensures the
+          // battle track actually stops when returning to the map.
+          stopBGM();
       }
   }, [phase, musicStarted]);
 
@@ -6454,31 +7339,41 @@ export default function App() {
         console.log('App Rendering: Phase =', phase);
         if (phase === GamePhase.MENU) return (
             <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center relative overflow-hidden font-press-start">
-                {/* Atmospheric Pokémon-style Background */}
-                <div className="absolute inset-0 z-0 bg-[#0a1a0a] bg-[radial-gradient(circle_at_50%_50%,#1a3a1a_0%,#050a05_100%)]">
-                    <div className="absolute inset-0 bg-gradient-to-b from-blue-900/20 via-transparent to-black/80"></div>
-        
-                    {/* Animated Particles/Rifts */}
+                {/* Hand-crafted hero background (cel-shaded Pokemon-style vista) */}
+                <div className="absolute inset-0 z-0">
+                    {/* Base image with a gentle Ken-Burns drift so the title feels alive */}
+                    <motion.div
+                        className="absolute inset-0 bg-center bg-cover"
+                        style={{ backgroundImage: `url(${MENU_BACKGROUND_URL})` }}
+                        initial={{ scale: 1.05 }}
+                        animate={{ scale: [1.05, 1.1, 1.05] }}
+                        transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                    {/* Readability vignette: darken top and bottom so the logo + buttons pop */}
+                    <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/80"></div>
+                    <div className="absolute inset-0 bg-gradient-to-r from-black/30 via-transparent to-black/30"></div>
+
+                    {/* Floating rift particles layered on top for extra atmosphere */}
                     <div className="absolute inset-0 overflow-hidden pointer-events-none">
                         {[...Array(20)].map((_, i) => (
                             <motion.div
                                 key={i}
-                                initial={{ 
-                                    x: Math.random() * window.innerWidth, 
+                                initial={{
+                                    x: Math.random() * window.innerWidth,
                                     y: Math.random() * window.innerHeight,
-                                    opacity: 0 
+                                    opacity: 0
                                 }}
-                                animate={{ 
+                                animate={{
                                     y: [null, Math.random() * -200],
-                                    opacity: [0, 0.5, 0],
+                                    opacity: [0, 0.6, 0],
                                     scale: [0, 1, 0]
                                 }}
-                                transition={{ 
-                                    duration: 5 + Math.random() * 10, 
+                                transition={{
+                                    duration: 5 + Math.random() * 10,
                                     repeat: Infinity,
                                     delay: Math.random() * 5
                                 }}
-                                className="absolute w-1 h-1 bg-cyan-400 rounded-full blur-sm"
+                                className="absolute w-1 h-1 bg-cyan-300 rounded-full blur-sm"
                             />
                         ))}
                     </div>
@@ -6512,12 +7407,36 @@ export default function App() {
                 </motion.div>
 
                 <div className="z-10 flex flex-col gap-6 w-full max-w-sm px-6">
-                    <button 
-                        onClick={()=>{ unlockAudio(); setMusicStarted(true); setPhase(GamePhase.STARTER_SELECT); }} 
+                    {hasExistingSave && (
+                        <button
+                            onClick={() => { unlockAudio(); handleLoadGame(); }}
+                            className="group relative bg-amber-500 hover:bg-amber-400 px-8 py-6 rounded-2xl text-xl border-b-8 border-amber-700 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(245,158,11,0.3)]"
+                        >
+                            <span className="relative z-10 flex items-center justify-center gap-3 text-black">
+                                <span className="text-2xl">💾</span> Continue
+                            </span>
+                            <div className="absolute bottom-1 left-0 right-0 text-center text-[8px] text-black/70 uppercase tracking-widest">
+                                saved {formatSavedAt(lastSavedAt)}
+                            </div>
+                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                        </button>
+                    )}
+                    <button
+                        onClick={()=>{
+                            unlockAudio();
+                            setMusicStarted(true);
+                            if (hasExistingSave) {
+                                const confirmed = window.confirm('Starting a new adventure will overwrite your existing save. Continue?');
+                                if (!confirmed) return;
+                                deleteSave();
+                                refreshSaveMeta();
+                            }
+                            setPhase(GamePhase.STARTER_SELECT);
+                        }}
                         className="group relative bg-blue-600 hover:bg-blue-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-blue-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(37,99,235,0.3)]"
                     >
                         <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">⚡</span> Start Adventure
+                            <span className="text-2xl">⚡</span> {hasExistingSave ? 'New Adventure' : 'Start Adventure'}
                         </span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
                     </button>
@@ -6614,18 +7533,63 @@ export default function App() {
                 <div className="relative overflow-hidden w-screen h-screen bg-black">
                    <EmoteOverlay emote={currentEmote} />
                    <QuestLog state={playerState} />
-                   {isPaused && <PauseMenu onClose={()=>setIsPaused(false)} state={playerState} onSwap={handleSwapTeam} onGiveItem={handleGiveItem} />}
+                   <ToastStack toasts={toasts} onExpire={expireToast} />
+                   {isPaused && <PauseMenu
+                        onClose={()=>setIsPaused(false)}
+                        state={playerState}
+                        onSwap={handleSwapTeam}
+                        onGiveItem={handleGiveItem}
+                        onSyncToCap={handleSyncPartyToCap}
+                        onApplyRelearn={handleApplyRelearn}
+                        onOpenLeaderboard={() => { setIsPaused(false); setShowLeaderboard(true); }}
+                        onSave={handleManualSave}
+                        onExportSave={handleExportSave}
+                        onImportSave={handleImportSave}
+                        onDeleteSave={handleDeleteSave}
+                        lastSavedAt={lastSavedAt}
+                   />}
+                   {showLeaderboard && (
+                       <LeaderboardScreen
+                           inputs={{
+                               farthestDistance: playerState.run.maxDistanceReached,
+                               chunksDiscovered: playerState.discoveredChunks.length,
+                               badges: playerState.badges,
+                               totalCaptures: playerState.run.totalCaptures,
+                               shiniesCaught: playerState.lifetime?.shiniesCaught ?? 0,
+                               trainersDefeated: playerState.lifetime?.trainersDefeated ?? playerState.defeatedTrainers.length,
+                               biggestStreak: playerState.lifetime?.biggestStreak ?? 0,
+                               totalMoneyEarned: playerState.lifetime?.totalMoneyEarned ?? 0,
+                               riftStabilityCleared: playerState.lifetime?.riftStabilityCleared ?? false,
+                           }}
+                           onClose={() => setShowLeaderboard(false)}
+                       />
+                   )}
                    {dialogue && <div className="absolute bottom-6 left-6 right-6 bg-blue-900/95 border-4 border-white p-6 rounded-2xl z-[60] text-white shadow-2xl"><div className="text-base leading-relaxed">{dialogue.map((l,i)=><p key={i}>{l}</p>)}</div><div className="text-xs text-yellow-400 mt-3 font-bold animate-pulse">Press Enter</div></div>}
                    <div className="absolute top-6 left-6 z-40 flex gap-3">{playerState.team.slice(0,3).map((p,i)=><div key={i} className="scale-90 origin-top-left"><HealthBar current={p.currentHp} max={p.maxHp} label={p.name} level={p.level} status={p.status} /></div>)}</div>
                    <div className="absolute top-6 right-6 z-40 flex flex-col gap-3 items-end">
-                        <div className="bg-gray-800 px-4 py-2 border-2 border-gray-600 text-white text-sm font-bold rounded-lg shadow-lg">
-                            ${playerState.money}
+                        <div className="bg-gradient-to-br from-amber-500/90 to-amber-700/90 px-4 py-2 border-2 border-amber-300/80 text-white text-sm font-bold rounded-lg shadow-lg flex items-center gap-2">
+                            <span className="text-amber-200">$</span>
+                            <span className="font-mono tabular-nums">{playerState.money.toLocaleString()}</span>
                         </div>
-                        <div className="bg-black/70 px-3 py-1.5 border border-white/30 text-white text-xs rounded-md backdrop-blur-sm">
-                            LVL CAP: {15 + playerState.badges * 10}
-                        </div>
-                        <div className="bg-black/70 px-3 py-1.5 border border-white/30 text-white text-xs rounded-md backdrop-blur-sm">
-                            BADGES: {playerState.badges}
+                        <div className="bg-black/80 px-3 py-2 border border-emerald-400/50 rounded-md backdrop-blur-sm flex items-center gap-3 text-[10px] uppercase tracking-widest">
+                            <div>
+                                <div className="text-gray-400 text-[7px]">Lv Cap</div>
+                                <div className="text-emerald-300 font-bold">{getPlayerLevelCap(playerState.badges)}</div>
+                            </div>
+                            <div className="w-px h-6 bg-white/20" />
+                            <div>
+                                <div className="text-gray-400 text-[7px]">Floor</div>
+                                <div className="text-cyan-300 font-bold">{getPartyFloor(playerState.badges, playerState.run.maxDistanceReached)}</div>
+                            </div>
+                            <div className="w-px h-6 bg-white/20" />
+                            <div>
+                                <div className="text-gray-400 text-[7px]">Badges</div>
+                                <div className="text-yellow-300 font-bold flex gap-0.5">
+                                    {Array.from({ length: 8 }).map((_, i) => (
+                                        <span key={i} className={i < playerState.badges ? 'text-yellow-300' : 'text-gray-600'}>●</span>
+                                    ))}
+                                </div>
+                            </div>
                         </div>
                         <div className="bg-black/70 px-3 py-1.5 border border-red-500/50 text-white text-xs rounded-md backdrop-blur-sm flex flex-col gap-1 w-32">
                             <div className="flex justify-between font-black text-[8px] tracking-tighter text-red-400">
@@ -6636,6 +7600,31 @@ export default function App() {
                                 <div className="h-full bg-red-500 transition-all duration-1000" style={{ width: `${riftIntensity}%` }}></div>
                             </div>
                         </div>
+                        {(() => {
+                            const score = computeExplorerScore({
+                                farthestDistance: playerState.run.maxDistanceReached,
+                                chunksDiscovered: playerState.discoveredChunks.length,
+                                badges: playerState.badges,
+                                totalCaptures: playerState.run.totalCaptures,
+                                shiniesCaught: playerState.lifetime?.shiniesCaught ?? 0,
+                                trainersDefeated: playerState.lifetime?.trainersDefeated ?? playerState.defeatedTrainers.length,
+                                biggestStreak: playerState.lifetime?.biggestStreak ?? 0,
+                                totalMoneyEarned: playerState.lifetime?.totalMoneyEarned ?? 0,
+                                riftStabilityCleared: playerState.lifetime?.riftStabilityCleared ?? false,
+                            });
+                            return (
+                                <button
+                                    onClick={() => setShowLeaderboard(true)}
+                                    className="bg-gradient-to-br from-indigo-700/90 to-purple-800/90 px-3 py-1.5 border border-indigo-300/60 rounded-md text-white text-[10px] uppercase tracking-widest w-32 hover:from-indigo-600 hover:to-purple-700 transition shadow-lg text-left"
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-indigo-200 font-bold">{score.title}</span>
+                                        <span className="text-[8px] text-indigo-300">▸</span>
+                                    </div>
+                                    <div className="text-white font-black text-sm tabular-nums">{score.total.toLocaleString()}</div>
+                                </button>
+                            );
+                        })()}
                     </div>
                 <Overworld 
                     p1Pos={networkRole === 'client' ? ((Array.from(remotePlayers.values()).find((p: any) => p.isHost) as any)?.position || { x: -100, y: -100 }) : playerState.position} 
@@ -6646,13 +7635,7 @@ export default function App() {
                     myPlayerId={networkRole==='client'?2:1} 
                     networkRole={networkRole}
                     onInteract={(x,y)=>handleInteraction(1)} 
-                    onChallenge={(id, info) => {
-                        multiplayer.send({
-                            type: 'BATTLE_REQUEST',
-                            payload: { targetId: id, playerInfo: { name: playerState.name, team: playerState.team } }
-                        });
-                        setDialogue(["Challenge sent!", `Waiting for ${info.name} to accept...`]);
-                    }}
+                    onChallenge={(id, info) => setPlayerContextMenu({ id, info })}
                     remotePlayers={remotePlayers}
                     storyFlags={playerState.storyFlags} 
                     badges={playerState.badges} 
@@ -6677,6 +7660,70 @@ export default function App() {
                                     className="flex-1 bg-red-600 hover:bg-red-500 text-white py-4 rounded-xl border-b-4 border-red-800 font-bold transition-all active:translate-y-1 active:border-b-0"
                                 >
                                     DECLINE
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {/* Remote-player action picker: Battle or Trade */}
+                {playerContextMenu && !battleChallenge && !tradeRequest && !tradeSession && (
+                    <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-[105] p-4" onClick={() => setPlayerContextMenu(null)}>
+                        <div className="bg-gray-900 border-4 border-yellow-400 p-6 rounded-xl text-center max-w-xs shadow-2xl font-press-start" onClick={(e) => e.stopPropagation()}>
+                            <div className="text-[8px] uppercase tracking-[.4em] text-gray-400 mb-1">Trainer Found</div>
+                            <h3 className="text-yellow-300 text-sm mb-5 tracking-widest uppercase">
+                                {playerContextMenu.info?.name || 'Trainer'}
+                            </h3>
+                            <div className="flex flex-col gap-2">
+                                <button
+                                    onClick={() => {
+                                        multiplayer.send({
+                                            type: 'BATTLE_REQUEST',
+                                            payload: { targetId: playerContextMenu.id, playerInfo: { name: playerState.name, team: playerState.team } }
+                                        });
+                                        setDialogue(["Challenge sent!", `Waiting for ${playerContextMenu.info?.name || 'Trainer'} to accept...`]);
+                                        setPlayerContextMenu(null);
+                                    }}
+                                    className="py-3 bg-gradient-to-r from-red-700 to-orange-700 hover:from-red-600 hover:to-orange-600 text-white text-[10px] uppercase tracking-widest border border-red-300 rounded"
+                                >
+                                    ⚔ Battle
+                                </button>
+                                <button
+                                    onClick={() => handleStartTrade(playerContextMenu.id, playerContextMenu.info)}
+                                    className="py-3 bg-gradient-to-r from-blue-700 to-purple-700 hover:from-blue-600 hover:to-purple-600 text-white text-[10px] uppercase tracking-widest border border-blue-300 rounded"
+                                >
+                                    ⇆ Trade
+                                </button>
+                                <button
+                                    onClick={() => setPlayerContextMenu(null)}
+                                    className="py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-[8px] uppercase tracking-widest border border-gray-500 rounded"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {/* Incoming trade invite */}
+                {tradeRequest && !tradeSession && (
+                    <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-[110] p-4">
+                        <div className="bg-purple-900 border-4 border-pink-400 p-8 rounded-2xl text-center max-w-sm shadow-2xl animate-in zoom-in duration-300 font-press-start">
+                            <div className="text-3xl mb-2">⇆</div>
+                            <h3 className="text-pink-300 text-sm mb-4 tracking-widest uppercase">Trade Request</h3>
+                            <p className="text-white text-[10px] mb-8 leading-relaxed uppercase tracking-wide">
+                                <span className="text-yellow-300 font-bold">{tradeRequest.fromName}</span><br/>wants to trade with you!
+                            </p>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => handleTradeRequestResponse(true)}
+                                    className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white text-[10px] uppercase tracking-widest rounded-xl border-b-4 border-green-800 active:translate-y-1 active:border-b-0 transition-all"
+                                >
+                                    Accept
+                                </button>
+                                <button
+                                    onClick={() => handleTradeRequestResponse(false)}
+                                    className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white text-[10px] uppercase tracking-widest rounded-xl border-b-4 border-red-800 active:translate-y-1 active:border-b-0 transition-all"
+                                >
+                                    Decline
                                 </button>
                             </div>
                         </div>
@@ -6727,25 +7774,22 @@ export default function App() {
                  <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80">
                      <div className="text-center">
                          <div className="w-16 h-16 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                         <p className="text-yellow-400 text-xl animate-pulse">GENERATING BATTLE ARENA...</p>
-                         <p className="text-gray-400 text-sm mt-2">AI is painting a custom anime background for this biome</p>
+                         <p className="text-yellow-400 text-xl animate-pulse">ENTERING BATTLE ARENA...</p>
                      </div>
                  </div>
              )}
              {battleState.backgroundUrl && (
                  <div className="absolute inset-0 z-0">
-                     <img 
-                         src={battleState.backgroundUrl} 
+                     <img
+                         src={battleState.backgroundUrl}
                          className="w-full h-full object-cover"
                          referrerPolicy="no-referrer"
-                         onLoad={() => console.log('Battle background loaded successfully')}
                          onError={(e) => {
+                             // Final safety net: if whatever bg was picked fails,
+                             // fall back to the cel-shaded forest PNG we ship.
                              const target = e.target as HTMLImageElement;
-                             // Fallback to a reliable anime-style image if the primary fails
-                             const fallback = 'https://play.pokemonshowdown.com/fx/bg/forest.jpg';
-                             if (target.src !== fallback) {
-                                 target.src = fallback;
-                             }
+                             const fallback = '/bg/bg_forest.jpg';
+                             if (!target.src.endsWith(fallback)) target.src = fallback;
                          }}
                      />
                      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/40" />
@@ -6840,6 +7884,7 @@ export default function App() {
                                         'bg-green-600/60 border-green-400/80'}`} 
                                   />
                                   <PokemonSprite pokemon={mon} isTargetable={isTargeting} onSelect={() => handleTargetSelect(i)} />
+                                  <BattlePopupLayer side="enemy" slot={i as 0 | 1} />
                                   <AnimatePresence>
                                       {battleState.vfx && battleState.vfx.target === 'enemy' && battleState.vfx.index === i && (
                                           <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
@@ -6872,6 +7917,7 @@ export default function App() {
                                         'bg-green-600/60 border-green-400/80'}`} 
                                   />
                                   <PokemonSprite pokemon={mon} isBack />
+                                  <BattlePopupLayer side="player" slot={i as 0 | 1} />
                                   <AnimatePresence>
                                       {battleState.vfx && battleState.vfx.target === 'player' && battleState.vfx.index === i && (
                                           <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
@@ -7062,10 +8108,43 @@ export default function App() {
         };
     }, []);
 
+    // Evolution cinematic always renders on top of whatever phase is
+    // active, so rare-candy evolutions in the menu and post-battle level-up
+    // evolutions all use the same scene. Consumed one at a time from the
+    // queue; the scene's `onComplete` shifts the head off and fires the
+    // committed onDone callback from the queueing site.
+    const activeEvolution = evolutionQueue[0];
+    const handleEvolutionComplete = (result: 'evolved' | 'cancelled') => {
+        setEvolutionQueue((prev) => prev.slice(1));
+        if (!activeEvolution) return;
+        if (result === 'evolved') {
+            activeEvolution.onDone?.(activeEvolution.after);
+        } else {
+            activeEvolution.onDone?.(activeEvolution.before);
+        }
+    };
+
     return (
         <>
             <AudioWidget />
             {renderContent()}
+            {activeEvolution && (
+                <EvolutionScene
+                    key={`evo-${activeEvolution.monUid}-${activeEvolution.after.id}`}
+                    before={activeEvolution.before}
+                    after={activeEvolution.after}
+                    onComplete={handleEvolutionComplete}
+                />
+            )}
+            {tradeSession && (
+                <TradeScreen
+                    session={tradeSession}
+                    state={playerState}
+                    onOfferChange={handleTradeOfferChange}
+                    onCancel={handleTradeCancel}
+                    onCommit={handleTradeCommit}
+                />
+            )}
         </>
     );
 }

@@ -245,6 +245,12 @@ export interface Pokemon {
   statusTurns?: number;
   confusionTurns?: number;
   animationState?: 'idle' | 'attack' | 'damage' | 'level-up' | 'capture-success' | 'capture-fail';
+  /**
+   * Species ID this Pokemon should evolve into once the current battle ends.
+   * Set during battle level-up and consumed by the post-battle cinematic so
+   * we don't interrupt combat to play the evolution sequence.
+   */
+  pendingEvolutionId?: number;
   incomingAttackType?: string; 
   isShiny?: boolean;
   cryUrl?: string;
@@ -494,6 +500,27 @@ export interface PlayerGlobalState {
     discoveryPoints: number; // For exploration rewards
     meta: MetaState;
     run: RunConstraints;
+    /** Cumulative stats used for the Explorer Score leaderboard. Persists across runs. */
+    lifetime?: {
+        shiniesCaught: number;
+        trainersDefeated: number;
+        biggestStreak: number;
+        currentStreak: number;
+        totalMoneyEarned: number;
+        graveyardsVisited: number;    // Evolving landmark counter
+        visitedBiomes: string[];      // For first-time biome lore toasts
+        riftStabilityCleared?: boolean;
+    };
+}
+
+export interface GymMonLoadout {
+    id: number;            // Pokedex id
+    ability?: string;      // NEW_ABILITIES key, or standard poke-api ability slug
+    heldItem?: { id: string; name: string };
+    /** Moves that MUST appear in the final moveset; accepts poke-api slugs or NEW_MOVES keys. */
+    ensureMoves?: string[];
+    shiny?: boolean;
+    levelDelta?: number;   // +/- from trainer's level for ace/sidekick pacing
 }
 
 export interface TrainerData {
@@ -507,6 +534,8 @@ export interface TrainerData {
     winDialogue: string;
     isGymLeader?: boolean;
     badgeId?: number;
+    /** Optional per-mon competitive overrides. Length should equal team.length. */
+    loadout?: GymMonLoadout[];
 }
 
 export interface NPCData {
@@ -549,4 +578,6 @@ export interface MapZone {
 export interface Chunk extends MapZone {
     x: number;
     y: number;
+    /** Tags describing landmark POIs present in this chunk (e.g., 'graveyard', 'shipwreck'). */
+    poiTags?: string[];
 }

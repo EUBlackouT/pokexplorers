@@ -81,6 +81,69 @@
     animation: shimmer 2s linear infinite;
   }
 
+  /* --- Biome Ambient Particle keyframes ---------------------------------- */
+  /*  Kept lightweight: all keyframes are pure transforms + opacity so the
+     browser can compositor-optimize them. Each particle is a single div. */
+
+  @keyframes leaf-fall {
+    0%   { transform: translate(0,   -5vh)  rotate(0deg);   opacity: 0;   }
+    10%  { opacity: 0.9; }
+    100% { transform: translate(6vw, 110vh) rotate(540deg); opacity: 0;   }
+  }
+
+  @keyframes firefly-drift {
+    0%,100% { transform: translate(0, 0)        scale(0.8); opacity: 0.2; }
+    25%     { transform: translate(12px, -18px) scale(1.2); opacity: 0.95; }
+    50%     { transform: translate(-8px, -6px)  scale(1);   opacity: 0.7; }
+    75%     { transform: translate(-14px, 12px) scale(0.9); opacity: 0.5; }
+  }
+
+  @keyframes pollen-rise {
+    0%   { transform: translateY(0)    scale(0.6); opacity: 0; }
+    15%  { opacity: 0.8; }
+    100% { transform: translateY(-95vh) scale(1); opacity: 0; }
+  }
+
+  @keyframes dust-swirl {
+    0%   { transform: translate(-10vw, 0)   scale(0.6); opacity: 0; }
+    15%  { opacity: 0.45; }
+    100% { transform: translate(110vw, -8vh) scale(1.2); opacity: 0; }
+  }
+
+  @keyframes ash-drift {
+    0%   { transform: translate(0, -5vh)  scale(0.8) rotate(0deg);   opacity: 0;   }
+    10%  { opacity: 0.8; }
+    100% { transform: translate(-4vw, 110vh) scale(1) rotate(-240deg); opacity: 0; }
+  }
+
+  @keyframes glitch-flicker {
+    0%,100% { opacity: 0.1; transform: translate(0,   0)    scale(1);   }
+    25%     { opacity: 0.9; transform: translate(3px, -2px) scale(1.1); }
+    50%     { opacity: 0.3; transform: translate(-2px, 3px) scale(0.9); }
+    75%     { opacity: 0.7; transform: translate(1px,  2px) scale(1.2); }
+  }
+
+  @keyframes light-shaft {
+    0%,100% { opacity: 0.15; }
+    50%     { opacity: 0.35; }
+  }
+
+  /* Birds/butterflies soaring across the biome overlay. The element is
+   * positioned off-screen-left and translated horizontally across with a
+   * gentle vertical sine to suggest gliding. `bird-flap` is the inner
+   * child's wing-beat oscillation. */
+  @keyframes bird-glide {
+    0%   { transform: translate(-6vw, 0);    opacity: 0; }
+    10%  { opacity: 0.85; }
+    50%  { transform: translate(55vw, -3vh); opacity: 0.85; }
+    90%  { opacity: 0.85; }
+    100% { transform: translate(110vw, 2vh); opacity: 0; }
+  }
+  @keyframes bird-flap {
+    from { transform: scaleY(1);   }
+    to   { transform: scaleY(0.45);}
+  }
+
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
   }

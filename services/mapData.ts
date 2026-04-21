@@ -1,5 +1,6 @@
 
 import { MapZone, TrainerData, NPCData, InteractableData, Chunk } from '../types';
+import { getGymTeam } from '../data/gymTeams';
 
 // --- TILE ID LEGEND ---
 // 0: Grass (Green)
@@ -237,14 +238,14 @@ const PALLET_LAYOUT = [
     [1, 75, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 76, 0, 1],
     [1, 0, 30, 31, 32, 0, 0, 0, 0, 4, 4, 0, 30, 31, 32, 0, 0, 0, 0, 1],
     [1, 0, 33, 50, 35, 0, 0, 0, 0, 4, 4, 0, 33, 50, 35, 0, 0, 0, 0, 1],
-    [1, 0, 0, 4, 0, 0, 0, 0, 0, 4, 4, 0, 0, 4, 0, 0, 0, 0, 0, 1],
+    [1, 97, 0, 4, 0, 99, 0, 0, 0, 4, 4, 0, 99, 4, 0, 97, 0, 0, 0, 1],
     [1, 8, 8, 8, 8, 8, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 13, 13, 13, 13, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 13, 13, 13, 13, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 98, 0, 0, 0, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 1],
     [4, 4, 0, 0, 0, 0, 0, 0, 0, 40, 41, 42, 41, 42, 0, 0, 0, 0, 4, 4],
     [4, 4, 0, 0, 0, 0, 0, 0, 0, 43, 50, 45, 34, 45, 0, 0, 0, 0, 4, 4],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 58, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 58, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 97, 0, 4, 4, 0, 97, 0, 0, 0, 0, 0, 1],
+    [1, 0, 58, 0, 0, 0, 0, 98, 0, 0, 4, 4, 0, 0, 0, 0, 0, 58, 0, 1],
     [1, 8, 8, 8, 8, 0, 0, 0, 0, 0, 4, 4, 0, 0, 8, 8, 8, 8, 8, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 1],
     [1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1],
@@ -290,28 +291,42 @@ export const STATIC_MAPS: Record<string, MapZone> = {
     }
 };
 
+/**
+ * Globally-consistent biome lookup. Extracted from generateChunk so neighbor
+ * biomes can be queried during edge blending.
+ */
+export const getBiomeAt = (cx: number, cy: number): string => {
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    const biomeVal = (globalNoise.noise(cx * 0.1, cy * 0.1) + 1) / 2;
+    const moistVal = (moistureNoise.noise(cx * 0.1, cy * 0.1) + 1) / 2;
+
+    if (Math.floor(dist) === 50) return 'rift';
+    if (dist < 3) return 'town';
+    if (biomeVal < 0.2) return moistVal < 0.5 ? 'desert' : 'canyon';
+    if (biomeVal > 0.8) return moistVal < 0.5 ? 'snow' : 'cave';
+    if (biomeVal > 0.6) return moistVal > 0.6 ? 'lake' : 'forest';
+    return moistVal > 0.7 ? 'cave' : 'forest';
+};
+
+/** Biome → (bg, wall, patch) lookup. Also used for edge blending. */
+const getBiomeTiles = (biome: string): { bg: number; wall: number; patch: number } => {
+    switch (biome) {
+        case 'desert': return { bg: 25, wall: 24, patch: 7 };
+        case 'snow':   return { bg: 26, wall: 1,  patch: 27 };
+        case 'canyon': return { bg: 7,  wall: 24, patch: 25 };
+        case 'lake':   return { bg: 0,  wall: 3,  patch: 2 };
+        case 'cave':   return { bg: 7,  wall: 24, patch: 20 };
+        case 'rift':   return { bg: 29, wall: 2,  patch: 30 };
+        default:       return { bg: 0,  wall: 1,  patch: 2 }; // forest/town
+    }
+};
+
 export const generateChunk = (cx: number, cy: number, riftStability: number = 0): Chunk => {
     const seed = getChunkSeed(cx, cy);
     const rng = new SeededRandom(seed);
     const dist = Math.sqrt(cx*cx + cy*cy);
-    
-    // 1. Determine Biome using Noise (Global consistency)
-    // We use large scale noise for biomes
-    const biomeVal = (globalNoise.noise(cx * 0.1, cy * 0.1) + 1) / 2;
-    const moistVal = (moistureNoise.noise(cx * 0.1, cy * 0.1) + 1) / 2;
-    
-    let biome = 'forest';
-    if (Math.floor(dist) === 50) biome = 'rift';
-    else if (dist < 3) biome = 'town'; // Core area is always town-like
-    else if (biomeVal < 0.2) {
-        biome = moistVal < 0.5 ? 'desert' : 'canyon';
-    } else if (biomeVal > 0.8) {
-        biome = moistVal < 0.5 ? 'snow' : 'cave';
-    } else if (biomeVal > 0.6) {
-        biome = moistVal > 0.6 ? 'lake' : 'forest';
-    } else {
-        biome = moistVal > 0.7 ? 'cave' : 'forest';
-    }
+
+    const biome = getBiomeAt(cx, cy);
 
     if (cx === 0 && cy === 0) {
         return {
@@ -334,18 +349,20 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
     const interactables: Record<string, InteractableData> = {};
     const portals: Record<string, string> = {};
 
-    let bgTile = 0; 
-    let wallTile = 1; 
-    let patchTile = 2; 
+    const tiles = getBiomeTiles(biome);
+    let bgTile = tiles.bg;
+    let wallTile = tiles.wall;
+    let patchTile = tiles.patch;
 
-    if (biome === 'desert') { bgTile = 25; wallTile = 24; patchTile = 7; }
-    else if (biome === 'snow') { bgTile = 26; wallTile = 1; patchTile = 27; }
-    else if (biome === 'canyon') { bgTile = 7; wallTile = 24; patchTile = 25; }
-    else if (biome === 'lake') { bgTile = 0; wallTile = 3; patchTile = 2; }
-    else if (biome === 'town') { bgTile = 0; wallTile = 1; patchTile = 2; }
-    else if (biome === 'forest') { bgTile = 0; wallTile = 1; patchTile = 2; }
-    else if (biome === 'cave') { bgTile = 7; wallTile = 24; patchTile = 20; }
-    else if (biome === 'rift') { bgTile = 29; wallTile = 2; patchTile = 30; }
+    // Neighbor biomes for edge blending. We precompute only the 4-orthogonal
+    // neighbors because diagonal blending on 20x20 chunks produces muddy
+    // transitions. 'rift' neighbors are skipped (they're always hard cuts).
+    const neighborBg = {
+        left:  cx !== 0 || cy !== 0 ? getBiomeTiles(getBiomeAt(cx - 1, cy)).bg : bgTile,
+        right: getBiomeTiles(getBiomeAt(cx + 1, cy)).bg,
+        up:    getBiomeTiles(getBiomeAt(cx, cy - 1)).bg,
+        down:  getBiomeTiles(getBiomeAt(cx, cy + 1)).bg,
+    };
 
     if (biome === 'rift') {
         for(let y=0; y<CHUNK_SIZE; y++) {
@@ -385,28 +402,63 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         return { id: `chunk_${cx}_${cy}`, name: "THE RIFT CORE", layout, portals, wildLevelRange: [90, 100], biome, trainers, npcs, interactables, x: cx, y: cy };
     }
 
-    // 2. Fill base terrain with local noise for variety
+    // 2. Fill base terrain with local noise + neighbor-aware edge blending.
+    //
+    // Edge blending: for tiles within BLEND_RADIUS of a chunk boundary, we
+    // probabilistically swap in the neighbor biome's base tile so transitions
+    // look natural instead of guillotine-sharp. Probability ramps from ~80% at
+    // the edge down to 0 at BLEND_RADIUS.
     const localNoise = new Noise2D(seed);
+    const BLEND_RADIUS = 3;
     for(let y=0; y<CHUNK_SIZE; y++) {
         for(let x=0; x<CHUNK_SIZE; x++) {
             const nv = localNoise.noise(x * 0.15, y * 0.15);
             layout[y][x] = bgTile;
-            
-            // Natural patches based on noise
-            if (nv > 0.35) layout[y][x] = patchTile;
-            
-            // Biome specific noise features
+
+            // Edge blending -- pick whichever cardinal edge is closest and
+            // push in the neighbor's bg a jittered fraction of the time.
+            if (biome !== 'rift') {
+                const edgeDistLeft = x;
+                const edgeDistRight = CHUNK_SIZE - 1 - x;
+                const edgeDistUp = y;
+                const edgeDistDown = CHUNK_SIZE - 1 - y;
+                const minDist = Math.min(edgeDistLeft, edgeDistRight, edgeDistUp, edgeDistDown);
+                if (minDist < BLEND_RADIUS) {
+                    let neighborTile = bgTile;
+                    if (minDist === edgeDistLeft) neighborTile = neighborBg.left;
+                    else if (minDist === edgeDistRight) neighborTile = neighborBg.right;
+                    else if (minDist === edgeDistUp) neighborTile = neighborBg.up;
+                    else neighborTile = neighborBg.down;
+                    if (neighborTile !== bgTile) {
+                        const blendP = (BLEND_RADIUS - minDist) / BLEND_RADIUS * 0.8;
+                        if (rng.next() < blendP) layout[y][x] = neighborTile;
+                    }
+                }
+            }
+
+            // Natural patches based on noise (applied on top of blending)
+            if (nv > 0.35 && layout[y][x] === bgTile) layout[y][x] = patchTile;
+
             if (biome === 'lake') {
                 if (nv < -0.4) layout[y][x] = 3; // Water
                 else if (nv < -0.2) layout[y][x] = 25; // Sand beach
             }
             if (biome === 'forest' && nv > 0.6) layout[y][x] = 1; // Dense trees
             if (biome === 'snow' && nv < -0.5) layout[y][x] = 27; // Ice patches
-            
-            // Border walls (less rigid)
+            // Deep canyon / desert chunks get occasional lava pockets (tile 28).
+            // These are walkable but deal damage each step -- see lava hazard
+            // handler in App.tsx. Spawns only past distance 20 to avoid
+            // punishing early game.
+            const dist = Math.sqrt(cx * cx + cy * cy);
+            if ((biome === 'canyon' || biome === 'desert') && dist > 20 && layout[y][x] === bgTile) {
+                if (nv > 0.78) layout[y][x] = 28;
+            }
+
+            // Border walls (less rigid). Skip if we already blended in a
+            // neighbor tile -- walls would undo the transition.
             if (x === 0 || x === CHUNK_SIZE-1 || y === 0 || y === CHUNK_SIZE-1) {
                 const borderNoise = localNoise.noise(x * 0.5, y * 0.5);
-                if (borderNoise > -0.3) layout[y][x] = wallTile;
+                if (borderNoise > -0.3 && layout[y][x] === bgTile) layout[y][x] = wallTile;
             }
         }
     }
@@ -442,24 +494,36 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         }
     }
 
-    // Rift Stability reduces level scaling (dist * 1.8 becomes dist * (1.8 - stability))
-    const scaleFactor = Math.max(0.5, 1.8 - (riftStability * 1.0)); // Each point reduces scale significantly
-    const levelBase = Math.floor(dist * scaleFactor) + 5;
+    // Rift Stability reduces level scaling. We tuned the base factor down to
+    // 1.2 (from 1.8) so that the wild-range stored on the chunk tracks the
+    // smooth `getWildLevelCap(badges, distance)` curve in utils/progression --
+    // otherwise the upper bound hits the badge-based clamp early and flattens
+    // into a single level, killing pool variety.
+    const scaleFactor = Math.max(0.4, 1.2 - (riftStability * 0.6));
+    // Starter-area floor: dist 0 → level 2 pool, so a level-5 starter is on
+    // top. Each chunk of distance adds ~1.2 levels until the per-tier cap.
+    const levelBase = Math.max(2, Math.floor(dist * scaleFactor) + 2);
 
     // 4. Procedural POIs (Grouped and logical)
     const poiRoll = rng.next();
     
-    // Always add some random clutter/interactables regardless of main POI
-    for (let i = 0; i < 3; i++) {
+    // Always add some random clutter/interactables regardless of main POI.
+    // We bumped iterations from 3 -> 5 now that extra decorative props
+    // (benches, lampposts, mailboxes) are in the pool.
+    for (let i = 0; i < 5; i++) {
         const rx = rng.nextInt(2, CHUNK_SIZE - 3);
         const ry = rng.nextInt(2, CHUNK_SIZE - 3);
         if (layout[ry][rx] === bgTile) {
             const clutterRoll = rng.next();
-            if (clutterRoll < 0.1) layout[ry][rx] = 56; // Berry Tree
-            else if (clutterRoll < 0.15) layout[ry][rx] = 53; // Signpost
-            else if (clutterRoll < 0.2) layout[ry][rx] = 12; // Item Ball
-            else if (clutterRoll < 0.22) layout[ry][rx] = 65; // Weather Shrine
-            else if (clutterRoll < 0.24) layout[ry][rx] = 66; // Healing Spring
+            if (clutterRoll < 0.08) layout[ry][rx] = 56; // Berry Tree
+            else if (clutterRoll < 0.13) layout[ry][rx] = 53; // Signpost
+            else if (clutterRoll < 0.18) layout[ry][rx] = 12; // Item Ball
+            else if (clutterRoll < 0.20) layout[ry][rx] = 65; // Weather Shrine
+            else if (clutterRoll < 0.22) layout[ry][rx] = 66; // Healing Spring
+            // Decorative props. More common than POIs so the world feels lived-in.
+            else if (clutterRoll < 0.30 && (biome === 'forest' || biome === 'lake' || biome === 'grassland')) layout[ry][rx] = 98; // Bench
+            else if (clutterRoll < 0.34 && biome !== 'cave') layout[ry][rx] = 97; // Lamppost
+            else if (clutterRoll < 0.37 && biome !== 'cave' && biome !== 'desert') layout[ry][rx] = 99; // Mailbox
         }
     }
 
@@ -554,8 +618,9 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
                 rewardLevel: 50
             }
         };
-    } else if (poiRoll < 0.25 && dist > 10) {
-        // Hidden Grotto
+    } else if (poiRoll < 0.28 && dist > 10) {
+        // Hidden Grotto (previously dead code: its range overlapped Ancient
+        // Library's 0.20-0.25 slice and could never fire. Now 0.25-0.28.)
         const gx = rng.nextInt(3, 15);
         const gy = rng.nextInt(3, 15);
         layout[gy][gx] = 7; // Dark ground
@@ -595,14 +660,31 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         const hy = rng.nextInt(3, 13);
         const houseType = rng.next();
         if (layout[hy] && layout[hy+1] && hx+2 < CHUNK_SIZE) {
+            // Small helper: decorate the tile adjacent to a placed building
+            // with a given prop id, but only if that cell is currently plain
+            // background terrain (so we never stomp paths/water/etc).
+            const decorate = (x: number, y: number, propId: number): void => {
+                if (y >= 0 && y < CHUNK_SIZE && x >= 0 && x < CHUNK_SIZE && layout[y] && layout[y][x] === bgTile) {
+                    layout[y][x] = propId;
+                }
+            };
             if (houseType < 0.3) {
                 layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
                 layout[hy+1][hx] = 33; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 35;
                 portals[`${hx+1},${hy+1}`] = "center,9,8";
+                // Light the entrance and put a mailbox on the path. These make
+                // the Pokemon Center feel like a real destination rather than
+                // three stacked red tiles.
+                decorate(hx - 1, hy + 1, 97);   // lamppost left of building
+                decorate(hx + 3, hy + 1, 97);   // lamppost right of building
+                decorate(hx + 3, hy + 2, 99);   // mailbox at path
             } else if (houseType < 0.6) {
                 layout[hy][hx] = 40; layout[hy][hx+1] = 41; layout[hy][hx+2] = 42;
                 layout[hy+1][hx] = 43; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 45;
                 portals[`${hx+1},${hy+1}`] = "mart,9,8";
+                // Mart gets bench + lamppost for shoppers.
+                decorate(hx - 1, hy + 2, 98);
+                decorate(hx + 3, hy + 1, 97);
             } else if (houseType < 0.8) {
                 // Trade NPC
                 layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
@@ -664,17 +746,28 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
                         "Welcome to my office. Let's discuss your... termination."
                     ];
 
+                    // Prefer the curated competitive loadout (data/gymTeams.ts) when one
+                    // exists for this badge id. Falls back to the legacy themed roster
+                    // below so gyms 9+ (if any are ever added) don't break.
+                    const gymLoadout = getGymTeam(gymBadge);
+                    const team = gymLoadout ? gymLoadout.loadout.map((l) => l.id) : (themes[gymBadge-1] || [rng.nextInt(1, 151), rng.nextInt(1, 151)]);
+                    const level = gymLoadout ? gymLoadout.level : (15 + (gymBadge * 10));
+                    const leaderName = gymLoadout
+                        ? `${gymLoadout.name} "${gymLoadout.title}"`
+                        : (leaderNames[gymBadge-1] || `Leader ${gymBadge}`);
+
                     trainers[`${hx+1},${hy+2}`] = {
                         id: `gym_${cx}_${cy}`,
-                        name: leaderNames[gymBadge-1] || `Leader ${gymBadge}`,
+                        name: leaderName,
                         sprite: [TRAINER_SPRITES.leader1, TRAINER_SPRITES.leader2, TRAINER_SPRITES.leader3, TRAINER_SPRITES.leader4][(gymBadge-1) % 4],
-                        team: themes[gymBadge-1] || [rng.nextInt(1, 151), rng.nextInt(1, 151)],
-                        level: 15 + (gymBadge * 10), // 25, 35, 45...
+                        team,
+                        level,
                         reward: gymBadge * 2000,
                         dialogue: leaderDialogues[gymBadge-1] || "You think you can handle my team? It's a double battle!",
                         winDialogue: "Impressive. Take this badge.",
                         isGymLeader: true,
-                        badgeId: gymBadge
+                        badgeId: gymBadge,
+                        loadout: gymLoadout ? gymLoadout.loadout : undefined,
                     };
                 }
             }
@@ -895,6 +988,341 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         }
     }
 
+    // --- Secondary POI pass ---------------------------------------------------
+    // The original generator used an if/else-if ladder, so each chunk could
+    // only ever hold ONE point of interest (and ~45% held nothing at all).
+    // This secondary pass rolls minor POIs *independently*, so exploration is
+    // denser and co-exists with whatever major POI was just placed.
+    const hasMajorPOI = poiRoll < 0.70;
+    const tryPlace = (predicate: (x: number, y: number) => boolean): { x: number; y: number } | null => {
+        for (let attempt = 0; attempt < 6; attempt++) {
+            const x = rng.nextInt(2, CHUNK_SIZE - 3);
+            const y = rng.nextInt(2, CHUNK_SIZE - 3);
+            if (predicate(x, y)) return { x, y };
+        }
+        return null;
+    };
+    const isOpen = (x: number, y: number) =>
+        layout[y] && (layout[y][x] === bgTile || layout[y][x] === patchTile) &&
+        !interactables[`${x},${y}`] && !npcs[`${x},${y}`] && !trainers[`${x},${y}`];
+
+    // Minor item cache (very common)
+    if (dist > 1 && rng.next() < 0.45) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            layout[spot.y][spot.x] = 12; // Item Ball
+        }
+    }
+
+    // Berry tree (farms/food source, common in non-arid biomes)
+    if (rng.next() < (biome === 'desert' || biome === 'canyon' ? 0.1 : 0.3)) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            layout[spot.y][spot.x] = 56; // Berry Tree
+        }
+    }
+
+    // Bonus signpost with flavor / hint text
+    if (!hasMajorPOI && rng.next() < 0.4) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            const hints = [
+                [`North leads deeper into the ${biome}.`, `Pokemon here average Lv ${Math.max(5, Math.floor(dist * 1.5) + 3)}.`],
+                [`"The stars guide those who wander."`, `Keep exploring -- discovery rewards grow with distance.`],
+                [`Capture Permit milestones every 5 chunks discovered.`, `Save them for rare encounters!`],
+                [`"Beyond 10 badges lies the Rift..."`, `"Or so the elders claim."`],
+            ];
+            layout[spot.y][spot.x] = 53; // Signpost
+            interactables[`${spot.x},${spot.y}`] = { type: 'object', text: hints[rng.nextInt(0, hints.length - 1)] };
+        }
+    }
+
+    // --- Landmark POI pass ----------------------------------------------------
+    // Rare, lore-flavored scenes that tell a tiny environmental story without
+    // overlapping the major POI. All reuse existing tile IDs so no sprite work
+    // is needed. Independent probabilities, only up to ONE landmark per chunk.
+    const tryCluster = (
+        w: number,
+        h: number,
+        predicate: (x: number, y: number) => boolean = () => true
+    ): { x: number; y: number } | null => {
+        for (let attempt = 0; attempt < 10; attempt++) {
+            const x = rng.nextInt(2, CHUNK_SIZE - w - 2);
+            const y = rng.nextInt(2, CHUNK_SIZE - h - 2);
+            let ok = true;
+            for (let dy = 0; dy < h && ok; dy++) {
+                for (let dx = 0; dx < w && ok; dx++) {
+                    if (!isOpen(x + dx, y + dy) || !predicate(x + dx, y + dy)) ok = false;
+                }
+            }
+            if (ok) return { x, y };
+        }
+        return null;
+    };
+
+    let landmarkPlaced = false;
+    const poiTags: string[] = [];
+
+    // Ancient Graveyard -- 4x4 of broken pillars around a central statue,
+    // with an epitaph signpost. Forest / canyon, far from origin.
+    if (!landmarkPlaced && dist > 12 && (biome === 'forest' || biome === 'canyon') && rng.next() < 0.08) {
+        const pos = tryCluster(5, 5);
+        if (pos) {
+            for (let dy = 0; dy < 5; dy++) {
+                for (let dx = 0; dx < 5; dx++) {
+                    layout[pos.y + dy][pos.x + dx] = 20; // Stone floor
+                    // Corners & midpoints host pillars / statues for a circle feel
+                    const isEdge = dy === 0 || dy === 4 || dx === 0 || dx === 4;
+                    const isCorner = (dy === 0 || dy === 4) && (dx === 0 || dx === 4);
+                    if (isEdge && !isCorner && rng.next() < 0.5) layout[pos.y + dy][pos.x + dx] = 95; // Broken pillar
+                    if (isCorner) layout[pos.y + dy][pos.x + dx] = 21; // Broken Pillar wall
+                }
+            }
+            const cx2 = pos.x + 2, cy2 = pos.y + 2;
+            layout[cy2][cx2] = 22; // Central Statue
+            const epitaphTile = { x: pos.x + 2, y: pos.y + 4 };
+            layout[epitaphTile.y][epitaphTile.x] = 53; // Signpost
+            const epitaphs = [
+                ["Here rest the fallen of the First Rift War.", "\"May their Pokemon sleep soundly.\""],
+                ["In memory of the Wanderers who never returned.", "Their badges were never recovered."],
+                ["The stones remember each name, though time has worn them smooth.", "Pay your respects and move on."],
+            ];
+            interactables[`${epitaphTile.x},${epitaphTile.y}`] = {
+                type: 'object',
+                text: epitaphs[rng.nextInt(0, epitaphs.length - 1)],
+            };
+            poiTags.push('graveyard');
+            landmarkPlaced = true;
+        }
+    }
+
+    // Shipwreck -- hull of stone on the beach next to water. Lake biome.
+    if (!landmarkPlaced && biome === 'lake' && dist > 8 && rng.next() < 0.12) {
+        const pos = tryCluster(4, 2);
+        if (pos) {
+            // "Hull" planks
+            for (let dx = 0; dx < 4; dx++) {
+                layout[pos.y][pos.x + dx] = 15; // Wood floor / bridge
+                layout[pos.y + 1][pos.x + dx] = 15;
+            }
+            // Mast
+            layout[pos.y][pos.x + 1] = 96; // Intact pillar
+            // Loot
+            layout[pos.y + 1][pos.x + 2] = 12; // Item ball
+            // Message in a bottle as signpost
+            if (isOpen(pos.x + 3, pos.y + 2)) {
+                layout[pos.y + 2][pos.x + 3] = 53;
+                interactables[`${pos.x + 3},${pos.y + 2}`] = {
+                    type: 'object',
+                    text: [
+                        "A weathered journal page washed up here.",
+                        `"Lat ${cx},${cy}. The storm came from nowhere. Crew scattered."`,
+                        "\"If anyone finds this -- check the hold.\"",
+                    ],
+                };
+            }
+            landmarkPlaced = true;
+        }
+    }
+
+    // Meteor Crater -- rift crystals on cracked earth. Canyon / desert.
+    if (!landmarkPlaced && (biome === 'canyon' || biome === 'desert') && dist > 8 && rng.next() < 0.10) {
+        const pos = tryCluster(5, 5);
+        if (pos) {
+            const centerX = pos.x + 2, centerY = pos.y + 2;
+            // Crater floor
+            for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
+                    const ring = Math.max(Math.abs(dx), Math.abs(dy));
+                    const tx = centerX + dx, ty = centerY + dy;
+                    if (ring === 2 && rng.next() < 0.3) layout[ty][tx] = 57; // Small rocks rim
+                    else if (ring <= 1) layout[ty][tx] = 92; // Cracked earth
+                }
+            }
+            layout[centerY][centerX] = 94; // Large rift crystal
+            if (isOpen(centerX + 1, centerY)) layout[centerY][centerX + 1] = 93;
+            if (isOpen(centerX - 1, centerY)) layout[centerY][centerX - 1] = 93;
+            // Lore tablet
+            if (isOpen(centerX, centerY + 2)) {
+                layout[centerY + 2][centerX] = 53;
+                interactables[`${centerX},${centerY + 2}`] = {
+                    type: 'object',
+                    text: [
+                        "A perfect crater, perhaps a kilometer across.",
+                        "The center hums with RIFT ESSENCE.",
+                        "\"It fell when the sky tore open. Not a star. Something older.\"",
+                    ],
+                };
+            }
+            landmarkPlaced = true;
+        }
+    }
+
+    // Crystal Grove -- intact pillars + rift crystals in a ring. Deep forest.
+    if (!landmarkPlaced && biome === 'forest' && dist > 20 && rng.next() < 0.07) {
+        const pos = tryCluster(5, 5);
+        if (pos) {
+            const centerX = pos.x + 2, centerY = pos.y + 2;
+            const ringCoords = [
+                [0, -2], [2, -1], [2, 1], [0, 2], [-2, 1], [-2, -1],
+            ];
+            for (const [dx, dy] of ringCoords) layout[centerY + dy][centerX + dx] = 96; // Intact pillar
+            // Flower mandala inside
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    layout[centerY + dy][centerX + dx] = [75, 76, 77][(Math.abs(dx) + Math.abs(dy)) % 3];
+                }
+            }
+            layout[centerY][centerX] = 94; // Large crystal
+            // Guardian signpost
+            if (isOpen(centerX, centerY + 3)) {
+                layout[centerY + 3][centerX] = 53;
+                interactables[`${centerX},${centerY + 3}`] = {
+                    type: 'object',
+                    text: [
+                        "An old grove, thick with silent power.",
+                        "The pillars hum in a pattern only a careful ear can follow.",
+                        "\"Some say if you stand at the center during a meteor shower, a legendary will appear.\"",
+                    ],
+                };
+            }
+            landmarkPlaced = true;
+        }
+    }
+
+    // Ancient Obelisk -- single tall pillar with cryptic lore. Anywhere deep.
+    if (!landmarkPlaced && dist > 30 && rng.next() < 0.08) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            layout[spot.y][spot.x] = 96; // Intact pillar (the obelisk)
+            // Surround with broken stones
+            const around = [
+                [0, -1], [1, 0], [0, 1], [-1, 0],
+            ];
+            for (const [dx, dy] of around) {
+                const nx = spot.x + dx, ny = spot.y + dy;
+                if (isOpen(nx, ny) && rng.next() < 0.5) layout[ny][nx] = 95; // Broken pillar
+            }
+            // Plaque
+            const plaqueDy = isOpen(spot.x, spot.y + 2) ? 2 : isOpen(spot.x + 1, spot.y) ? 0 : -1;
+            const plaqueDx = plaqueDy === 0 ? 1 : 0;
+            const px = spot.x + plaqueDx, py = spot.y + plaqueDy;
+            if (isOpen(px, py)) {
+                layout[py][px] = 53;
+                const obeliskLore = [
+                    ["\"Before the Pokemon were named,\"", "\"the stars named them first.\""],
+                    ["\"The First Trainer bonded with an Eevee,\"", "\"and the bond became a promise.\""],
+                    ["Deep scratches near the base read:", "\"MEWTWO WAS HERE. MEWTWO IS STILL HERE.\""],
+                    ["\"Ten badges open the gate.\"", "\"Only one heart may cross.\""],
+                ];
+                interactables[`${px},${py}`] = {
+                    type: 'object',
+                    text: obeliskLore[rng.nextInt(0, obeliskLore.length - 1)],
+                };
+            }
+            landmarkPlaced = true;
+        }
+    }
+
+    // Abandoned Camp -- tent + cold campfire + nearby loot + note.
+    if (!landmarkPlaced && dist > 2 && rng.next() < 0.12) {
+        const pos = tryCluster(3, 2);
+        if (pos) {
+            layout[pos.y][pos.x] = 52;          // Tent
+            layout[pos.y][pos.x + 1] = 51;      // Campfire
+            if (isOpen(pos.x + 2, pos.y)) layout[pos.y][pos.x + 2] = 12; // Item ball
+            if (isOpen(pos.x + 1, pos.y + 1)) {
+                layout[pos.y + 1][pos.x + 1] = 53; // Signpost (note)
+                const notes = [
+                    ["A hastily scrawled note:", "\"Heard howling. Left in a hurry. Come find me.\""],
+                    ["A torn map scrap:", `"Dig north of the crossroads -- treasure! -- ${rng.nextInt(100,999)}"`],
+                    ["The ash is cold. Days old.", "\"If you read this, the others didn't make it back.\""],
+                ];
+                interactables[`${pos.x + 1},${pos.y + 1}`] = {
+                    type: 'object',
+                    text: notes[rng.nextInt(0, notes.length - 1)],
+                };
+            }
+            landmarkPlaced = true;
+        }
+    }
+
+    // Wandering Merchant -- NPC with flavorful stock hint. Rare, anywhere.
+    if (!landmarkPlaced && dist > 3 && rng.next() < 0.05) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            npcs[`${spot.x},${spot.y}`] = {
+                id: `merchant_${cx}_${cy}`,
+                name: "Wandering Merchant",
+                sprite: TRAINER_SPRITES.gentleman,
+                dialogue: [
+                    "Travel far, trade well.",
+                    "I'll be somewhere else tomorrow. Today, I'm here.",
+                    "Hit a Poke Mart for supplies -- I only carry stories.",
+                    `"Word from the road: ${['meteor showers boost rock types','a legendary was sighted near the Rift','a trader has a shiny Dratini, but she is picky'][rng.nextInt(0,2)]}."`,
+                ],
+                facing: ['up', 'down', 'left', 'right'][rng.nextInt(0, 3)] as any,
+            };
+            landmarkPlaced = true;
+        }
+    }
+
+    // Lost Traveler -- NPC who gives a modest reward; reuses the 'battle'
+    // challenge scaffold so the existing reward path works.
+    if (!landmarkPlaced && dist > 5 && rng.next() < 0.07) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            npcs[`${spot.x},${spot.y}`] = {
+                id: `lost_${cx}_${cy}`,
+                name: "Lost Traveler",
+                sprite: TRAINER_SPRITES.beauty,
+                dialogue: [
+                    "Thank goodness -- I thought I was done for.",
+                    "I got turned around chasing a Zubat an hour ago.",
+                    "Here, take this for finding me.",
+                ],
+                challenge: {
+                    type: 'collect',
+                    target: 'escort',
+                    rewardPokemonId: 0,
+                    rewardLevel: 0,
+                } as any,
+                facing: 'down',
+            };
+            // A small reward item ball to feel tangible
+            if (isOpen(spot.x + 1, spot.y)) layout[spot.y][spot.x + 1] = 12;
+            landmarkPlaced = true;
+        }
+    }
+
+    // Scarecrow / Spooky Scene -- night atmosphere filler, low-effort but
+    // distinctive. Any non-aquatic biome.
+    if (!landmarkPlaced && biome !== 'lake' && rng.next() < 0.06) {
+        const spot = tryPlace(isOpen);
+        if (spot) {
+            layout[spot.y][spot.x] = 22; // Statue as scarecrow
+            // Scatter mushrooms or rocks around for vibe
+            const around = [[1,0],[-1,0],[0,1],[0,-1]];
+            for (const [dx, dy] of around) {
+                if (rng.next() < 0.4 && isOpen(spot.x + dx, spot.y + dy)) {
+                    layout[spot.y + dy][spot.x + dx] = biome === 'forest' ? 78 : 57;
+                }
+            }
+            if (isOpen(spot.x, spot.y + 2)) {
+                layout[spot.y + 2][spot.x] = 53;
+                interactables[`${spot.x},${spot.y + 2}`] = {
+                    type: 'object',
+                    text: [
+                        "A weathered scarecrow, dressed in a Rocket uniform.",
+                        "\"Someone had a sense of humor out here.\"",
+                    ],
+                };
+            }
+            landmarkPlaced = true;
+        }
+    }
+
     const isBossChunk = dist > 5 && Math.floor(dist) % 10 === 0 && rng.next() < 0.4;
 
     if (isBossChunk) {
@@ -971,7 +1399,8 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         trainers,
         npcs,
         interactables,
-        biome
+        biome,
+        poiTags: poiTags.length > 0 ? poiTags : undefined,
     };
 };
 

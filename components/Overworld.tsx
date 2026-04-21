@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Coordinate, Chunk } from '../types';
 import { MAPS, generateChunk, CHUNK_SIZE } from '../services/mapData';
+import { BiomeAmbient } from './ui/BiomeAmbient';
 
 interface Props {
     p1Pos: Coordinate;
@@ -103,19 +104,24 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
     useEffect(() => {
         const tick = () => {
-            if (mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart') || mapId.includes('cave')) { 
-                setTimeOfDay('day'); 
+            if (mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart') || mapId.includes('cave')) {
+                setTimeOfDay('day');
                 setWeather('none');
-                return; 
+                return;
             }
+            // Stretched to a 4-minute cycle (was 60s). Old loop was jarring --
+            // night would slam shut every minute mid-walk. 240s makes each
+            // phase breathable: day 150s, sunset 30s, night 60s.
             const now = new Date();
-            const sec = Math.floor(now.getTime() / 1000) % 60; 
-            if (sec < 30) setTimeOfDay('day'); else if (sec < 45) setTimeOfDay('sunset'); else setTimeOfDay('night');
+            const CYCLE = 240;
+            const phase = Math.floor(now.getTime() / 1000) % CYCLE;
+            if (phase < 150) setTimeOfDay('day');
+            else if (phase < 180) setTimeOfDay('sunset');
+            else setTimeOfDay('night');
 
-            // Weather based on biome
             if (currentMap?.biome === 'snow') setWeather('snow');
             else if (currentMap?.biome === 'desert') setWeather('sandstorm');
-            else if (currentMap?.biome === 'lake' && sec % 20 < 10) setWeather('rain');
+            else if (currentMap?.biome === 'lake' && phase % 60 < 30) setWeather('rain');
             else setWeather('none');
         };
         const interval = setInterval(tick, 1000);
@@ -176,6 +182,40 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
     if (!currentMap) return <div className="text-white">Map Error: {mapId}</div>;
 
+    // Position hash for deterministic per-tile variation (trees, grass tone,
+    // flower color, prop jitter). Same (x,y,mapId) always returns the same
+    // value so the world doesn't reshuffle as the player moves.
+    const mapSalt = (() => {
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < mapId.length; i++) {
+            h ^= mapId.charCodeAt(i);
+            h = Math.imul(h, 16777619) >>> 0;
+        }
+        return h;
+    })();
+    const tileHash = (x: number, y: number): number => {
+        let h = mapSalt ^ Math.imul(x + 1, 0x27d4eb2d) ^ Math.imul(y + 1, 0x165667b1);
+        h ^= h >>> 13;
+        h = Math.imul(h, 0x5bd1e995);
+        h ^= h >>> 15;
+        return h >>> 0;
+    };
+
+    // Classify a raw tile id into a broad "material" for edge-blend detection.
+    // 0 = grass-like, 1 = sand, 2 = water, 3 = path/stone, 4 = other/solid.
+    const tileMaterial = (t: number | undefined): 0 | 1 | 2 | 3 | 4 => {
+        if (t === undefined) return 4;
+        if (t === 3 || t === 88 || t === 90) return 2;        // water family
+        if (t === 25 || t === 79 || t === 89 || t === 91) return 1; // sand family
+        if (t === 4 || t === 17 || t === 7 || t === 20 || t === 29) return 3; // paths/stone/bridge
+        // Grass-like: raw grass + anything decorated on top of grass-type tiles
+        if (t === 0 || t === 2 || t === 13 || t === 14 || t === 8 ||
+            t === 51 || t === 52 || t === 53 || t === 54 || t === 55 ||
+            t === 56 || t === 57 || t === 58 || t === 59 || t === 66 ||
+            t === 75 || t === 76 || t === 77 || t === 86) return 0;
+        return 4;
+    };
+
     const renderTile = (tile: number, x: number, y: number) => {
         const key = `${x},${y}`;
         let className = "tile-base ";
@@ -183,7 +223,33 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
         const itemFlag = `item_${mapId}_${x}_${y}`;
         const isCollected = storyFlags.includes(itemFlag);
-        const effectiveTile = (tile === 12 && isCollected) ? 4 : tile; 
+        const effectiveTile = (tile === 12 && isCollected) ? 4 : tile;
+
+        // Precompute variants + neighbor materials so individual cases can
+        // opt in without recomputing.
+        const h = tileHash(x, y);
+        const treeVar = h & 3;                   // 0..3
+        const grassTone = (h >>> 3) & 3;         // 0..3
+        const flowerVar = (h >>> 6) % 5;         // 0..4
+        const propJitter = ((h >>> 9) & 15) - 8; // -8..+7 px
+        const nN = layout?.[y - 1]?.[x];
+        const nS = layout?.[y + 1]?.[x];
+        const nE = layout?.[y]?.[x + 1];
+        const nW = layout?.[y]?.[x - 1];
+        const myMat = tileMaterial(effectiveTile);
+        // Edge-blend: decide which sides (if any) need a shoreline/sand halo.
+        // We only draw edges on grass or path tiles bordering sand/water.
+        let edgeClass = '';
+        if (myMat === 0 || myMat === 3) {
+            if (tileMaterial(nN) === 2) edgeClass += ' edge-w-n';
+            if (tileMaterial(nS) === 2) edgeClass += ' edge-w-s';
+            if (tileMaterial(nE) === 2) edgeClass += ' edge-w-e';
+            if (tileMaterial(nW) === 2) edgeClass += ' edge-w-w';
+            if (tileMaterial(nN) === 1) edgeClass += ' edge-s-n';
+            if (tileMaterial(nS) === 1) edgeClass += ' edge-s-s';
+            if (tileMaterial(nE) === 1) edgeClass += ' edge-s-e';
+            if (tileMaterial(nW) === 1) edgeClass += ' edge-s-w';
+        }
 
         const trainer = currentMap.trainers?.[key];
         const npc = currentMap.npcs?.[key];
@@ -252,7 +318,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
         switch (effectiveTile) {
             case 0: className += "tile-grass"; break;
-            case 1: className += "tile-tree tile-grass"; break;
+            case 1: className += `tile-tree tile-tree-v${treeVar} tile-grass`; break;
             case 2: className += "tile-tall-grass tile-grass"; break; 
             case 3: className += "tile-water"; break;
             case 4: className += "tile-path"; break;
@@ -284,21 +350,18 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     </div>
                 );
                 break;
-            case 13: 
-                className += "tile-grass"; 
+            case 13: {
+                className += "tile-grass";
+                // Pick a flower variant from the 5 flower sprites. Keeps the
+                // "pink cluster flower" as the default look but adds daisies,
+                // tulips, bluebells, sunflowers across the map for variety.
+                const flowerSprites = ['flower-cluster-pink', 'flower-daisy', 'flower-tulip-red', 'flower-bluebell', 'flower-sunflower'];
+                const flowerCls13 = flowerSprites[flowerVar];
                 content = (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="relative w-6 h-6">
-                            <div className="absolute inset-0 bg-pink-400 rounded-full shadow-sm"></div>
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-yellow-300 rounded-full"></div>
-                            <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-3 bg-pink-300 rounded-full rotate-0"></div>
-                            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-3 bg-pink-300 rounded-full rotate-0"></div>
-                            <div className="absolute top-1/2 -left-1 -translate-y-1/2 w-3 h-2 bg-pink-300 rounded-full rotate-0"></div>
-                            <div className="absolute top-1/2 -right-1 -translate-y-1/2 w-3 h-2 bg-pink-300 rounded-full rotate-0"></div>
-                        </div>
-                    </div>
-                ); 
+                    <div className={`absolute inset-0 pointer-events-none ${flowerCls13}`} />
+                );
                 break;
+            }
             case 14: className += "tile-ledge tile-grass"; break;
             case 15: className += "tile-wood"; break;
             case 17: className += "tile-checkered"; break;
@@ -306,25 +369,55 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             case 20: className += "tile-stone"; break;
             case 21: className += "tile-pillar tile-stone"; break;
             case 22: className += "tile-statue tile-stone"; break;
-            case 23: className += "tile-tree-dark tile-grass"; break;
+            case 23: className += `tile-tree tile-tree-dark tile-tree-v${treeVar} tile-grass`; break;
             case 24: className += "tile-rock-wall"; break; 
             case 25: className += "tile-sand"; break;
             case 26: className += "tile-snow"; break;
             case 27: className += "tile-ice"; break;
             case 28: className += "tile-lava"; break;
             case 29: className += "tile-bridge"; break;
-            case 30: case 31: case 32: 
-                className += "tile-roof-red tile-grass"; 
-                if (tile === 31) content = <div className="tile-poke-center-sign">P</div>;
+            case 30: case 31: case 32:
+                className += "tile-roof-red tile-grass";
+                // Roof corners: left shingle cap / right shingle cap, center gets emblem.
+                if (tile === 30) className += ' roof-cap-l';
+                if (tile === 32) className += ' roof-cap-r';
+                if (tile === 31) content = (
+                    <div className="tile-poke-center-sign" aria-label="Pokemon Center">
+                        <div className="poke-sign-ball" />
+                        <div className="poke-sign-label">CENTER</div>
+                    </div>
+                );
                 break;
-            case 33: case 35: case 83: case 85: className += "tile-wall-house tile-grass"; break;
+            case 33: case 35: case 83: case 85:
+                className += "tile-wall-house tile-grass";
+                if (tile === 33) className += ' wall-edge-l';
+                if (tile === 35) className += ' wall-edge-r';
+                if (tile === 83) className += ' wall-edge-l wall-base';
+                if (tile === 85) className += ' wall-edge-r wall-base';
+                break;
             case 34: className += "tile-window tile-wall-house tile-grass"; break;
-            case 40: case 41: case 42: 
-                className += "tile-roof-blue tile-grass"; 
-                if (tile === 41) content = <div className="tile-poke-mart-sign">M</div>;
+            case 40: case 41: case 42:
+                className += "tile-roof-blue tile-grass";
+                if (tile === 40) className += ' roof-cap-l';
+                if (tile === 42) className += ' roof-cap-r';
+                if (tile === 41) content = (
+                    <div className="tile-poke-mart-sign" aria-label="Pokemon Mart">
+                        <div className="poke-sign-mart-letter">M</div>
+                        <div className="poke-sign-label poke-sign-label-blue">MART</div>
+                    </div>
+                );
                 break;
-            case 43: case 45: className += "tile-wall-house bg-gray-200 tile-grass"; break;
-            case 80: case 81: case 82: className += "tile-roof-orange tile-grass"; break;
+            case 43: case 45:
+                className += "tile-wall-house wall-mart tile-grass";
+                if (tile === 43) className += ' wall-edge-l';
+                if (tile === 45) className += ' wall-edge-r';
+                break;
+            case 80: case 81: case 82:
+                className += "tile-roof-orange tile-grass";
+                if (tile === 80) className += ' roof-cap-l';
+                if (tile === 82) className += ' roof-cap-r';
+                if (tile === 81) content = <div className="house-chimney" />;
+                break;
             case 50: 
                 className += "tile-mat"; 
                 content = (
@@ -601,10 +694,65 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     </div>
                 );
                 break;
+            case 97: // Lamppost (glows warm at night)
+                className += "tile-grass tile-lamppost";
+                content = (
+                    <>
+                        <div className="lamp-post-stem" />
+                        <div className={`lamp-post-head ${timeOfDay === 'night' ? 'lamp-lit' : ''}`} />
+                        {timeOfDay === 'night' && <div className="lamp-post-glow" aria-hidden="true" />}
+                    </>
+                );
+                break;
+            case 98: // Wooden park bench
+                className += "tile-grass tile-bench";
+                content = (
+                    <>
+                        <div className="bench-seat" />
+                        <div className="bench-back" />
+                        <div className="bench-leg-l" />
+                        <div className="bench-leg-r" />
+                    </>
+                );
+                break;
+            case 99: // Mailbox
+                className += "tile-grass tile-mailbox";
+                content = (
+                    <>
+                        <div className="mailbox-post" />
+                        <div className="mailbox-box" />
+                        <div className="mailbox-flag" />
+                    </>
+                );
+                break;
             default: className += "tile-grass"; break;
         }
 
-        return <div key={`${x}-${y}`} className={className}>{content}</div>;
+        // Grass tone variation so flat pastures don't look like linoleum. Only
+        // plain grass-like tiles get toned; decorated grass tiles already have
+        // their own visual focus so we leave them alone.
+        const applyGrassTone = (effectiveTile === 0);
+        // Edge blend overlay element (drawn last so it layers on top of
+        // pseudo-element props like trees/flowers). Only emitted when needed
+        // to avoid a wasteful DOM node on every tile.
+        const edgeOverlay = edgeClass.length > 0 ? <div className={`tile-edges${edgeClass}`} aria-hidden="true" /> : null;
+        // Occasional ambient butterfly on forest/lake grass during the day.
+        // We keep the spawn rate low (~1/64 tiles) and deterministic so the
+        // world isn't visually noisy.
+        const showButterfly = applyGrassTone && timeOfDay !== 'night' && (currentMap?.biome === 'forest' || currentMap?.biome === 'lake') && ((h & 63) === 7);
+
+        return (
+            <div
+                key={`${x}-${y}`}
+                className={className}
+                data-grass-tone={applyGrassTone ? grassTone : undefined}
+                data-flower-var={flowerVar}
+            >
+                {content}
+                {showButterfly && <div className="tile-butterfly" aria-hidden="true" style={{ top: 8 + ((h >>> 12) & 15), left: 12 + propJitter }} />}
+                {edgeOverlay}
+            </div>
+        );
     };
 
     return (
@@ -1113,6 +1261,477 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     from { opacity: 0.3; transform: scale(0.9); }
                     to { opacity: 0.8; transform: scale(1.1); }
                 }
+
+                /* =========================================================
+                 * Overworld visual upgrade pack (v2)
+                 *
+                 * Grass tone variation, multiple tree variants, richer
+                 * flowers, edge blending between biomes, ambient critters,
+                 * and properly-drawn Pokemon Center / Mart buildings.
+                 * Everything keyed via data-* or extra modifier classes so
+                 * existing maps render unchanged apart from the new polish.
+                 * ========================================================= */
+
+                /* -- Grass tonal variation keyed by data-grass-tone ------ */
+                .tile-grass[data-grass-tone="0"] { background-color: #4ade80; }
+                .tile-grass[data-grass-tone="1"] { background-color: #5fd68e; filter: hue-rotate(-4deg); }
+                .tile-grass[data-grass-tone="2"] { background-color: #6be09a; filter: brightness(1.04); }
+                .tile-grass[data-grass-tone="3"] { background-color: #42c072; filter: brightness(0.94); }
+
+                /* -- Tree variants (oak / pine / round / willow) --------- */
+                /* Variant 0 (oak) keeps the original look. Variants 1-3
+                 * redefine ::after to morph the canopy silhouette. */
+                .tile-tree.tile-tree-v1::after {
+                    background: radial-gradient(circle at 50% 30%, #22c55e, #166534 55%, #064e3b 100%);
+                    clip-path: polygon(50% 0%, 10% 40%, 20% 42%, 6% 70%, 22% 72%, 10% 100%, 90% 100%, 78% 72%, 94% 70%, 80% 42%, 90% 40%);
+                    border-radius: 0;
+                    border: none;
+                    box-shadow: 0 6px 0 #052e16, 0 10px 15px rgba(0,0,0,0.3);
+                    width: 48px;
+                    height: 64px;
+                    left: 0;
+                    bottom: 14px;
+                }
+                .tile-tree.tile-tree-v1::before {
+                    left: 20px;
+                    width: 8px;
+                    background: linear-gradient(90deg, #3e2723, #1a0f0d);
+                }
+                .tile-tree.tile-tree-v2::after {
+                    width: 44px;
+                    height: 44px;
+                    left: 2px;
+                    bottom: 20px;
+                    background: radial-gradient(circle at 32% 30%, #65d98b, #15803d 65%, #14532d);
+                    border-color: #0b2a12;
+                }
+                .tile-tree.tile-tree-v3::after {
+                    width: 60px;
+                    height: 48px;
+                    left: -6px;
+                    bottom: 18px;
+                    border-radius: 60% 60% 50% 50%;
+                    background: radial-gradient(ellipse at 35% 25%, #86efac, #15803d 70%, #14532d);
+                    filter: drop-shadow(0 8px 4px rgba(0,0,0,0.25));
+                }
+                /* Dark (night) forest variant still wins over the color. */
+                .tile-tree-dark::after {
+                    background: radial-gradient(circle at 30% 30%, #1e40af, #172554 70%, #0f172a) !important;
+                    border-color: #020617 !important;
+                }
+                .tile-tree-dark::before {
+                    background: linear-gradient(90deg, #3e2723, #1a0f0d) !important;
+                    border-color: #000 !important;
+                }
+
+                /* -- Flower sprites ------------------------------------- */
+                .flower-cluster-pink {
+                    background:
+                        radial-gradient(circle 3px at 40% 55%, #fbbf24 40%, transparent 41%),
+                        radial-gradient(circle 4px at 40% 55%, #f472b6 60%, transparent 61%),
+                        radial-gradient(circle 3px at 30% 48%, #f9a8d4 60%, transparent 61%),
+                        radial-gradient(circle 3px at 50% 48%, #f9a8d4 60%, transparent 61%),
+                        radial-gradient(circle 3px at 40% 40%, #f9a8d4 60%, transparent 61%),
+                        radial-gradient(circle 3px at 40% 62%, #f9a8d4 60%, transparent 61%);
+                }
+                .flower-daisy {
+                    background:
+                        radial-gradient(circle 3px at 40% 55%, #fbbf24 55%, transparent 56%),
+                        radial-gradient(circle 3px at 30% 48%, #ffffff 65%, transparent 66%),
+                        radial-gradient(circle 3px at 50% 48%, #ffffff 65%, transparent 66%),
+                        radial-gradient(circle 3px at 30% 62%, #ffffff 65%, transparent 66%),
+                        radial-gradient(circle 3px at 50% 62%, #ffffff 65%, transparent 66%);
+                }
+                .flower-tulip-red {
+                    background:
+                        linear-gradient(180deg, transparent 45%, #166534 46%, #166534 100%) no-repeat 40% 0 / 2px 60%,
+                        radial-gradient(ellipse 5px 7px at 40% 42%, #dc2626 65%, transparent 66%);
+                }
+                .flower-bluebell {
+                    background:
+                        radial-gradient(circle 3px at 40% 58%, #2563eb 55%, transparent 56%),
+                        radial-gradient(circle 2px at 32% 50%, #3b82f6 60%, transparent 61%),
+                        radial-gradient(circle 2px at 48% 50%, #60a5fa 60%, transparent 61%);
+                }
+                .flower-sunflower {
+                    background:
+                        linear-gradient(180deg, transparent 50%, #15803d 51%, #15803d 100%) no-repeat 40% 0 / 2px 50%,
+                        radial-gradient(circle 2px at 40% 45%, #78350f 80%, transparent 81%),
+                        radial-gradient(circle 4px at 40% 45%, #fcd34d 70%, transparent 71%);
+                }
+
+                /* -- Edge blending overlays (grass borders water/sand) --- */
+                .tile-edges {
+                    position: absolute;
+                    inset: 0;
+                    pointer-events: none;
+                    z-index: 4;
+                }
+                /* Sandy shorelines */
+                .tile-edges.edge-s-n { box-shadow: inset 0 6px 0 -2px rgba(252, 211, 77, 0.65); }
+                .tile-edges.edge-s-s { box-shadow: inset 0 -6px 0 -2px rgba(252, 211, 77, 0.65); }
+                .tile-edges.edge-s-e { box-shadow: inset -6px 0 0 -2px rgba(252, 211, 77, 0.65); }
+                .tile-edges.edge-s-w { box-shadow: inset 6px 0 0 -2px rgba(252, 211, 77, 0.65); }
+                /* Combined sand edges stack via multiple shadows */
+                .tile-edges.edge-s-n.edge-s-s { box-shadow: inset 0 6px 0 -2px rgba(252, 211, 77, 0.65), inset 0 -6px 0 -2px rgba(252, 211, 77, 0.65); }
+                .tile-edges.edge-s-e.edge-s-w { box-shadow: inset -6px 0 0 -2px rgba(252, 211, 77, 0.65), inset 6px 0 0 -2px rgba(252, 211, 77, 0.65); }
+                /* Watery foam edges: brighter, animated */
+                .tile-edges.edge-w-n::before,
+                .tile-edges.edge-w-s::before,
+                .tile-edges.edge-w-e::before,
+                .tile-edges.edge-w-w::before {
+                    content: '';
+                    position: absolute;
+                    background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(165,243,252,0.0));
+                    animation: foam-bob 2.2s ease-in-out infinite;
+                    pointer-events: none;
+                }
+                .tile-edges.edge-w-n::before { top: 0; left: 0; right: 0; height: 6px; }
+                .tile-edges.edge-w-s::before { bottom: 0; left: 0; right: 0; height: 6px; transform: rotate(180deg); }
+                .tile-edges.edge-w-e::before { top: 0; right: 0; bottom: 0; width: 6px; background: linear-gradient(270deg, rgba(255,255,255,0.9), rgba(165,243,252,0.0)); }
+                .tile-edges.edge-w-w::before { top: 0; left: 0; bottom: 0; width: 6px; background: linear-gradient(90deg, rgba(255,255,255,0.9), rgba(165,243,252,0.0)); }
+                @keyframes foam-bob {
+                    0%, 100% { opacity: 0.85; }
+                    50% { opacity: 0.5; }
+                }
+
+                /* -- Pokemon Center building ---------------------------- */
+                /* Roof corners round off the silhouette and add a golden
+                 * trim strip so the building feels distinct from an
+                 * arbitrary red tile. */
+                .tile-roof-red.roof-cap-l { border-top-left-radius: 12px; }
+                .tile-roof-red.roof-cap-r { border-top-right-radius: 12px; }
+                .tile-roof-red::before {
+                    content: '';
+                    position: absolute;
+                    left: 0; right: 0; bottom: -2px;
+                    height: 6px;
+                    background: linear-gradient(180deg, #fcd34d, #b45309);
+                    border-top: 2px solid #7c2d12;
+                    box-shadow: inset 0 -1px 0 rgba(0,0,0,0.2);
+                    z-index: 2;
+                }
+                .tile-poke-center-sign {
+                    position: absolute;
+                    top: -28px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 2px;
+                    z-index: 25;
+                    pointer-events: none;
+                    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45));
+                }
+                .tile-poke-center-sign::after { content: none; }
+                .tile-poke-center-sign .poke-sign-ball {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 50%;
+                    background:
+                        linear-gradient(180deg, #ef4444 0%, #ef4444 50%, #f9fafb 50%, #f9fafb 100%);
+                    border: 2px solid #1f1f1f;
+                    box-shadow: inset 0 0 0 2px rgba(0,0,0,0.2);
+                    position: relative;
+                }
+                .tile-poke-center-sign .poke-sign-ball::after {
+                    content: '';
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 50%;
+                    background: #f9fafb;
+                    border: 2px solid #1f1f1f;
+                    box-sizing: border-box;
+                }
+                .tile-poke-center-sign .poke-sign-label {
+                    font-family: 'Press Start 2P', system-ui, sans-serif;
+                    font-size: 6px;
+                    letter-spacing: 0.1em;
+                    color: #fff;
+                    background: #b91c1c;
+                    padding: 1px 4px;
+                    border: 1px solid #7f1d1d;
+                    border-radius: 2px;
+                    text-shadow: 1px 1px 0 #000;
+                }
+                .tile-poke-center-sign .poke-sign-label-blue {
+                    background: #1d4ed8;
+                    border-color: #1e3a8a;
+                }
+
+                /* -- Pokemon Mart building ------------------------------ */
+                .tile-roof-blue.roof-cap-l { border-top-left-radius: 12px; }
+                .tile-roof-blue.roof-cap-r { border-top-right-radius: 12px; }
+                .tile-roof-blue::before {
+                    content: '';
+                    position: absolute;
+                    left: 0; right: 0; bottom: -2px;
+                    height: 6px;
+                    background: repeating-linear-gradient(90deg, #1d4ed8 0, #1d4ed8 8px, #f9fafb 8px, #f9fafb 16px);
+                    border-top: 2px solid #1e3a8a;
+                    z-index: 2;
+                }
+                .tile-poke-mart-sign {
+                    position: absolute;
+                    top: -26px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 2px;
+                    z-index: 25;
+                    pointer-events: none;
+                    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+                }
+                .tile-poke-mart-sign::after { content: none; }
+                .tile-poke-mart-sign .poke-sign-mart-letter {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: linear-gradient(180deg, #3b82f6, #1e40af);
+                    border: 2px solid #1e3a8a;
+                    color: white;
+                    font-family: 'Press Start 2P', system-ui, sans-serif;
+                    font-size: 12px;
+                    line-height: 20px;
+                    text-align: center;
+                    font-weight: 900;
+                    box-shadow: inset 0 2px 0 rgba(255,255,255,0.3);
+                }
+
+                /* -- Walls: add trim & frame hints ---------------------- */
+                .tile-wall-house.wall-edge-l { border-left: 4px solid #cbd5e1; }
+                .tile-wall-house.wall-edge-r { border-right: 4px solid #cbd5e1; }
+                .tile-wall-house.wall-base::before {
+                    content: '';
+                    position: absolute;
+                    left: 50%;
+                    bottom: 0;
+                    transform: translateX(-50%);
+                    width: 18px;
+                    height: 28px;
+                    background: linear-gradient(180deg, #7c2d12, #451a03);
+                    border: 2px solid #1c0a02;
+                    border-bottom: none;
+                    border-radius: 3px 3px 0 0;
+                    z-index: 3;
+                }
+                .tile-wall-house.wall-base::after {
+                    content: '';
+                    position: absolute;
+                    left: calc(50% + 6px);
+                    bottom: 12px;
+                    width: 2px;
+                    height: 2px;
+                    background: #fcd34d;
+                    border-radius: 50%;
+                    z-index: 4;
+                }
+                .tile-wall-house.wall-mart { background: #dbeafe; }
+
+                /* Chimney for orange-roof houses */
+                .house-chimney {
+                    position: absolute;
+                    top: -18px;
+                    right: 8px;
+                    width: 12px;
+                    height: 22px;
+                    background: linear-gradient(180deg, #57534e, #292524);
+                    border: 2px solid #1c1917;
+                    border-radius: 2px 2px 0 0;
+                    z-index: 3;
+                }
+                .house-chimney::after {
+                    content: '';
+                    position: absolute;
+                    left: -2px;
+                    top: -8px;
+                    width: 16px;
+                    height: 4px;
+                    background: #1c1917;
+                    border-radius: 1px;
+                }
+
+                /* -- Lamppost ------------------------------------------- */
+                .tile-lamppost { z-index: 6; }
+                .lamp-post-stem {
+                    position: absolute;
+                    left: 50%;
+                    bottom: 6px;
+                    transform: translateX(-50%);
+                    width: 4px;
+                    height: 42px;
+                    background: linear-gradient(180deg, #1f2937, #0f172a);
+                    border-radius: 2px;
+                    box-shadow: 0 3px 0 #0f172a;
+                }
+                .lamp-post-head {
+                    position: absolute;
+                    left: 50%;
+                    top: 4px;
+                    transform: translateX(-50%);
+                    width: 16px;
+                    height: 16px;
+                    background: linear-gradient(180deg, #fde68a 0%, #d97706 70%, #78350f 100%);
+                    border: 2px solid #1f2937;
+                    border-radius: 4px 4px 2px 2px;
+                    box-shadow: 0 2px 0 #0f172a;
+                }
+                .lamp-post-head.lamp-lit {
+                    background: linear-gradient(180deg, #ffffff 0%, #fef08a 50%, #facc15 100%);
+                    box-shadow: 0 0 14px rgba(253, 224, 71, 0.9), 0 0 28px rgba(253, 224, 71, 0.4);
+                }
+                .lamp-post-glow {
+                    position: absolute;
+                    left: 50%;
+                    top: -4px;
+                    transform: translateX(-50%);
+                    width: 56px;
+                    height: 56px;
+                    background: radial-gradient(circle, rgba(253,224,71,0.35) 0%, transparent 65%);
+                    pointer-events: none;
+                    animation: lamp-flicker 2.2s ease-in-out infinite;
+                }
+                @keyframes lamp-flicker {
+                    0%, 100% { opacity: 0.8; }
+                    45% { opacity: 1; }
+                    55% { opacity: 0.7; }
+                }
+
+                /* -- Bench ---------------------------------------------- */
+                .tile-bench { z-index: 4; }
+                .bench-back {
+                    position: absolute;
+                    bottom: 18px;
+                    left: 10px;
+                    right: 10px;
+                    height: 6px;
+                    background: linear-gradient(180deg, #92400e, #78350f);
+                    border: 1px solid #451a03;
+                    border-radius: 2px;
+                }
+                .bench-seat {
+                    position: absolute;
+                    bottom: 12px;
+                    left: 6px;
+                    right: 6px;
+                    height: 6px;
+                    background: linear-gradient(180deg, #b45309, #78350f);
+                    border: 1px solid #451a03;
+                    border-radius: 2px;
+                    box-shadow: 0 2px 0 #451a03;
+                }
+                .bench-leg-l, .bench-leg-r {
+                    position: absolute;
+                    bottom: 4px;
+                    width: 3px;
+                    height: 10px;
+                    background: #451a03;
+                    border-radius: 1px;
+                }
+                .bench-leg-l { left: 12px; }
+                .bench-leg-r { right: 12px; }
+
+                /* -- Mailbox -------------------------------------------- */
+                .tile-mailbox { z-index: 4; }
+                .mailbox-post {
+                    position: absolute;
+                    left: 50%;
+                    bottom: 4px;
+                    transform: translateX(-50%);
+                    width: 4px;
+                    height: 28px;
+                    background: #78350f;
+                    border: 1px solid #451a03;
+                }
+                .mailbox-box {
+                    position: absolute;
+                    left: 50%;
+                    bottom: 30px;
+                    transform: translateX(-50%);
+                    width: 28px;
+                    height: 20px;
+                    background: linear-gradient(180deg, #f87171, #b91c1c);
+                    border: 2px solid #7f1d1d;
+                    border-radius: 12px 12px 2px 2px;
+                    box-shadow: inset 0 2px 0 rgba(255,255,255,0.3);
+                }
+                .mailbox-box::after {
+                    content: '';
+                    position: absolute;
+                    left: 50%;
+                    top: 50%;
+                    transform: translate(-50%, -50%);
+                    width: 14px;
+                    height: 2px;
+                    background: #1f1f1f;
+                    border-radius: 1px;
+                }
+                .mailbox-flag {
+                    position: absolute;
+                    right: 12px;
+                    bottom: 38px;
+                    width: 6px;
+                    height: 6px;
+                    background: #facc15;
+                    border: 1px solid #713f12;
+                    animation: flag-wave 4s ease-in-out infinite;
+                    transform-origin: left center;
+                }
+                @keyframes flag-wave {
+                    0%, 100% { transform: rotate(0deg); }
+                    50% { transform: rotate(-8deg); }
+                }
+
+                /* -- Ambient butterflies ---------------------------------
+                 * Per-tile butterfly sprite. Wings are two radial gradients
+                 * sharing the same background-position so they beat in sync
+                 * via the outer element's scaleX animation. The inner
+                 * wrapper handles the drifting path so the two transforms
+                 * compose without stomping on each other.
+                 * ------------------------------------------------------ */
+                .tile-butterfly {
+                    position: absolute;
+                    width: 14px;
+                    height: 10px;
+                    pointer-events: none;
+                    z-index: 6;
+                    filter: drop-shadow(0 0 2px rgba(255,255,255,0.5));
+                    animation: butterfly-drift 12s ease-in-out infinite;
+                }
+                .tile-butterfly::before, .tile-butterfly::after {
+                    content: '';
+                    position: absolute;
+                    top: 0;
+                    width: 50%;
+                    height: 100%;
+                    background: radial-gradient(ellipse 65% 100% at 70% 50%, #fde68a 65%, transparent 66%);
+                    animation: butterfly-flap 0.25s ease-in-out infinite alternate;
+                    transform-origin: right center;
+                }
+                .tile-butterfly::before { left: 0; }
+                .tile-butterfly::after {
+                    right: 0;
+                    transform-origin: left center;
+                    background: radial-gradient(ellipse 65% 100% at 30% 50%, #fde68a 65%, transparent 66%);
+                }
+                @keyframes butterfly-flap {
+                    from { transform: scaleX(1); }
+                    to   { transform: scaleX(0.35); }
+                }
+                @keyframes butterfly-drift {
+                    0%   { transform: translate(0, 0); }
+                    25%  { transform: translate(6px, -6px); }
+                    50%  { transform: translate(12px, 2px); }
+                    75%  { transform: translate(4px, -4px); }
+                    100% { transform: translate(0, 0); }
+                }
             `}</style>
             
             {showInteractPrompt && interactPos && (
@@ -1133,7 +1752,13 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             )}
 
             <div className="fixed inset-0 z-30 pointer-events-none transition-colors duration-[2000ms] mix-blend-multiply" style={{ backgroundColor: timeOfDay === 'day' ? 'rgba(255,255,255,0)' : timeOfDay === 'sunset' ? 'rgba(253,186,116,0.2)' : 'rgba(15,23,42,0.5)' }}></div>
-            
+
+            <BiomeAmbient
+                biome={currentMap?.biome}
+                timeOfDay={timeOfDay}
+                enabled={!(mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart'))}
+            />
+
             {weather === 'rain' && (
                 <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
                     <div className="absolute inset-0 animate-rain opacity-40" style={{ background: 'repeating-linear-gradient(170deg, transparent, transparent 40px, #94a3b8 40px, #94a3b8 41px)', backgroundSize: '100% 200%' }}></div>
@@ -1184,24 +1809,38 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     );
                 })}
 
-                {/* Local Players (P1 and P2) - Real-time sync */}
-                { p1Pos.x !== -100 && (
-                    <PlayerCharacter 
-                        pos={p1Pos} 
-                        isLocal={myPlayerId === 1} 
-                        label={myPlayerId === 1 ? "Me" : "Host"}
-                        spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/red.png" 
-                    />
-                )}
-                
-                { p2Pos.x !== -100 && (
-                    <PlayerCharacter 
-                        pos={p2Pos} 
-                        isLocal={myPlayerId === 2} 
-                        label={myPlayerId === 2 ? "Me" : "Friend"}
-                        spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/leaf.png" 
-                    />
-                )}
+                {/* Local Players (P1 and P2) - Real-time sync.
+                    In 2-player co-op the partner is rendered via p1/p2 (NOT via remotePlayers),
+                    so we wire onChallenge here too so clicking them opens the Battle/Trade menu. */}
+                { p1Pos.x !== -100 && (() => {
+                    const isMe = myPlayerId === 1;
+                    // If I'm P2 (client), P1 is the host. Find them in remotePlayers.
+                    const partner = !isMe ? Array.from(remotePlayers.entries()).find(([, p]: [string, any]) => p.isHost) : null;
+                    return (
+                        <PlayerCharacter
+                            pos={p1Pos}
+                            isLocal={isMe}
+                            label={isMe ? "Me" : "Host"}
+                            spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/red.png"
+                            onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
+                        />
+                    );
+                })()}
+
+                { p2Pos.x !== -100 && (() => {
+                    const isMe = myPlayerId === 2;
+                    // If I'm P1 (host), P2 is a client. Find them in remotePlayers.
+                    const partner = !isMe ? Array.from(remotePlayers.entries()).find(([, p]: [string, any]) => !p.isHost) : null;
+                    return (
+                        <PlayerCharacter
+                            pos={p2Pos}
+                            isLocal={isMe}
+                            label={isMe ? "Me" : "Friend"}
+                            spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/leaf.png"
+                            onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
+                        />
+                    );
+                })()}
             </div>
         </div>
     );

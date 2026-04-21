@@ -7,6 +7,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <!-- Preload the main menu hero background so the first paint of the title
+         screen arrives with its background already in memory. Other bg_*.png
+         files are fetched on-demand when their battle starts. -->
+    <link rel="preload" as="image" href="/bg/bg_menu.jpg" />
+    <!-- Starter-select sanctuary background. Pre-loaded because the screen
+         is likely the *second* screen a player sees (right after the main
+         menu) and its painted sprite panel should feel instant. -->
+    <link rel="preload" as="image" href="/bg/bg_starter.jpg" />
     <style>
       body {
         font-family: 'Press Start 2P', cursive;
