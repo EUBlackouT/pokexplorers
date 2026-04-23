@@ -3,11 +3,17 @@ import React, { useMemo } from 'react';
 /**
  * Biome-driven ambient particle layer.
  *
- * Renders a pointer-events-none overlay above the tile map (below HUD) with
- * biome-appropriate particles: fireflies in forest at night, pollen motes in
- * lake, ash in canyon, glitching specks in rift, etc. Each particle is one
- * absolutely-positioned div running a pure-transform CSS keyframe from
- * index.css, so the browser can composite them cheaply on the GPU.
+ * Renders a pointer-events-none overlay INSIDE the camera-transformed world
+ * layer (so birds/leaves/etc stay anchored to the map rather than to the
+ * viewport). If we rendered it as `fixed inset-0`, the particles would track
+ * the screen and appear to follow the player as they move -- which looks
+ * extremely unnatural for things like birds.
+ *
+ * Particle positions are expressed as percentages of the mounting container
+ * (the map rectangle), so a bird starting at "30%" stays at the same world
+ * tile regardless of camera pan. The pre-existing animation keyframes still
+ * use vw/vh for flight distance, which works nicely for birds that should
+ * cross a screen's width before looping.
  *
  * Deliberately uses `useMemo` with a stable seed per biome/time-of-day so
  * particle positions don't re-randomize every render (which would cause a
@@ -55,8 +61,8 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                                 key={`ff-${i}`}
                                 className="absolute rounded-full bg-yellow-200"
                                 style={{
-                                    left: `${left}vw`,
-                                    top: `${top}vh`,
+                                    left: `${left}%`,
+                                    top: `${top}%`,
                                     width: size,
                                     height: size,
                                     boxShadow: `0 0 ${size * 3}px rgba(253, 230, 138, 0.9), 0 0 ${size * 6}px rgba(253, 230, 138, 0.4)`,
@@ -81,7 +87,7 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             key={`leaf-${i}`}
                             className="absolute"
                             style={{
-                                left: `${left}vw`,
+                                left: `${left}%`,
                                 top: 0,
                                 width: size,
                                 height: size,
@@ -110,8 +116,8 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             key={`pol-${i}`}
                             className="absolute rounded-full"
                             style={{
-                                left: `${left}vw`,
-                                top: `${top}vh`,
+                                left: `${left}%`,
+                                top: `${top}%`,
                                 width: size,
                                 height: size,
                                 backgroundColor: isDay ? '#fde68a' : '#a5f3fc',
@@ -140,7 +146,7 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             className="absolute rounded-full"
                             style={{
                                 left: 0,
-                                top: `${top}vh`,
+                                top: `${top}%`,
                                 width: size,
                                 height: size,
                                 backgroundColor: '#c2a27b',
@@ -168,7 +174,7 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             className="absolute rounded-full"
                             style={{
                                 left: 0,
-                                top: `${top}vh`,
+                                top: `${top}%`,
                                 width: size,
                                 height: size,
                                 backgroundColor: '#fbbf24',
@@ -194,8 +200,8 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             key={`mote-${i}`}
                             className="absolute rounded-full bg-amber-100"
                             style={{
-                                left: `${left}vw`,
-                                top: `${top}vh`,
+                                left: `${left}%`,
+                                top: `${top}%`,
                                 width: size,
                                 height: size,
                                 opacity: 0.4,
@@ -220,7 +226,7 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             key={`ash-${i}`}
                             className="absolute"
                             style={{
-                                left: `${left}vw`,
+                                left: `${left}%`,
                                 top: 0,
                                 width: size,
                                 height: size,
@@ -250,8 +256,8 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             key={`rift-${i}`}
                             className="absolute"
                             style={{
-                                left: `${left}vw`,
-                                top: `${top}vh`,
+                                left: `${left}%`,
+                                top: `${top}%`,
                                 width: size,
                                 height: size,
                                 backgroundColor: color,
@@ -278,8 +284,8 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                                 key={`fly-${i}`}
                                 className="absolute rounded-full bg-yellow-100"
                                 style={{
-                                    left: `${left}vw`,
-                                    top: `${top}vh`,
+                                    left: `${left}%`,
+                                    top: `${top}%`,
                                     width: 2,
                                     height: 2,
                                     boxShadow: '0 0 6px rgba(253, 224, 71, 0.8)',
@@ -303,7 +309,7 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                             key={`bird-${i}`}
                             className="absolute"
                             style={{
-                                top: `${top}vh`,
+                                top: `${top}%`,
                                 left: 0,
                                 width: size,
                                 height: Math.ceil(size * 0.35),
@@ -319,46 +325,6 @@ const buildDef = (biome: string, timeOfDay: TimeOfDay): ParticleDef | null => {
                                     background:
                                         'radial-gradient(ellipse 45% 100% at 20% 50%, rgba(30,41,59,0.85) 65%, transparent 66%), radial-gradient(ellipse 45% 100% at 80% 50%, rgba(30,41,59,0.85) 65%, transparent 66%)',
                                     animation: 'bird-flap 0.4s ease-in-out infinite alternate',
-                                }}
-                            />
-                        </div>
-                    );
-                },
-            };
-
-        case 'grassland':
-        case 'plains':
-            if (timeOfDay === 'night') return null;
-            // Butterfly drift at head-height. Complements the per-tile
-            // butterflies the Overworld itself draws in grass cells.
-            return {
-                count: 8,
-                render: (i, rand) => {
-                    const top = 20 + rand(50);
-                    const delay = rand(12);
-                    const dur = 14 + rand(10);
-                    const hueColor = ['#fde68a', '#f472b6', '#fbbf24', '#a78bfa'][Math.floor(rand(4))];
-                    return (
-                        <div
-                            key={`btf-${i}`}
-                            className="absolute"
-                            style={{
-                                top: `${top}vh`,
-                                left: 0,
-                                width: 12,
-                                height: 8,
-                                opacity: 0,
-                                animation: `bird-glide ${dur}s linear ${delay}s infinite`,
-                                pointerEvents: 'none',
-                            }}
-                        >
-                            <div
-                                style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    background: `radial-gradient(ellipse 40% 90% at 25% 50%, ${hueColor} 65%, transparent 66%), radial-gradient(ellipse 40% 90% at 75% 50%, ${hueColor} 65%, transparent 66%)`,
-                                    filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.3))',
-                                    animation: 'bird-flap 0.25s ease-in-out infinite alternate',
                                 }}
                             />
                         </div>
@@ -389,5 +355,9 @@ export const BiomeAmbient: React.FC<BiomeAmbientProps> = ({ biome, timeOfDay, en
     }, [biome, timeOfDay, enabled]);
 
     if (!particles) return null;
-    return <div className="fixed inset-0 z-30 pointer-events-none overflow-hidden">{particles}</div>;
+    // IMPORTANT: `absolute inset-0` (not `fixed`) so this layer lives inside
+    // the camera-transformed world container and pans with the map. Using
+    // `fixed` here made birds/leaves appear glued to the screen and they
+    // would visibly follow the player around.
+    return <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">{particles}</div>;
 };

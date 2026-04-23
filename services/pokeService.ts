@@ -6,6 +6,72 @@ import { POKEMON_ASSIGNMENTS } from '../data/assignments';
 
 const BASE_URL = 'https://pokeapi.co/api/v2';
 
+/**
+ * Normalize a Pokemon name for robust cross-source matching.
+ *
+ * POKEMON_ASSIGNMENTS uses pretty names ("Farfetch'd", "Mr. Mime",
+ * "Tapu Koko", "Nidoran♀"). PokeAPI's `data.name` uses slug-case
+ * ("farfetchd", "mr-mime", "tapu-koko", "nidoran-f").
+ *
+ * We collapse both into a single canonical form so the assignment lookup
+ * doesn't silently miss on typographic apostrophes or dotted names.
+ */
+export const normalizePokeName = (raw: string): string => {
+    return raw
+        .toLowerCase()
+        .replace(/♀/g, '-f')
+        .replace(/♂/g, '-m')
+        .replace(/['’`.]/g, '')   // strip both ASCII and typographic apostrophes + dots
+        .replace(/\s+/g, '-')      // "Tapu Koko" -> "tapu-koko"
+        .replace(/-+/g, '-')       // collapse double hyphens
+        .replace(/^-|-$/g, '');    // trim leading/trailing
+};
+
+/**
+ * Type-based fallback pool for custom abilities.
+ *
+ * Every ability listed here MUST have a corresponding branch in the battle
+ * engine (App.tsx / pokeService damageCalc). If you add an ability here,
+ * make sure it's wired up — otherwise the Pokemon will display the name on
+ * hover/summary but nothing will actually happen in combat.
+ *
+ * Used only when POKEMON_ASSIGNMENTS has no explicit entry for a species.
+ * Draws from primary type first, then secondary as a bonus. Returns the
+ * merged pool (primary listed twice so it weights more in random picks).
+ */
+const TYPE_ABILITY_POOL: Record<string, string[]> = {
+    normal: ['Symmetry', 'BuddyBerry', 'HarmonyEngine', 'LuckyBark', 'MoonCharm'],
+    fire: ['EmberSpark', 'OverheatDrive', 'CrossfireBurn', 'HotBlooded', 'FlameBody'],
+    water: ['RainDishPlus', 'TideTurner', 'Shoreline', 'WhirlpoolHeart', 'WaterVeil'],
+    electric: ['Overclock', 'StaticCharge', 'Battery', 'StormRider', 'Sparkjump'],
+    grass: ['ChlorophyllPlus', 'Lifebloom', 'PollenSurge', 'VerdantVeil', 'Photosynth'],
+    ice: ['FrostbiteSkin', 'GlacialAura', 'Bleakwind', 'SnowWarning'],
+    fighting: ['Wardrum', 'Vanguard', 'Moxie', 'HotBlooded', 'ContactCharge'],
+    poison: ['VenomousAura', 'Corrosion', 'SmogLung', 'VenomSpite'],
+    ground: ['SandStream', 'MudForged', 'StoneHarvest'],
+    flying: ['Jetstream', 'Slipstream', 'StormRider'],
+    psychic: ['SyncBoost', 'MoonCharm', 'MirrorFocus', 'MysticFog'],
+    bug: ['PollenSurge', 'AmberCore', 'TwinFocus', 'ShellCurl'],
+    rock: ['HeavyStance', 'IronBlood', 'Sturdy', 'ShellCurl', 'StoneHarvest'],
+    ghost: ['CursedBody', 'GrimRecovery', 'NightBloom', 'DreamEater'],
+    dragon: ['ScaleAegis', 'StormRider', 'FusionMaster'],
+    dark: ['SyncPulse', 'Intimidate', 'GrimRecovery', 'NightBloom'],
+    steel: ['IronBlood', 'HeavyStance', 'FusionMaster', 'Sturdy'],
+    fairy: ['MoonCharm', 'RuneBloom', 'MysticFog', 'VerdantVeil'],
+};
+
+const getTypeFallbackAbilities = (types: string[]): string[] => {
+    const primary = types[0]?.toLowerCase() ?? '';
+    const secondary = types[1]?.toLowerCase() ?? '';
+    const pool: string[] = [];
+    if (TYPE_ABILITY_POOL[primary]) pool.push(...TYPE_ABILITY_POOL[primary]);
+    // Weight secondary type half as much -- only push one entry from it.
+    if (secondary && TYPE_ABILITY_POOL[secondary]?.length) {
+        pool.push(TYPE_ABILITY_POOL[secondary][0]);
+    }
+    return pool;
+};
+
 // --- CONSTANTS ---
 
 const NATURES: Nature[] = [
@@ -55,7 +121,7 @@ const LEGENDARY_IDS = [
 ];
 
 // Biome-Specific Pools - Categorized for better distribution
-const BIOME_POOLS: Record<string, number[]> = {
+export const BIOME_POOLS: Record<string, number[]> = {
     forest: [
         1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 29, 32, 33, 34, 43, 44, 45, 46, 47, 48, 49, 69, 70, 71, 102, 103, 114, 123, 127, 152, 153, 154, 161, 162, 163, 164, 165, 166, 167, 168, 177, 178, 187, 188, 189, 190, 191, 192, 193, 204, 205, 214, 252, 253, 254, 261, 262, 263, 264, 265, 266, 267, 268, 269, 273, 274, 275, 276, 277, 285, 286, 287, 288, 289, 290, 291, 313, 314, 315, 331, 332, 357, 358, 387, 388, 389, 396, 397, 398, 401, 402, 406, 407, 412, 413, 414, 415, 416, 420, 421, 495, 496, 497, 506, 507, 508, 511, 512, 540, 541, 542, 543, 544, 545, 546, 547, 548, 549, 585, 586, 590, 591, 650, 651, 652, 659, 660, 664, 665, 666, 672, 673, 708, 709, 722, 723, 724, 731, 732, 733, 734, 735, 753, 754, 755, 756, 761, 762, 763, 810, 811, 812, 819, 820, 824, 825, 826, 829, 830, 906, 907, 908, 915, 916, 928, 929, 930
     ], 
@@ -73,6 +139,16 @@ const BIOME_POOLS: Record<string, number[]> = {
     ],
     town: [
         16, 17, 18, 19, 20, 25, 26, 35, 36, 37, 38, 39, 40, 52, 53, 58, 59, 81, 82, 113, 115, 122, 128, 133, 134, 135, 136, 137, 143, 161, 162, 172, 173, 174, 175, 176, 179, 180, 181, 182, 190, 196, 197, 202, 203, 209, 210, 216, 217, 235, 241, 242, 280, 281, 282, 293, 294, 295, 298, 299, 300, 301, 302, 303, 307, 308, 309, 310, 311, 312, 315, 316, 317, 325, 326, 333, 334, 335, 336, 337, 338, 351, 352, 353, 354, 355, 356, 359, 360, 396, 397, 398, 399, 400, 403, 404, 405, 424, 427, 428, 431, 432, 433, 438, 439, 440, 441, 442, 446, 447, 448, 463, 465, 468, 469, 470, 471, 472, 474, 475, 476, 477, 478, 504, 505, 506, 507, 508, 509, 510, 517, 518, 519, 520, 521, 522, 523, 527, 528, 529, 530, 531, 532, 533, 534, 538, 539, 568, 569, 570, 571, 572, 573, 574, 575, 576, 587, 588, 589, 595, 596, 599, 600, 601, 605, 606, 607, 608, 609, 616, 617, 618, 619, 620, 622, 623, 627, 628, 629, 630, 659, 660, 661, 662, 663, 667, 668, 669, 670, 671, 674, 675, 676, 677, 678, 680, 681, 682, 683, 684, 685, 686, 687, 700, 701, 702, 703, 707, 731, 732, 733, 734, 735, 736, 737, 738, 739, 740, 741, 742, 743, 744, 745, 757, 758, 759, 760, 764, 765, 766, 767, 768, 770, 772, 773, 774, 775, 776, 777, 778, 779, 803, 804, 805, 806, 813, 814, 815, 819, 820, 821, 822, 823, 827, 828, 831, 832, 835, 836, 840, 841, 842, 843, 844, 848, 849, 850, 851, 852, 853, 854, 855, 856, 857, 858, 859, 860, 861, 862, 863, 864, 865, 866, 867, 868, 869, 870, 871, 874, 876, 877, 878, 879, 884, 909, 910, 911, 915, 916, 917, 918, 919, 920, 921, 922, 923, 924, 925, 926, 927, 931, 932, 933, 934, 938, 939, 940, 941, 942, 943, 944, 945, 946, 947, 953, 954, 955, 956, 960, 961, 962, 963, 967, 968, 969, 970, 971, 972, 973, 978, 979, 980, 999, 1000
+    ],
+    // Cave dwellers: bats, rock/ground types, crystal mons, shadowy creatures.
+    // Previously fell back to the forest pool which felt wrong in dark caves.
+    cave: [
+        41, 42, 46, 50, 51, 66, 67, 68, 74, 75, 76, 95, 96, 97, 104, 105, 169, 207, 208, 213, 215, 246, 247, 248, 293, 294, 295, 302, 304, 305, 306, 324, 337, 338, 343, 344, 345, 346, 347, 348, 353, 354, 355, 356, 359, 365, 374, 375, 376, 384, 407, 410, 411, 443, 444, 445, 449, 450, 467, 474, 477, 478, 524, 525, 526, 529, 530, 551, 552, 553, 566, 567, 595, 596, 597, 598, 602, 603, 604, 607, 608, 609, 624, 625, 633, 634, 635, 696, 697, 704, 705, 706, 713, 714, 715, 718, 739, 740, 744, 745, 748, 749, 750, 769, 770, 778, 782, 783, 784, 837, 838, 839, 867, 874, 880, 881, 882, 883, 922, 923, 925, 932, 933, 934, 936, 937, 952, 957, 958, 959, 965, 966, 972, 973
+    ],
+    // Rift: pure legendary / pseudo-legendary roster so the endgame ring feels
+    // like a different game. Balanced by the 8-badge gate in App.tsx.
+    rift: [
+        144, 145, 146, 150, 151, 243, 244, 245, 249, 250, 251, 377, 378, 379, 380, 381, 382, 383, 384, 385, 386, 480, 481, 482, 483, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 638, 639, 640, 641, 642, 643, 644, 645, 646, 647, 648, 649, 716, 717, 718, 719, 720, 721, 772, 773, 785, 786, 787, 788, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 800, 801, 802, 807, 808, 809, 888, 889, 890, 891, 892, 893, 894, 895, 896, 897, 898, 905, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1017, 1024, 1025
     ]
 };
 
@@ -157,10 +233,28 @@ const isContactMove = (move: PokemonMove, attacker?: Pokemon): boolean => {
            !name.includes('eclipse beam');
 };
 
+/**
+ * Returns a Pokémon's effective DEFENSIVE typing. Under Gen 9 Tera rules,
+ * a Terastallized Pokémon's defensive typing is REPLACED by its Tera type
+ * entirely -- so a Tera Water Charizard is a pure Water-type for resist /
+ * weakness / immunity purposes, losing the 4x Rock weakness and Grass
+ * resist alongside it. Offensive STAB is handled separately (see the STAB
+ * block in calculateDamage, which still has access to the original types).
+ */
+export const getEffectiveDefensiveTypes = (mon: Pokemon | undefined): string[] => {
+    if (!mon) return [];
+    if (mon.teraType) return [mon.teraType.toLowerCase()];
+    return mon.types || [];
+};
+
 export const canAfflictStatus = (defender: Pokemon, status: string): boolean => {
     const ability = defender.ability.name;
-    const type1 = defender.types[0];
-    const type2 = defender.types[1];
+    // Use effective defensive types so a Tera Fire mon is burn-immune, a
+    // Tera Electric mon is para-immune, etc. This matches Tera's design:
+    // the defensive typing IS the new type, no lingering originals.
+    const defTypes = getEffectiveDefensiveTypes(defender);
+    const type1 = defTypes[0];
+    const type2 = defTypes[1];
 
     // Type Immunities
     if (status === 'burn' && (type1 === 'fire' || type2 === 'fire')) return false;
@@ -222,7 +316,7 @@ export const getDamageMultiplier = (
       if (atkAbility === 'AbyssalPull' && type === 'water') return 1; // Ignores immunities
       if (defAbility === 'WonderGuard') {
           let eff = 1;
-          defender.types.forEach(dtype => {
+          getEffectiveDefensiveTypes(defender).forEach(dtype => {
               if (attackTypes && attackTypes[dtype.toLowerCase()] !== undefined) eff *= attackTypes[dtype.toLowerCase()];
           });
           if (eff <= 1) return 0;
@@ -231,7 +325,10 @@ export const getDamageMultiplier = (
 
   if (!attackTypes) return 1;
 
-  defender.types.forEach(dtype => {
+  // Tera: defender.types is swapped for the Tera type only (defensively).
+  // Rock moves on a Tera Water Charizard are now 2x (Water weakness) not
+  // 4x; its Fire/Flying resists/weaknesses are gone.
+  getEffectiveDefensiveTypes(defender).forEach(dtype => {
     const dTypeLower = dtype.toLowerCase();
     let mod = attackTypes[dTypeLower];
     
@@ -392,11 +489,15 @@ export const applySecondaryEffect = (
                     result.msg = `${defender.name} is protected by the Terrain!`;
                 } else {
                     // Type immunity checks
-                    const immune = (ailment === 'burn' && defender.types.includes('fire')) ||
-                                   (ailment === 'poison' && (defender.types.includes('poison') || defender.types.includes('steel'))) ||
-                                   (ailment === 'paralysis' && defender.types.includes('electric')) ||
-                                   (ailment === 'freeze' && defender.types.includes('ice')) ||
-                                   (ailment === 'frostbite' && defender.types.includes('ice'));
+                    // Use effective defensive types so Tera Fire blocks
+                    // burn, Tera Electric blocks paralysis, etc. Matches the
+                    // same rule enforced in canAfflictStatus().
+                    const defTypes = getEffectiveDefensiveTypes(defender);
+                    const immune = (ailment === 'burn' && defTypes.includes('fire')) ||
+                                   (ailment === 'poison' && (defTypes.includes('poison') || defTypes.includes('steel'))) ||
+                                   (ailment === 'paralysis' && defTypes.includes('electric')) ||
+                                   (ailment === 'freeze' && defTypes.includes('ice')) ||
+                                   (ailment === 'frostbite' && defTypes.includes('ice'));
                     
                     if (!immune) {
                         result.status = ailment;
@@ -1649,6 +1750,11 @@ export const calculateDamage = (
 
   // --- FUSION MOVE POWER MODIFIERS ---
   if (move.isFusion) {
+      // Chrono Prism: flat +25% power multiplier on any fusion move used by
+      // the holder. Stacks multiplicatively with the per-move conditional
+      // modifiers below.
+      if (attacker.heldItem?.id === 'chrono-prism') power *= 1.25;
+
       if (name.includes('drive kindle') || name.includes('cinder ash') || name.includes('plate ash') || name.includes('tide thorn') || name.includes('mistelder') || name.includes('thorn arc') || name.includes('thorn of slate') || name.includes('mindwyrm purge') || name.includes('dragonheart purge')) {
           if (attacker.status && attacker.status !== 'none') power += 20;
       }
@@ -1681,7 +1787,7 @@ export const calculateDamage = (
       if (name.includes('basalt quake') && weather === 'sand') power += 15;
       if (name.includes('draconic cyclone') && ((isPlayer && tailwindTurns > 0) || (!isPlayer && enemyTailwindTurns > 0))) power += 15;
       if (name.includes('misty reverie') || name.includes('faedrake oath') || name.includes('gleamguard') || name.includes('stance of faerie') || name.includes('shard waltz') || name.includes('blaze blessing') || name.includes('quartz charm') || name.includes('spirit veil') || name.includes('waltz grove') || name.includes('tide lilt') || name.includes('sparklilt') || name.includes('gossamer ward')) {
-          if (defender.types.includes('dragon')) power += 20;
+          if (getEffectiveDefensiveTypes(defender).includes('dragon')) power += 20;
       }
       if (name.includes('scree scatter') && weather === 'sand') power += 15;
       if (name.includes('bedrock stamp') && weather === 'sand') power += 15;
@@ -1711,6 +1817,19 @@ export const calculateDamage = (
       if (myAlly && myAlly.types.some(t => attacker.types.includes(t))) {
           power *= 1.3;
       }
+  }
+  // --- Early-pool signature abilities ---
+  // EmberSpark: the first Fire move each battle gets +25 base power. Flag is
+  // cleared after the hit lands (in the battle engine / App.tsx) so we just
+  // check it here and let App.tsx manage the per-battle reset.
+  if (atkAbility === 'EmberSpark' && moveType === 'fire' && !attacker.usedEmberSpark) {
+      power += 25;
+      attacker.usedEmberSpark = true;
+  }
+  // TwinFocus: if ally targeted the same foe this turn, attacks deal +20%.
+  // App.tsx sets attacker.allySharedTarget before execution.
+  if (atkAbility === 'TwinFocus' && attacker.allySharedTarget) {
+      power *= 1.2;
   }
   if (attacker.nextMoveDamageBoost) {
       power *= 1.3;
@@ -1857,7 +1976,13 @@ export const calculateDamage = (
       else if (critChance === 0.25) critChance = 0.5;
   }
   if (atkAbility === 'BrittleFreeze' && moveType === 'ice') critChance = 0.125;
-  if (atkAbility === 'BladeDance' && move.max_hits && move.max_hits > 1) critChance = 0.25; 
+  if (atkAbility === 'BladeDance' && move.max_hits && move.max_hits > 1) critChance = 0.25;
+  if (atkAbility === 'MoonCharm' && (moveType === 'fairy' || moveType === 'normal')) {
+      // +1 crit stage: 1/16 -> 1/8 -> 1/4 -> 1/2
+      if (critChance === 0.0625) critChance = 0.125;
+      else if (critChance === 0.125) critChance = 0.25;
+      else if (critChance === 0.25) critChance = 0.5;
+  } 
   if (atkAbility === 'Merciless' && defender.status === 'poison') critChance = 1.0;
   if ((move.name.toLowerCase() === 'aether roar' || move.name.toLowerCase() === 'aetherroar') && defender.status) critChance = 1.0;
   
@@ -1879,6 +2004,22 @@ export const calculateDamage = (
   let stabMultiplier = isStab ? 1.5 : 1;
   if (isStab && atkAbility === 'Adaptability') stabMultiplier = 2; 
   if (atkAbility === 'Protean' || atkAbility === 'Libero') stabMultiplier = 1.5; 
+
+  // Tera STAB (Gen 9 rules):
+  //   - move type == tera type AND also in original types: 2.0x (Adaptability-like)
+  //   - move type == tera type, NOT in original types:     1.5x
+  //   - move type != tera type but matches original types: 1.5x  (unchanged)
+  //   - neither match:                                      1.0x
+  // Only overrides when Tera is active AND produces a higher number so
+  // Adaptability + same-type Tera still caps at 2.0x (not 2.25).
+  if (attacker.teraType && move.type) {
+      const moveTypeLower = move.type.toLowerCase();
+      const teraLower = attacker.teraType.toLowerCase();
+      if (moveTypeLower === teraLower) {
+          const teraStab = isStab ? 2.0 : 1.5;
+          if (teraStab > stabMultiplier) stabMultiplier = teraStab;
+      }
+  }
 
   // --- STAT CALCULATION (OFFENSIVE) ---
   const getOffensiveStat = (): number => {
@@ -1996,7 +2137,7 @@ export const calculateDamage = (
       if (defAbility === 'LivingShield' && defender.currentHp === defender.stats.hp) stat *= 2;
       if (defAbility === 'SiltArmor' && weather === 'sand') stat *= 1.5;
       if (defAbility === 'BorealCoat' && weather === 'snow') stat *= 1.5;
-      if (weather === 'snow' && defender.types.includes('ice')) stat *= 1.5;
+      if (weather === 'snow' && getEffectiveDefensiveTypes(defender).includes('ice')) stat *= 1.5;
       
       if (defAbility === 'SolarGuard' && weather === 'sun') {
           // Handled in effectiveness check or final damage
@@ -2291,10 +2432,29 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
     baseStats[s.stat.name] = s.base_stat; 
   });
 
-  // Apply Difficulty Scaling to Base Stats
+  // Apply Difficulty Scaling to Base Stats.
+  //
+  // HISTORY: Previously scaled ALL stats (hp/atk/def/spa/spd/speed) by
+  // `difficulty`. At difficulty 1.7+ that made enemies feel like triple
+  // walls: your damage halved AND their damage doubled AND their HP
+  // inflated -- which read as "the damage formula is lying to me" even
+  // though the formula itself was correct.
+  //
+  // NEW MODEL (Rift Pressure):
+  //   - HP scales fully          -> enemies are still damage sponges
+  //   - Atk / SpA scale fully    -> enemies still hit hard
+  //   - Def / SpD / Speed DO NOT scale
+  //     so player damage output scales 1:1 with the fight, and you
+  //     don't get outsped by wild mons that would normally be slower.
+  //
+  // Net result: enemies read as "tougher and scarier" (bigger HP bars,
+  // bigger hits) instead of "invincible sponges that always go first."
   if (difficulty > 1) {
-      Object.keys(baseStats).forEach(key => {
-          baseStats[key] = Math.floor(baseStats[key] * difficulty);
+      const scaledKeys = ['hp', 'attack', 'special-attack'];
+      scaledKeys.forEach(key => {
+          if (baseStats[key] !== undefined) {
+              baseStats[key] = Math.floor(baseStats[key] * difficulty);
+          }
       });
   }
 
@@ -2342,20 +2502,51 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
   };
 
   // --- CUSTOM ABILITY ASSIGNMENT ---
-  const assignment = POKEMON_ASSIGNMENTS.find(a => a.pokemon.toLowerCase() === data.name.toLowerCase());
+  // Names in POKEMON_ASSIGNMENTS are pretty (e.g. "Farfetch'd", "Mr. Mime",
+  // "Tapu Koko"). PokeAPI's `data.name` is slug-cased (e.g. "farfetchd",
+  // "mr-mime", "tapu-koko"). Normalise both sides so the lookup actually
+  // fires instead of silently falling through to the vanilla ability.
+  const monTypes: string[] = data.types.map((t: any) => t.type.name);
+  const assignment = POKEMON_ASSIGNMENTS.find(
+      a => normalizePokeName(a.pokemon) === normalizePokeName(data.name)
+  );
+  const applyNewAbility = (name: string): boolean => {
+      const newAbilityData = NEW_ABILITIES[name];
+      if (!newAbilityData) return false;
+      ability.name = name;
+      ability.description = newAbilityData.description;
+      ability.category = newAbilityData.category;
+      ability.tags = newAbilityData.tags;
+      ability.notes = newAbilityData.notes;
+      ability.url = '';
+      return true;
+  };
+
   if (assignment && assignment.abilities_new.length > 0) {
-      // If trainer, prioritize the first new ability (often more powerful/interesting)
-      const newAbilityName = isTrainer 
-          ? assignment.abilities_new[0] 
+      const newAbilityName = isTrainer
+          ? assignment.abilities_new[0]
           : assignment.abilities_new[Math.floor(Math.random() * assignment.abilities_new.length)];
-      const newAbilityData = NEW_ABILITIES[newAbilityName];
-      if (newAbilityData) {
-          ability.name = newAbilityName;
-          ability.description = newAbilityData.description;
-          ability.category = newAbilityData.category;
-          ability.tags = newAbilityData.tags;
-          ability.notes = newAbilityData.notes;
-          ability.url = ''; // Custom ability
+      if (!applyNewAbility(newAbilityName) && import.meta.env?.DEV) {
+          console.warn(`[abilities] ${data.name} assignment "${newAbilityName}" has no NEW_ABILITIES entry — skipping.`);
+      }
+  } else {
+      // --- TYPE-BASED FALLBACK ABILITY POOL ---
+      // When there's no hand-written assignment, still give the mon a flavour
+      // custom ability drawn from its primary type. This massively expands
+      // coverage for wild Pokemon without forcing us to maintain a per-species
+      // table. Only abilities that are actually wired into the battle engine
+      // are listed here.
+      const pick = (pool: string[]): string | null => {
+          if (!pool.length) return null;
+          // Deterministic for trainers (always first), random for wilds so
+          // players see variety across catches of the same species.
+          return isTrainer ? pool[0] : pool[Math.floor(Math.random() * pool.length)];
+      };
+      const chosen = pick(getTypeFallbackAbilities(monTypes));
+      if (chosen) {
+          applyNewAbility(chosen);
+      } else if (isTrainer && import.meta.env?.DEV) {
+          console.warn(`[abilities] Trainer ${data.name} has no assignment and no type-fallback pool — vanilla "${ability.name}".`);
       }
   }
 
@@ -2890,19 +3081,48 @@ export const getStarters = async (unlockedPacks: string[] = [], shinyBoost: numb
         }
     });
 
-    while(choices.size < 9) {
+    while(choices.size < 6) {
         const isLucky = Math.random() < 0.15; 
         const pool = isLucky && POOL_LUCKY.length > 0 ? POOL_LUCKY : POOL_REGULAR;
         const pick = pool[Math.floor(Math.random() * pool.length)];
         choices.add(pick);
     }
-    
-    const starters = await Promise.all(Array.from(choices).map(id => fetchPokemon(id, 5, false, shinyBoost)));
+
+    // Packs can overfill the choices set (e.g. 2 fully unlocked packs => 6,
+    // 3 => 9). Trim back to 6 so the Starter Select UI stays visually tight
+    // (fewer but bigger pedestals on one row). Shuffle first so which pack
+    // starters show is randomized rather than always the last pack unlocked.
+    let ids = Array.from(choices);
+    if (ids.length > 6) {
+        ids = ids.sort(() => Math.random() - 0.5).slice(0, 6);
+    }
+
+    const starters = await Promise.all(ids.map(id => fetchPokemon(id, 5, false, shinyBoost)));
     return starters;
 }
 
-export const getWildPokemon = async (count: number, levelRange: [number, number], biome: string = 'forest', tileType: number = 2, shinyBoost: number = 0, difficulty: number = 1): Promise<Pokemon[]> => {
+export const getWildPokemon = async (
+    count: number,
+    levelRange: [number, number],
+    biome: string = 'forest',
+    tileType: number = 2,
+    shinyBoost: number = 0,
+    difficulty: number = 1,
+    /**
+     * If set, every rolled wild will be this species id. Used by the
+     * Mass Outbreak system so a chunk can feel swarmed by a single
+     * species without abandoning its level / shiny-chance math.
+     */
+    overrideSpeciesId?: number,
+): Promise<Pokemon[]> => {
   const promises = Array(count).fill(0).map(() => {
+      // Outbreak short-circuit: honor the override before the rarity
+      // roll so outbreaks stay on-theme even in deep / danger tiles.
+      if (overrideSpeciesId !== undefined) {
+          const lvl = Math.floor(Math.random() * (levelRange[1] - levelRange[0] + 1)) + levelRange[0];
+          return fetchPokemon(overrideSpeciesId, lvl, false, shinyBoost, difficulty);
+      }
+
       let basePool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
       
       // Tile specific overrides
@@ -3097,5 +3317,20 @@ export const hydrateGymTeam = async (
         const mon = await fetchPokemon(ld.id, level, true, 0, difficulty);
         return applyGymLoadout(mon, ld);
     }));
+    // Guarantee unique instance ids even when the loadout uses the same
+    // species twice (e.g. Gym 1's double Zigzagoon). The battle code relies
+    // on `mon.id === other.id` to identify the SAME Pokemon, so duplicate
+    // species ids would cause ally/target lookups to misfire (Symmetry &
+    // BuddyBerry wouldn't see the partner). Offset collisions by a large
+    // constant so downstream sprite code still works; the original dex id
+    // is preserved in mod-1e5 if anything ever needs it.
+    const seen = new Set<number>();
+    for (let i = 0; i < team.length; i++) {
+        const mon = team[i];
+        if (seen.has(mon.id)) {
+            mon.id = mon.id + 100000 * (i + 1);
+        }
+        seen.add(mon.id);
+    }
     return team;
 };

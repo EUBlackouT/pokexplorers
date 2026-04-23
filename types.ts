@@ -305,6 +305,11 @@ export interface Pokemon {
   usedTrickMirror?: boolean;
   usedBackdraftClause?: boolean;
   usedWithstand?: boolean;
+  // Per-battle "one-shot" flags for new early-pool abilities
+  usedShellCurl?: boolean;
+  usedEmberSpark?: boolean;
+  // Per-action hint set by App.tsx when ally shares a target this turn
+  allySharedTarget?: boolean;
   hasMovedThisTurn?: boolean;
   isCursed?: boolean;
   isDestinyBondActive?: boolean;
@@ -328,6 +333,28 @@ export interface Pokemon {
   isHealingWishActive?: boolean;
   isLunarDanceActive?: boolean;
   isYawned?: number;
+
+  // --- Rift Atelier v2 battle transforms ---
+  // These are set by the player via the in-battle POWER menu when the
+  // matching Vault unlock is owned. They persist for the rest of the
+  // current battle unless otherwise noted. All three are off-by-default.
+  /**
+   * Active Terastallization type, e.g. 'fire'. When set, the damage
+   * shim in App.tsx treats the attacker's type list as `[teraType]` for
+   * STAB/defense purposes. One Tera per Pokémon per battle.
+   */
+  teraType?: string;
+  /**
+   * True while Mega Evolution is active for this battle. The damage
+   * shim applies a flat 1.3x attack/spAtk multiplier. Globally one
+   * Mega per battle.
+   */
+  megaActive?: boolean;
+  /**
+   * Next damaging move by this Pokémon deals 1.8x and bypasses
+   * accuracy. Consumed after the next hit. One Z per battle (globally).
+   */
+  zCharged?: boolean;
 }
 
 export type WeatherType = 'none' | 'rain' | 'sun' | 'sand' | 'hail' | 'electric' | 'ashstorm' | 'grass' | 'snow';
@@ -351,7 +378,15 @@ export interface BattleState {
     isSuperEffective?: boolean,
     isNotVeryEffective?: boolean
   } | null;
-  screenShake?: boolean;
+  /** Screen shake intensity for the battle container. `null`/`false` = no shake.
+   *  Strength is driven by damage / crit / effectiveness. Kept as a union
+   *  instead of a number so App.tsx can animate a known set of keyframe
+   *  displacements without repainting motion.config on every frame. */
+  screenShake?: boolean | 'light' | 'medium' | 'heavy';
+  /** Rift Pressure multiplier applied to enemy HP/Atk/SpA at fight start.
+   *  1.0 = vanilla stats; 1.5 = +50% HP & offensive stats; etc.
+   *  Surfaced so the player can see WHY enemies feel tanky/punchy here. */
+  riftPressure?: number;
   battleStreak: number;
   pendingMoves: {
     actorIndex: number; 
@@ -417,6 +452,12 @@ export interface BattleState {
   wishTurns?: number;
   enemyWishTurns?: number;
   backgroundUrl?: string;
+  // --- Rift Atelier v2 transform gating ---
+  // Enforces canon-style "one Mega / one Z per battle" on the player
+  // side. Each flips true the moment the player commits to using the
+  // corresponding transform.
+  playerUsedMegaThisBattle?: boolean;
+  playerUsedZThisBattle?: boolean;
 }
 
 export enum GamePhase {
@@ -429,7 +470,8 @@ export enum GamePhase {
   VICTORY = 'VICTORY',
   SHOP = 'SHOP',
   NETWORK_MENU = 'NETWORK_MENU',
-  PERK_SELECT = 'PERK_SELECT'
+  PERK_SELECT = 'PERK_SELECT',
+  BOUNTY_BOARD = 'BOUNTY_BOARD'
 }
 
 export interface Coordinate {
@@ -442,27 +484,66 @@ export interface MainQuestProgress {
     completedQuests: string[];
 }
 
+/**
+ * RIFT ATELIER v2 -- meta progression system.
+ *
+ * Two currencies drive permanent progression:
+ *   - `riftEssence` is the common currency (wild battles, trainers, permits).
+ *     Spent on Talents (one-time buys) and Keystones (level 0..cap stat
+ *     tracks). Talents and Keystones can be refunded for 80% essence back
+ *     via Refract.
+ *   - `riftTokens` is a rare "chase" currency. Awarded by:
+ *        - beating a Gym Leader (2)
+ *        - beating a Rival milestone (3)
+ *        - catching the species that appears on an Anomaly aura tile (1)
+ *        - catching the Alpha that spawns on an Alpha aura tile (1)
+ *        - the first encounter per Mass Outbreak chunk (1)
+ *        - clearing a Rift Trial gauntlet (2)
+ *     Spent on Vault unlocks, most notably the marquee battle mechanics
+ *     Terastallization / Mega Evolution / Z-Moves.
+ *
+ * `talents` / `vaultUnlocks` are string-id lists (owned flags).
+ * `keystones` is a map of id -> level (0..cap). Old saves' `upgrades`
+ * object is migrated into `keystones` on first load; see `migrateMeta`
+ * in `data/meta.ts`. `upgrades` remains only for backward compatibility
+ * and is no longer written to.
+ */
 export interface MetaState {
     riftEssence: number;
-    unlockedStarters: number[]; // Pokedex IDs
-    unlockedPacks: string[]; // e.g. "sinnoh", "johto"
+    riftTokens: number;
+    unlockedStarters: number[];
+    unlockedPacks: string[]; // legacy -- no longer granted, kept for loading old saves
     mainQuestProgress: MainQuestProgress;
-    upgrades: {
-        startingMoney: number; // 0 to 5
-        attackBoost: number; // 0 to 5 (+5% dmg per level)
-        defenseBoost: number; // 0 to 5 (-5% dmg taken per level)
-        xpMultiplier: number; // 0 to 5
-        startingPermits: number; // 0 to 3 (+1 permit per level)
-        shinyChance: number; // 0 to 5
-        lootQuality: number; // 0 to 5
-        riftStability: number; // 0 to 5 (slower scaling)
-        mercenaryGuild: number; // 0 to 3 (start with random items)
-        evolutionaryInsight: number; // 0 to 5 (cheaper shops)
-        speedBoost: number; // 0 to 5 (+5% speed per level)
-        critBoost: number; // 0 to 5 (+2% crit chance per level)
-        healingBoost: number; // 0 to 5 (+5% healing per level)
-        captureBoost: number; // 0 to 5 (+5% catch rate per level)
-        essenceMultiplier: number; // 0 to 5 (+10% essence per level)
+
+    /** Owned talent ids. One-time purchases with run-wide effects. */
+    talents: string[];
+    /** Owned vault unlock ids (e.g. `tera`, `mega`, `zmove`, `quick_swap`). */
+    vaultUnlocks: string[];
+    /** Keystone id -> current level. Stat boosts; replaces legacy upgrades. */
+    keystones: Record<string, number>;
+
+    /**
+     * @deprecated Legacy upgrades object. Read-only fallback for saves
+     * written before the Rift Atelier v2 redesign. `migrateMeta()` copies
+     * these into `keystones` the first time a v1 save is loaded and this
+     * field is then left at zeroes. New purchases never write here.
+     */
+    upgrades?: {
+        startingMoney: number;
+        attackBoost: number;
+        defenseBoost: number;
+        xpMultiplier: number;
+        startingPermits: number;
+        shinyChance: number;
+        lootQuality: number;
+        riftStability: number;
+        mercenaryGuild: number;
+        evolutionaryInsight: number;
+        speedBoost: number;
+        critBoost: number;
+        healingBoost: number;
+        captureBoost: number;
+        essenceMultiplier: number;
     };
 }
 
@@ -496,6 +577,44 @@ export interface PlayerGlobalState {
     defeatedTrainers: string[]; // List of IDs e.g. "chunk_0_0_7_4"
     storyFlags: string[]; // For basic progression tracking
     nextEncounterRare?: boolean; // If true, next wild battle is rare
+    /**
+     * Rolling "catch combo" counter. Incremented when the player catches the
+     * same species twice in a row, reset when a different species is caught
+     * or the chain is broken (KO / flee / a fight where combo mon fainted).
+     * At higher counts the combo improves IVs, shiny odds, and ball-throw
+     * success on the tracked species -- see the catch handler in App.tsx.
+     */
+    catchCombo?: {
+        speciesId: number;
+        speciesName: string;
+        count: number;
+        best: number; // personal best across the run (for HUD pride)
+    };
+    /**
+     * Active bounty slots posted by the Trainer's Guild at any Pokemon
+     * Center. Progress ticks up via the catch / trainer-defeat / biome-
+     * visit handlers. Up to 3 active at once; completed bounties are
+     * cleared (not archived) and a fresh trio is rolled when the player
+     * interacts with the board again.
+     */
+    bounties?: {
+        active: Array<{
+            id: string;              // uuid-lite, for dedupe
+            templateId: string;      // matches data/bounties.ts template key
+            description: string;     // materialized at roll time (may reference a species)
+            targetSpeciesId?: number;
+            targetType?: string;     // e.g. 'water', 'fire'
+            targetTrainerKind?: string;
+            targetCount: number;
+            progress: number;
+            rewardMoney: number;
+            rewardItemId?: string;
+            rewardPokemonId?: number;
+            rewardLevel?: number;
+            tier: 'common' | 'rare' | 'epic'; // drives reward quality
+        }>;
+        rerollAvailableAt: number; // wall-clock ms; cheap rate-limit on reroll
+    };
     discoveredChunks: string[]; // Track explored areas for Discovery XP
     discoveryPoints: number; // For exploration rewards
     meta: MetaState;
@@ -536,6 +655,25 @@ export interface TrainerData {
     badgeId?: number;
     /** Optional per-mon competitive overrides. Length should equal team.length. */
     loadout?: GymMonLoadout[];
+    /**
+     * Archetype key (e.g. 'hiker', 'bugcatcher'). Used for flavor
+     * dialogue variation and for Battle-Tower-style roster composition.
+     * Undefined on gym leaders and story trainers.
+     */
+    archetype?: string;
+    /**
+     * If set, defeating THIS trainer automatically kicks off a battle
+     * against the referenced trainer id in the SAME map -- the player's
+     * team state (HP, status) is preserved between the fights. Used by
+     * the route-duo "gauntlet" system. The linked trainer is rendered
+     * normally on the overworld; the gauntlet just guarantees order.
+     */
+    gauntletNextTrainerId?: string;
+    /**
+     * Tier label for route/random trainers: 'rookie' | 'veteran' |
+     * 'ace'. Drives visible difficulty stars and reward multipliers.
+     */
+    tier?: 'rookie' | 'veteran' | 'ace' | 'rival';
 }
 
 export interface NPCData {
@@ -557,7 +695,11 @@ export interface NPCData {
 }
 
 export interface InteractableData {
-    type: 'sign' | 'object';
+    // 'gym_compass' is handled specially by the interaction dispatcher in
+    // App.tsx -- its `text` is ignored and instead freshly computed from the
+    // player's current badge count + position so the sign always points to
+    // the next unearned gym.
+    type: 'sign' | 'object' | 'gym_compass';
     text: string[];
 }
 

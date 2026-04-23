@@ -11,6 +11,7 @@ import {
     LeaderboardWindow,
 } from '../../utils/leaderboard';
 import { computeExplorerScore, ScoreInputs, TITLES } from '../../utils/explorerScore';
+import { MenuBackdrop, MenuCard, BrandTitle, BrandEyebrow, PushButton, CloseX, Panel } from '../ui/MenuKit';
 
 interface Props {
     inputs: ScoreInputs;
@@ -84,114 +85,113 @@ export const LeaderboardScreen: React.FC<Props> = ({ inputs, onClose }) => {
     const selfUid = getCurrentUid();
 
     return (
-        <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-sm flex items-center justify-center p-6"
-        >
-            <motion.div
-                initial={{ scale: 0.92, y: 20 }}
-                animate={{ scale: 1, y: 0 }}
-                className="w-full max-w-5xl max-h-[92vh] flex flex-col bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-indigo-400/40 rounded-2xl shadow-2xl overflow-hidden"
-            >
-                <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
-                    <div>
-                        <div className="text-[10px] uppercase tracking-[0.3em] text-indigo-300 flex items-center gap-2">
-                            Explorer Leaderboard
-                            <span className="px-1.5 py-0.5 rounded-sm bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 text-[8px]">
-                                Verified
-                            </span>
-                        </div>
-                        <div className="text-2xl font-black text-white">Who went farthest?</div>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 font-press-start">
+            <MenuBackdrop accent="#6366f1" />
+
+            <MenuCard maxWidth="max-w-5xl" className="max-h-[92vh] flex flex-col">
+                <CloseX onClose={onClose} className="absolute top-3 right-3 z-20" />
+
+                <div
+                    className="flex-shrink-0 px-6 pt-5 pb-4 border-b border-white/5"
+                    style={{
+                        background: 'linear-gradient(90deg, rgba(99,102,241,0.4) 0%, rgba(168,85,247,0.15) 60%, transparent 100%)',
+                    }}
+                >
+                    <div className="flex items-center gap-2">
+                        <BrandEyebrow color="#a5b4fc">Explorer Leaderboard</BrandEyebrow>
+                        <span className="px-1.5 py-0.5 rounded-sm bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 text-[7px] uppercase tracking-widest">
+                            Verified
+                        </span>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-semibold"
-                    >Close</button>
+                    <BrandTitle size="md" className="mt-1">WHO WENT FARTHEST?</BrandTitle>
                 </div>
 
-                <div className="grid grid-cols-5 gap-4 p-6 overflow-hidden flex-1">
-                    <div className="col-span-2 flex flex-col gap-4 overflow-y-auto pr-1">
-                        <div className="rounded-xl bg-gradient-to-br from-indigo-600/30 to-purple-700/30 border border-indigo-300/40 p-4">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 p-6 overflow-hidden flex-1">
+                    <div className="md:col-span-2 flex flex-col gap-3 overflow-y-auto custom-scrollbar pr-1">
+                        {/* Your score -- big hero panel */}
+                        <div
+                            className="rounded-xl border border-indigo-300/40 p-4 overflow-hidden relative"
+                            style={{
+                                background: 'linear-gradient(135deg, rgba(99,102,241,0.35) 0%, rgba(168,85,247,0.25) 100%)',
+                            }}
+                        >
                             <div className="text-[9px] uppercase tracking-[0.25em] text-indigo-200 flex items-center justify-between">
                                 <span>Your Score</span>
                                 {(() => {
                                     const idx = entries.findIndex((e) => e.uid === selfUid);
-                                    if (idx < 0) return <span className="text-gray-400 normal-case tracking-normal text-[10px]">unranked</span>;
+                                    if (idx < 0) return <span className="text-slate-400 normal-case tracking-normal text-[10px]">unranked</span>;
                                     return <span className="text-amber-300 normal-case tracking-normal text-[10px] font-bold">Rank #{idx + 1}</span>;
                                 })()}
                             </div>
-                            <div className="text-5xl font-black tabular-nums text-white leading-none my-1">
+                            <div
+                                className="text-5xl font-black tabular-nums leading-none my-2"
+                                style={{ color: '#ffcb05', textShadow: '0 2px 0 #3c5aa6' }}
+                            >
                                 {score.total.toLocaleString()}
                             </div>
-                            <div className="text-sm font-bold text-amber-300">{score.title}</div>
+                            <div className="text-sm font-black uppercase tracking-wider text-amber-300">{score.title}</div>
                             {score.nextTitle && score.nextTitleAt != null && (
-                                <div className="text-[10px] text-indigo-200/80 mt-1">
+                                <div className="text-[9px] text-indigo-200/80 mt-2 uppercase tracking-wider">
                                     Next: {score.nextTitle} at {score.nextTitleAt} chunks ({Math.max(0, score.nextTitleAt - inputs.farthestDistance)} to go)
                                 </div>
                             )}
                         </div>
 
-                        <div className="rounded-xl bg-black/40 border border-white/10 p-4">
-                            <div className="text-[9px] uppercase tracking-[0.25em] text-gray-400 mb-2">Breakdown</div>
+                        <Panel title="Breakdown" accent="#34d399">
                             <ul className="text-xs text-white/90 space-y-1">
                                 {score.breakdown.map((b) => (
                                     <li key={b.label} className="flex items-center justify-between">
-                                        <span className="text-gray-300">{b.label}</span>
+                                        <span className="text-slate-300">{b.label}</span>
                                         <span className="tabular-nums">
-                                            <span className="text-gray-400">{Math.floor(b.raw).toLocaleString()}</span>
-                                            <span className="mx-1 text-gray-600">×</span>
-                                            <span className="text-gray-400">{b.weight}</span>
-                                            <span className="mx-1 text-gray-600">=</span>
+                                            <span className="text-slate-400">{Math.floor(b.raw).toLocaleString()}</span>
+                                            <span className="mx-1 text-slate-600">×</span>
+                                            <span className="text-slate-400">{b.weight}</span>
+                                            <span className="mx-1 text-slate-600">=</span>
                                             <span className="text-emerald-300 font-bold">{Math.floor(b.contribution).toLocaleString()}</span>
                                         </span>
                                     </li>
                                 ))}
                             </ul>
-                        </div>
+                        </Panel>
 
-                        <div className="rounded-xl bg-black/40 border border-white/10 p-4">
-                            <div className="text-[9px] uppercase tracking-[0.25em] text-gray-400 mb-2">Titles</div>
+                        <Panel title="Titles" accent="#fbbf24">
                             <ul className="text-xs space-y-1">
                                 {TITLES.map((t, i) => {
                                     const unlocked = inputs.farthestDistance >= t.at;
                                     return (
-                                        <li key={t.name} className={`flex items-center justify-between ${unlocked ? 'text-white' : 'text-gray-600'}`}>
-                                            <span className={i === score.titleIndex ? 'font-bold text-amber-300' : ''}>{t.name}</span>
-                                            <span className="tabular-nums text-gray-500">{t.at} chunks</span>
+                                        <li key={t.name} className={`flex items-center justify-between ${unlocked ? 'text-white' : 'text-slate-600'}`}>
+                                            <span className={i === score.titleIndex ? 'font-black text-amber-300' : ''}>{t.name}</span>
+                                            <span className="tabular-nums text-slate-500">{t.at} chunks</span>
                                         </li>
                                     );
                                 })}
                             </ul>
-                        </div>
+                        </Panel>
 
-                        <div className="rounded-xl bg-black/40 border border-white/10 p-4 space-y-2">
-                            <div className="text-[9px] uppercase tracking-[0.25em] text-gray-400">Submit Score</div>
+                        <Panel title="Submit Score" accent="#a78bfa">
                             <input
                                 value={name}
                                 onChange={(e) => setName(e.target.value.slice(0, 20))}
                                 placeholder="Your explorer name"
-                                className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-md text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-400"
+                                className="w-full px-3 py-2 bg-black/50 border border-white/10 rounded-lg text-white text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-400 mb-2"
                             />
-                            <button
+                            <PushButton
                                 onClick={handleSubmit}
                                 disabled={submitting || submitted}
-                                className="w-full py-2 rounded-md bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-400 hover:to-purple-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition"
+                                color="blue"
                             >
-                                {submitting ? 'Verifying...' : submitted ? (verifiedSelf ? 'Submitted \u2713' : 'Submitted (local)') : 'Submit to Leaderboard'}
-                            </button>
+                                {submitting ? 'Verifying…' : submitted ? (verifiedSelf ? 'Submitted ✓' : 'Submitted (local)') : 'Submit'}
+                            </PushButton>
                             {status && (
-                                <div className={`text-[11px] ${status.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{status.msg}</div>
+                                <div className={`text-[10px] mt-2 uppercase tracking-wider ${status.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{status.msg}</div>
                             )}
-                            <div className="text-[9px] text-gray-500 leading-relaxed">
-                                Scores are signed with your Firebase auth token and re-computed on the server.
-                                Tampering is detected and rejected.
+                            <div className="text-[8px] text-slate-500 leading-relaxed mt-2 italic">
+                                Scores are signed with your Firebase auth token and re-computed on the server. Tampering is rejected.
                             </div>
-                        </div>
+                        </Panel>
                     </div>
 
-                    <div className="col-span-3 rounded-xl bg-black/40 border border-white/10 overflow-hidden flex flex-col">
+                    <div className="md:col-span-3 rounded-xl bg-black/40 border border-white/10 overflow-hidden flex flex-col">
                         <div className="px-4 py-2 border-b border-white/10 flex items-center justify-between">
                             <div className="flex items-center gap-2">
                                 {(['all', 'weekly'] as LeaderboardWindow[]).map((w) => (
@@ -255,7 +255,7 @@ export const LeaderboardScreen: React.FC<Props> = ({ inputs, onClose }) => {
                         </div>
                     </div>
                 </div>
-            </motion.div>
-        </motion.div>
+            </MenuCard>
+        </div>
     );
 };

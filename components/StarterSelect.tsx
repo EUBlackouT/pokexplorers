@@ -160,12 +160,13 @@ const Pedestal: React.FC<{
             onMouseEnter={onFocus}
             onFocus={onFocus}
             aria-label={`Choose ${pokemon.name}`}
-            className={`relative flex flex-col items-center justify-end gap-1 px-2 pt-6 pb-3 rounded-2xl transition-all duration-300 outline-none group
-                ${isFocused ? 'scale-110 -translate-y-2' : 'scale-100'}
+            className={`relative flex flex-col items-center justify-end gap-1.5 px-1 pt-6 pb-1 rounded-2xl transition-all duration-300 outline-none group
+                flex-1 min-w-0 basis-0
+                ${isFocused ? 'scale-110 -translate-y-1 z-10' : 'scale-100'}
                 ${assignedTo ? 'drop-shadow-[0_0_25px_rgba(255,203,5,0.8)]' : ''}
                 ${canInteract ? 'cursor-pointer' : 'cursor-default'}
             `}
-            style={{ minWidth: 120 }}
+            style={{ maxWidth: 180 }}
         >
             {/* Player badge above pedestal when locked in */}
             <AnimatePresence>
@@ -182,8 +183,8 @@ const Pedestal: React.FC<{
                 )}
             </AnimatePresence>
 
-            {/* Floating sprite */}
-            <div className={`relative h-28 w-28 md:h-32 md:w-32 flex items-center justify-end transition-all duration-300 ${isFocused ? 'scale-110' : 'group-hover:scale-105'}`}>
+            {/* Floating sprite -- fluid, scales with pedestal width */}
+            <div className={`relative w-full aspect-square max-w-[120px] md:max-w-[144px] flex items-center justify-center transition-all duration-300 ${isFocused ? 'scale-110' : 'group-hover:scale-105'}`}>
                 <PokemonSprite pokemon={pokemon} variant="menu" className="w-full h-full drop-shadow-[0_8px_12px_rgba(0,0,0,0.45)]" />
                 {pokemon.isShiny && (
                     <div className="absolute inset-0 pointer-events-none">
@@ -192,12 +193,12 @@ const Pedestal: React.FC<{
                 )}
             </div>
 
-            {/* Pedestal Poke Ball */}
-            <div className="relative h-10 w-20 flex items-center justify-center">
+            {/* Pedestal Poke Ball -- also fluid */}
+            <div className="relative w-full flex items-center justify-center" style={{ height: 'clamp(40px, 8vw, 56px)' }}>
                 {/* ground shadow */}
-                <div className="absolute bottom-1 w-16 h-2 rounded-full bg-black/40 blur-[2px]" />
+                <div className="absolute bottom-1 w-[65%] h-2.5 rounded-full bg-black/40 blur-[2px]" />
                 {/* ball */}
-                <svg viewBox="0 0 64 64" className={`relative w-14 h-14 drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] transition-transform duration-300 ${isFocused ? 'animate-bounce' : ''}`}>
+                <svg viewBox="0 0 64 64" className={`relative drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] transition-transform duration-300 ${isFocused ? 'animate-bounce' : ''}`} style={{ width: 'clamp(44px, 8vw, 72px)', height: 'clamp(44px, 8vw, 72px)' }}>
                     <defs>
                         <linearGradient id={`ball-red-${pokemon.id}`} x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="#ff5a5a" />
@@ -220,7 +221,7 @@ const Pedestal: React.FC<{
 
             {/* Name label */}
             <div
-                className={`mt-1 text-center font-press-start text-[9px] md:text-[10px] uppercase whitespace-nowrap tracking-wider transition-colors duration-200
+                className={`mt-1 text-center font-press-start text-[10px] md:text-[11px] uppercase whitespace-nowrap tracking-wider transition-colors duration-200
                     ${isFocused ? 'text-yellow-200 drop-shadow-[1px_1px_0_#3c5aa6]' : 'text-white drop-shadow-[1px_1px_0_rgba(0,0,0,0.8)]'}`}
             >
                 {pokemon.name}
@@ -246,9 +247,9 @@ const PreviewDais: React.FC<{ pokemon: Pokemon | null; upgrades: any }> = ({ pok
     const role = pokemon ? deriveRole(pokemon) : null;
 
     return (
-        <div className="w-full flex flex-col md:flex-row items-center md:items-stretch gap-4 md:gap-8">
-            {/* Left: huge sprite */}
-            <div className="relative flex-shrink-0 w-48 h-48 md:w-64 md:h-64 flex items-center justify-center">
+        <div className="w-full flex flex-row items-stretch gap-4 md:gap-6">
+            {/* Left: hero sprite -- big and prominent */}
+            <div className="relative flex-shrink-0 w-40 h-40 md:w-56 md:h-56 flex items-center justify-center">
                 <AnimatePresence mode="wait">
                     {pokemon && (
                         <motion.div
@@ -263,15 +264,15 @@ const PreviewDais: React.FC<{ pokemon: Pokemon | null; upgrades: any }> = ({ pok
                             <PokemonSprite
                                 pokemon={pokemon}
                                 variant="menu"
-                                className="w-48 h-48 md:w-64 md:h-64 drop-shadow-[0_10px_20px_rgba(0,0,0,0.5)]"
+                                className="w-40 h-40 md:w-56 md:h-56 drop-shadow-[0_10px_20px_rgba(0,0,0,0.5)]"
                             />
                         </motion.div>
                     )}
                 </AnimatePresence>
             </div>
 
-            {/* Right: info windowskin */}
-            <div className="relative flex-1 bg-white/95 text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a,0_12px_24px_rgba(0,0,0,0.4)] p-5 md:p-6 min-h-[12rem]">
+            {/* Right: info windowskin -- spacious */}
+            <div className="relative flex-1 bg-white/95 text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a,0_12px_24px_rgba(0,0,0,0.4)] p-4 md:p-5 min-w-0">
                 <AnimatePresence mode="wait">
                     {pokemon ? (
                         <motion.div
@@ -280,23 +281,23 @@ const PreviewDais: React.FC<{ pokemon: Pokemon | null; upgrades: any }> = ({ pok
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -8 }}
                             transition={{ duration: 0.25 }}
-                            className="flex flex-col gap-3"
+                            className="flex flex-col gap-2 md:gap-2.5"
                         >
-                            <div className="flex items-center gap-3 flex-wrap">
-                                <h2 className="font-press-start text-xl md:text-2xl uppercase tracking-wider text-[#1e3a8a]">
+                            {/* Row 1: name + lvl + shiny + type + role */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <h2 className="font-press-start text-lg md:text-2xl uppercase tracking-wider text-[#1e3a8a]">
                                     {pokemon.name}
                                 </h2>
-                                <span className="bg-[#1e3a8a] text-white text-[10px] font-press-start px-2 py-1 rounded">Lv.5</span>
+                                <span className="bg-[#1e3a8a] text-white text-[9px] md:text-[10px] font-press-start px-2 py-0.5 rounded">Lv.5</span>
                                 {pokemon.isShiny && (
-                                    <span className="bg-yellow-400 text-black text-[10px] font-press-start px-2 py-1 rounded animate-pulse">SHINY</span>
+                                    <span className="bg-yellow-400 text-black text-[9px] md:text-[10px] font-press-start px-2 py-0.5 rounded animate-pulse">SHINY</span>
                                 )}
-                            </div>
-
-                            <div className="flex items-center gap-2 flex-wrap">
-                                {pokemon.types.map(t => <TypeBadge key={t} type={t} />)}
+                                <div className="flex items-center gap-1.5 ml-1">
+                                    {pokemon.types.map(t => <TypeBadge key={t} type={t} />)}
+                                </div>
                                 {role && (
                                     <span
-                                        className="ml-auto text-[10px] font-press-start uppercase px-3 py-1 rounded-full text-white shadow-inner"
+                                        className="ml-auto text-[10px] font-press-start uppercase px-3 py-1 rounded-full text-white shadow-inner whitespace-nowrap"
                                         style={{ background: role.color }}
                                     >
                                         {role.tag}
@@ -304,29 +305,37 @@ const PreviewDais: React.FC<{ pokemon: Pokemon | null; upgrades: any }> = ({ pok
                                 )}
                             </div>
 
-                            <div className="text-sm leading-snug text-gray-700">
+                            {/* Row 2: flavor */}
+                            <div className="text-sm md:text-base leading-snug text-gray-700">
                                 {flavorLine(pokemon)}
                             </div>
 
+                            {/* Row 3: ability (inline block but readable) */}
                             <div className="bg-gray-100 border border-gray-300 rounded-lg px-3 py-2">
-                                <div className="flex items-center gap-2 mb-1">
-                                    <span className="text-[9px] font-press-start uppercase tracking-wider text-[#b91c1c]">Ability</span>
-                                    <span className="text-xs font-bold text-gray-900">{titleCase(pokemon.ability.name)}</span>
+                                <div className="flex items-baseline gap-2 mb-0.5">
+                                    <span className="text-[9px] md:text-[10px] font-press-start uppercase tracking-wider text-[#b91c1c]">Ability</span>
+                                    <span className="text-sm font-bold text-gray-900">{titleCase(pokemon.ability.name)}</span>
                                 </div>
-                                <p className="text-[11px] leading-snug text-gray-600 line-clamp-3">
+                                <p className="text-[11px] md:text-xs leading-snug text-gray-600 line-clamp-2">
                                     {pokemon.ability.description || 'No description available.'}
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-1 gap-1.5 mt-1">
+                            {/* Row 4: all 6 stats, paired physical<->special by role
+                             *   HP  | SPE   (vitals)
+                             *   ATK | SPA   (offense)
+                             *   DEF | SPD   (defense) */}
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                                 <StatBar label="HP" value={pokemon.stats.hp} color="#ef4444" />
+                                <StatBar label="SPE" value={getBoostedStat('speed', pokemon.stats.speed)} color="#10b981" />
                                 <StatBar label="ATK" value={getBoostedStat('attack', pokemon.stats.attack)} color="#f97316" />
                                 <StatBar label="SPA" value={getBoostedStat('special-attack', pokemon.stats['special-attack'])} color="#3b82f6" />
-                                <StatBar label="SPE" value={getBoostedStat('speed', pokemon.stats.speed)} color="#10b981" />
+                                <StatBar label="DEF" value={getBoostedStat('defense', pokemon.stats.defense)} color="#a16207" />
+                                <StatBar label="SPD" value={getBoostedStat('special-defense', pokemon.stats['special-defense'])} color="#14b8a6" />
                             </div>
                         </motion.div>
                     ) : (
-                        <div className="flex items-center justify-center h-full text-sm text-gray-500 font-press-start uppercase tracking-wider">
+                        <div className="flex items-center justify-center h-28 text-sm text-gray-500 font-press-start uppercase tracking-wider">
                             Hover a Poké Ball...
                         </div>
                     )}
@@ -596,8 +605,11 @@ export const StarterSelect: React.FC<Props> = ({
                 <div className="absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/55" />
             </div>
 
-            {/* ---------- Top bar ---------- */}
-            <div className="absolute top-0 left-0 right-0 z-10 flex items-start justify-between p-4 md:p-6 pointer-events-none">
+            {/* ---------- Top bar ----------
+             * z-20 (above the centerpiece at z-10) so the Back / Invite
+             * buttons can actually receive clicks; otherwise the full-viewport
+             * centerpiece div paints over them at the same z-index. */}
+            <div className="absolute top-0 left-0 right-0 z-20 flex items-start justify-between p-4 md:p-6 pointer-events-none">
                 <div className="pointer-events-auto">
                     {onBack && (
                         <button
@@ -669,38 +681,49 @@ export const StarterSelect: React.FC<Props> = ({
                 </div>
             </div>
 
-            {/* ---------- Centerpiece (preview + pedestals) ---------- */}
-            <div className="relative z-10 h-full w-full flex flex-col items-center justify-end pb-20 pt-36 md:pt-28 px-4 md:px-10 gap-5 md:gap-8 overflow-y-auto">
-                {/* Preview dais */}
-                <div className="w-full max-w-5xl">
-                    <PreviewDais pokemon={focusedPokemon} upgrades={upgrades} />
-                </div>
+            {/* ---------- Centerpiece (preview + pedestals + action bar) ----------
+             * Strict full-viewport flex column -- no scrollbars. The preview
+             * dais shrinks to its content, the pedestal row takes the remaining
+             * space and wraps to multiple rows if needed, and the action bar
+             * stays anchored at the bottom. Everything is sized to fit 100vh. */}
+            <div className="relative z-10 h-full w-full flex flex-col items-center px-3 md:px-8 pt-[5.5rem] md:pt-[6rem] pb-3 gap-3 md:gap-4">
+                {/* Preview + pedestals are grouped together in a flex-1 area and
+                 * vertically centered. This lands the pedestals on the horizon
+                 * line of the background painting, with the preview card
+                 * floating right above them -- not pinned to the top. */}
+                <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 md:gap-4">
+                    {/* Preview dais */}
+                    <div className="w-full max-w-5xl flex-shrink-0">
+                        <PreviewDais pokemon={focusedPokemon} upgrades={upgrades} />
+                    </div>
 
-                {/* Pedestal row */}
-                <div className="w-full max-w-6xl overflow-x-auto">
-                    <div className="flex items-end justify-center gap-3 md:gap-5 py-4 px-2 min-w-max mx-auto">
-                        {options.map((p, i) => {
-                            const selIndex = selected.indexOf(i);
-                            const assignedTo = selIndex === -1 ? null : (selIndex === 0 ? 1 : 2) as 1 | 2;
-                            return (
-                                <Pedestal
-                                    key={p.id}
-                                    pokemon={p}
-                                    index={i}
-                                    isFocused={focusedIndex === i}
-                                    assignedTo={assignedTo}
-                                    canInteract={isMyTurn}
-                                    onFocus={() => setFocusedIndex(i)}
-                                    onToggle={() => toggleSelection(i)}
-                                />
-                            );
-                        })}
+                    {/* Pedestal row -- single row, children shrink to fit so we never wrap or scroll.
+                     * overflow-visible so focused scale-up + P1/P2 banners don't clip. */}
+                    <div className="w-full max-w-6xl flex-shrink-0 flex items-end justify-center overflow-visible">
+                        <div className="flex flex-nowrap items-end justify-center gap-2 md:gap-4 px-2 py-1 w-full">
+                            {options.map((p, i) => {
+                                const selIndex = selected.indexOf(i);
+                                const assignedTo = selIndex === -1 ? null : (selIndex === 0 ? 1 : 2) as 1 | 2;
+                                return (
+                                    <Pedestal
+                                        key={p.id}
+                                        pokemon={p}
+                                        index={i}
+                                        isFocused={focusedIndex === i}
+                                        assignedTo={assignedTo}
+                                        canInteract={isMyTurn}
+                                        onFocus={() => setFocusedIndex(i)}
+                                        onToggle={() => toggleSelection(i)}
+                                    />
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
 
-                {/* Selection state + action bar */}
-                <div className="w-full max-w-5xl bg-white/95 text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a] px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
-                    <div className="flex items-center gap-4 flex-wrap">
+                {/* Selection state + action bar -- sticks to the bottom */}
+                <div className="w-full max-w-5xl flex-shrink-0 bg-white/95 text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a] px-4 py-2.5 md:px-5 md:py-3 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-3 flex-wrap">
                         <SlotChip label="P1" pokemon={options[selected[0]]} />
                         <SlotChip label="P2" pokemon={options[selected[1]]} />
                     </div>
@@ -714,7 +737,7 @@ export const StarterSelect: React.FC<Props> = ({
                         <button
                             onClick={() => setShowConfirm(true)}
                             disabled={selected.length !== 2 || networkRole === 'client'}
-                            className={`px-6 py-3 rounded-xl font-press-start text-xs uppercase tracking-widest transition-all border-b-4 shadow-md
+                            className={`px-5 py-2.5 rounded-xl font-press-start text-[11px] uppercase tracking-widest transition-all border-b-4 shadow-md
                                 ${selected.length === 2 && networkRole !== 'client'
                                     ? 'bg-gradient-to-b from-yellow-400 to-amber-500 text-black hover:from-yellow-300 border-amber-800 active:translate-y-0.5 active:border-b-2'
                                     : 'bg-gray-300 text-gray-500 border-gray-400 cursor-not-allowed'}`}
@@ -724,7 +747,7 @@ export const StarterSelect: React.FC<Props> = ({
                     </div>
                 </div>
 
-                <p className="text-[9px] font-press-start uppercase tracking-wider text-white/70 drop-shadow-[1px_1px_0_rgba(0,0,0,0.8)]">
+                <p className="text-[8px] font-press-start uppercase tracking-wider text-white/70 drop-shadow-[1px_1px_0_rgba(0,0,0,0.8)] flex-shrink-0">
                     ← → to move · Enter to select · Esc to go back
                 </p>
             </div>

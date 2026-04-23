@@ -210,6 +210,482 @@ const getChunkSeed = (x: number, y: number) => {
 
 export const CHUNK_SIZE = 20;
 
+/**
+ * Deterministic 4-input hash → float in [0,1). Used by `getGrassAura` below
+ * so the aura of a specific tile within a chunk is stable across renders and
+ * across save/reload without storing per-tile state.
+ */
+const hash4 = (a: number, b: number, c: number, d: number): number => {
+    let h = a | 0;
+    h = Math.imul(h ^ (b | 0), 2246822519);
+    h = Math.imul(h ^ (c | 0), 3266489917);
+    h = Math.imul(h ^ (d | 0), 668265263);
+    h ^= h >>> 13;
+    h = Math.imul(h, 374761393);
+    h ^= h >>> 16;
+    return ((h >>> 0) % 100000) / 100000;
+};
+
+/**
+ * A "grass aura" is a per-tile flag that promotes a chunk's homogenous
+ * tall-grass patches into distinct visual + mechanical events. All tiles
+ * default to 'normal'; the rarer tiers give the player something to SEE
+ * and AIM for rather than just waiting for random encounters.
+ *
+ *   normal    (~87%) — baseline wild encounter roll.
+ *   rustling  (~10%) — guaranteed encounter + higher level, shiny odds x4.
+ *   alpha     (~2.5%) — oversized wild, ~5 levels above floor, held item.
+ *   anomaly   (~0.3%) — rare-pool (biome legendary-leaning) encounter with
+ *                      a one-off catch permit refund on success.
+ *
+ * Distribution is biased slightly by distance from origin: far chunks get
+ * a modest bump to alpha / anomaly rolls. Near-spawn players still see
+ * rustling occasionally so the system teaches itself.
+ *
+ * The previous tuning (20 / 8 / 2) felt like a slot machine -- auras were
+ * constantly popping on-screen. These rates are closer to "cool when it
+ * happens" territory: roughly 1 rustle per 10 grass tiles, 1 alpha per 40,
+ * 1 anomaly per 300.
+ */
+export type GrassAura = 'normal' | 'rustling' | 'alpha' | 'anomaly';
+
+export const getGrassAura = (cx: number, cy: number, tx: number, ty: number): GrassAura => {
+    const roll = hash4(cx, cy, tx, ty);
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    // +1.5% alpha / +0.3% anomaly by dist ~60 (capped). Tight so rarity
+    // holds across the whole world instead of scaling up into spam.
+    const depthBonus = Math.min(0.015, dist / 4000);
+
+    // Thresholds from the top. Order matters: anomaly < alpha < rustling.
+    const anomalyThresh = 0.003 + depthBonus * 0.2;              // 0.3% -> 0.6%
+    const alphaThresh   = anomalyThresh + 0.025 + depthBonus;    // ~2.5% -> ~4%
+    const rustleThresh  = alphaThresh + 0.10;                    // +10% (stable)
+    if (roll < anomalyThresh) return 'anomaly';
+    if (roll < alphaThresh)   return 'alpha';
+    if (roll < rustleThresh)  return 'rustling';
+    return 'normal';
+};
+
+/**
+ * ---- MASS OUTBREAK -----------------------------------------------------
+ *
+ * A chunk-wide event where one specific species dominates wild encounters.
+ * Synergy-first design:
+ *   - Stacks trivially with Catch Combo (same species over and over).
+ *   - Biases its roster toward common early species on purpose. The
+ *     "endorphin hit" is the visible commitment you make to chain a
+ *     species for 20+, not scoring a unique catch.
+ *   - Deterministic per (chunk,biome) so a player can bookmark a chunk
+ *     and re-enter later.
+ *
+ * Not placed near spawn (< 3 chunks from origin): the tutorial town reads
+ * weird with an infestation, and the player hasn't learned the chain
+ * system yet.
+ *
+ * Roughly ~2% of chunks are outbreak chunks, modulated slightly by
+ * distance from origin (more far out, capped).
+ */
+const OUTBREAK_CANDIDATES: Record<string, number[]> = {
+    forest: [10, 13, 16, 19, 29, 32, 43, 46, 69, 161, 163, 191, 263, 287, 399, 412, 415, 418, 540, 585, 659, 664, 819],
+    desert: [27, 50, 74, 104, 111, 328, 449, 551, 631, 667, 749, 769, 831],
+    snow:   [86, 90, 124, 220, 361, 459, 471, 613, 712, 872, 974],
+    lake:   [60, 72, 79, 98, 118, 129, 170, 183, 194, 270, 456, 501, 535, 564, 580, 656, 728],
+    canyon: [21, 22, 56, 74, 95, 231, 246, 304, 328, 443, 524, 557, 610, 621, 696, 744],
+    town:   [16, 19, 25, 35, 39, 52, 172, 173, 175, 298],
+    cave:   [41, 74, 95, 169, 207, 246, 293, 304, 337, 343, 353, 524, 595, 696, 713, 867],
+    rift:   [147, 246, 371, 443, 633, 704, 866, 885],
+    center: [], // no outbreaks inside buildings
+    pallet: [],
+    rival:  [],
+    grandma:[],
+    gym:    [],
+};
+
+export const getChunkOutbreak = (cx: number, cy: number, biome: string): { speciesId: number } | null => {
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    if (dist < 3) return null; // keep spawn sane
+    // Use a different nonce than the grass-aura hash so the two systems
+    // decorrelate cleanly.
+    const roll = hash4(cx, cy, 777, 0);
+    const baseChance = 0.02;                                // 2%
+    const depthBonus = Math.min(0.015, dist / 3000);        // up to +1.5% far out
+    if (roll >= baseChance + depthBonus) return null;
+
+    const pool = OUTBREAK_CANDIDATES[biome] || OUTBREAK_CANDIDATES.forest;
+    if (pool.length === 0) return null;
+    const pickIdx = Math.floor(hash4(cx, cy, 555, 1) * pool.length);
+    return { speciesId: pool[pickIdx] };
+};
+
+/**
+ * ---- ROUTE TRAINER SYSTEM ---------------------------------------------
+ *
+ * Deterministic, biome-themed trainers placed inside random chunks to
+ * break up the wild-encounter rhythm between gyms. Design rules:
+ *
+ *   - ~12% of non-POI chunks have 1 trainer, ~2.5% have a duo gauntlet.
+ *   - Not placed inside gym chunks, not near spawn (dist < 3).
+ *   - Archetype matches biome (Hiker in canyon, Fisherman at lake, ...).
+ *   - Every team is AT LEAST 2 mons so the double-battle engine has a
+ *     proper pair. Teams pull from the biome encounter pool so the
+ *     trainer feels "of this place."
+ *   - Level scales with chunk distance, tier slightly above wild floor
+ *     so the fight is a meaningful break from catching.
+ *   - Each trainer is stored on the chunk's `trainers` map; the
+ *     interaction code in App.tsx triggers the fight when the player
+ *     steps on the tile, same path gym leaders / ghost trainers use.
+ *
+ * Gauntlet: if a chunk rolls a duo, the 2nd trainer's id is stored on
+ * the 1st trainer's `gauntletNextTrainerId`. The App-side handler
+ * auto-queues battle B when battle A resolves in victory, WITHOUT
+ * healing the player's team between. Losing the duo = losing both.
+ */
+interface TrainerArchetype {
+    key: string;
+    spriteKey: keyof typeof TRAINER_SPRITES;
+    namePool: string[];
+    greeting: string[];
+    loss: string[];
+    /** Species IDs this archetype loves. Will be mixed w/ the biome pool. */
+    signaturePool: number[];
+}
+
+const ROUTE_ARCHETYPES: Record<string, TrainerArchetype[]> = {
+    forest: [
+        {
+            key: 'bugcatcher', spriteKey: 'bugcatcher',
+            namePool: ['Rick', 'Doug', 'Sammy', 'Ethan', 'Kent'],
+            greeting: ["Hey! My bugs are the coolest!", "You like bugs? Let's battle!", "I caught this one myself!"],
+            loss: ["Aww, you're tough.", "I need better bugs...", "One day I'll win!"],
+            signaturePool: [10, 13, 14, 15, 16, 17, 165, 166, 167, 267, 268, 269, 412, 414, 415, 416],
+        },
+        {
+            key: 'camper', spriteKey: 'camper',
+            namePool: ['Brent', 'Todd', 'Matt', 'Jim'],
+            greeting: ["Welcome to my camp, challenger!", "The great outdoors demands a battle!"],
+            loss: ["A worthy fight. Well done.", "I'll remember this."],
+            signaturePool: [16, 19, 29, 32, 43, 69, 161, 263, 270, 296, 504, 659],
+        },
+        {
+            key: 'picnicker', spriteKey: 'picnicker',
+            namePool: ['Liz', 'Diana', 'Gina', 'Amy'],
+            greeting: ["Care to battle over lunch?", "Perfect day for a picnic... and a fight!"],
+            loss: ["You were lovely to battle.", "Share a sandwich next time."],
+            signaturePool: [25, 39, 43, 183, 298, 300, 311, 312, 418, 659],
+        },
+    ],
+    desert: [
+        {
+            key: 'ruinmaniac', spriteKey: 'ruinmaniac',
+            namePool: ['Larry', 'Foster', 'Augustin'],
+            greeting: ["These ruins whisper secrets!", "Respect the ancient stones, traveler!"],
+            loss: ["The dust claims another.", "I'll find better artifacts..."],
+            signaturePool: [27, 50, 74, 95, 104, 219, 246, 328, 443, 524, 557, 622, 696, 744],
+        },
+        {
+            key: 'hiker', spriteKey: 'hiker',
+            namePool: ['Russell', 'Marc', 'Benjamin', 'Lucas'],
+            greeting: ["The dunes hide strong creatures!", "Watch your step out here!"],
+            loss: ["Good climb, stranger.", "I'll see you on the trail!"],
+            signaturePool: [50, 74, 75, 95, 218, 231, 246, 328, 443, 524],
+        },
+    ],
+    snow: [
+        {
+            key: 'skier', spriteKey: 'skier',
+            namePool: ['Erin', 'Bryce', 'Tia', 'Clark'],
+            greeting: ["Fresh powder calls for a fresh fight!", "Cold never bothered me anyway."],
+            loss: ["I'll carve it up next time.", "You slipped right past me."],
+            signaturePool: [86, 90, 124, 220, 361, 459, 471, 613, 872],
+        },
+        {
+            key: 'boarder', spriteKey: 'snowboarder',
+            namePool: ['Kai', 'Shaun', 'Jax'],
+            greeting: ["Yo! Let's shred AND battle!", "My boarder mons carve HARD."],
+            loss: ["Gnarly combat, dude.", "Respect the mountain."],
+            signaturePool: [124, 220, 361, 459, 471, 613, 712, 872],
+        },
+    ],
+    lake: [
+        {
+            key: 'fisherman', spriteKey: 'fisherman',
+            namePool: ['Arnold', 'Barney', 'Chris', 'Walter'],
+            greeting: ["Hooked a big one today!", "My line never lies. Battle!"],
+            loss: ["One that got away...", "Casting again tomorrow."],
+            signaturePool: [60, 72, 98, 116, 129, 170, 183, 318, 339, 456, 501, 535, 728],
+        },
+        {
+            key: 'swimmer', spriteKey: 'swimmer',
+            namePool: ['Lucy', 'Mike', 'Denise', 'Paolo'],
+            greeting: ["Laps warmed me up nicely!", "You're between me and the shore!"],
+            loss: ["Back to the deep I go.", "Good form out there."],
+            signaturePool: [7, 54, 60, 79, 98, 118, 120, 129, 170, 194, 270, 318, 341, 349],
+        },
+        {
+            key: 'sailor', spriteKey: 'sailor',
+            namePool: ['Duncan', 'Huey', 'Phillip'],
+            greeting: ["Storms don't scare me. Does you?", "Ship's ready. Battle's on."],
+            loss: ["Anchor's up. Later.", "Fair winds, rookie."],
+            signaturePool: [72, 98, 116, 120, 129, 320, 367, 456, 535, 690, 728],
+        },
+    ],
+    canyon: [
+        {
+            key: 'hiker', spriteKey: 'hiker',
+            namePool: ['Gregory', 'Daniel', 'Nicholas'],
+            greeting: ["Rocks are my language!", "The ridgelines called me!"],
+            loss: ["Fair climb, champion.", "I'll rest at the summit."],
+            signaturePool: [74, 75, 95, 111, 246, 304, 328, 371, 443, 524, 557, 696],
+        },
+        {
+            key: 'worker', spriteKey: 'worker',
+            namePool: ['Colin', 'Aaron', 'Derek'],
+            greeting: ["Shift's over. Fight's on!", "Built strong. Fought strong."],
+            loss: ["Clockin' out.", "Nice swing, boss."],
+            signaturePool: [74, 75, 95, 304, 443, 524, 532, 622, 696, 744],
+        },
+        {
+            key: 'ruinmaniac', spriteKey: 'ruinmaniac',
+            namePool: ['Karl', 'Geoff', 'Lamarr'],
+            greeting: ["These canyons are my library!", "Every rock tells a story!"],
+            loss: ["Back to the dig site.", "You fight like a scholar."],
+            signaturePool: [95, 246, 304, 328, 443, 524, 557, 696, 744],
+        },
+    ],
+    town: [
+        {
+            key: 'richboy', spriteKey: 'richboy',
+            namePool: ['Winston', 'Beauregard', 'Cassius'],
+            greeting: ["Daddy says I'm the best.", "I'll pay double if I lose. Deal?"],
+            loss: ["Here's your winnings.", "Daddy will hear about this!"],
+            signaturePool: [25, 39, 113, 122, 133, 172, 183, 196, 197, 470, 471, 684, 685],
+        },
+        {
+            key: 'gentleman', spriteKey: 'gentleman',
+            namePool: ['Roderick', 'Humphrey', 'Eldrick'],
+            greeting: ["A proper match, if you please.", "My gentle-mon are anything but."],
+            loss: ["Splendid, well played.", "Tea, perhaps, next time?"],
+            signaturePool: [25, 39, 113, 133, 183, 196, 197, 280, 470, 471, 684],
+        },
+        {
+            key: 'lady', spriteKey: 'lady',
+            namePool: ['Cybil', 'Magdalene', 'Rosabel'],
+            greeting: ["How charming. En garde!", "My boutique raised these dears."],
+            loss: ["Ah, c'est la vie.", "Splendid effort, darling."],
+            signaturePool: [25, 39, 113, 183, 311, 312, 470, 471, 684, 685],
+        },
+    ],
+    cave: [
+        {
+            key: 'blackbelt', spriteKey: 'blackbelt',
+            namePool: ['Kenji', 'Hitoshi', 'Daisuke'],
+            greeting: ["Your fists speak through your mons!", "Train harder. Then fight me."],
+            loss: ["A worthy discipline.", "Strength recognizes strength."],
+            signaturePool: [66, 67, 68, 106, 107, 236, 237, 296, 297, 532, 619, 674, 675],
+        },
+        {
+            key: 'ninjaboy', spriteKey: 'ninjaboy',
+            namePool: ['Yasu', 'Riki', 'Taro'],
+            greeting: ["You cannot see me. But my mons will!", "Shadows protect the swift."],
+            loss: ["Vanishing...", "Tell no one."],
+            signaturePool: [41, 95, 169, 207, 213, 246, 302, 359, 595, 696, 867],
+        },
+        {
+            key: 'hiker', spriteKey: 'hiker',
+            namePool: ['Manuel', 'Timothy', 'Quentin'],
+            greeting: ["These caves go on forever!", "Mind the stalactites!"],
+            loss: ["Cave echoes...", "Watch your torch."],
+            signaturePool: [41, 74, 95, 246, 304, 337, 353, 524, 595, 713],
+        },
+    ],
+    rift: [
+        {
+            key: 'veteran', spriteKey: 'veteran',
+            namePool: ['Silas', 'Orson', 'Vega'],
+            greeting: ["You shouldn't be here.", "The rift ate weaker trainers."],
+            loss: ["You pass, then.", "The rift respects you."],
+            signaturePool: [149, 248, 373, 376, 445, 635, 706, 784, 889, 887],
+        },
+    ],
+};
+
+/** Used when a biome has no archetype entry (e.g. center/pallet) -- return []. */
+const EMPTY_ARCHETYPES: TrainerArchetype[] = [];
+
+/**
+ * Decides the route-trainer layout for a given chunk. Deterministic on
+ * (cx,cy). Returns an array of 0, 1, or 2 placements with all team /
+ * archetype / flavor data pre-chosen so generateChunk just has to slot
+ * them into the layout.
+ */
+interface RouteTrainerPlacement {
+    archetype: TrainerArchetype;
+    name: string;
+    tier: 'rookie' | 'veteran' | 'ace';
+    tierIndex: 0 | 1 | 2;
+    teamSpecies: number[];
+    level: number;
+    teamSize: number;
+}
+
+export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTrainerPlacement[] => {
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    if (dist < 3) return []; // no route trainers in tutorial zone
+    const archetypes = ROUTE_ARCHETYPES[biome] ?? EMPTY_ARCHETYPES;
+    if (archetypes.length === 0) return [];
+
+    const spawnRoll = hash4(cx, cy, 1111, 0);
+    // ~12% spawn rate, gently scales up to ~18% in late-game distance.
+    const spawnChance = 0.12 + Math.min(0.06, dist / 800);
+    if (spawnRoll >= spawnChance) return [];
+
+    // Archetype pick + name pick, both deterministic.
+    const aIdx = Math.floor(hash4(cx, cy, 2222, 0) * archetypes.length);
+    const arch = archetypes[aIdx];
+    const nameIdx = Math.floor(hash4(cx, cy, 3333, 0) * arch.namePool.length);
+    const name = arch.namePool[nameIdx];
+
+    // Tier: rookie / veteran / ace ramps with distance. Near gyms
+    // (dist ~ 5) rookie dominates; deep in the map aces become common.
+    const tierRoll = hash4(cx, cy, 4444, 0);
+    let tierIndex: 0 | 1 | 2 = 0;
+    let tier: 'rookie' | 'veteran' | 'ace' = 'rookie';
+    if (dist > 10 && tierRoll > 0.65)      { tierIndex = 1; tier = 'veteran'; }
+    if (dist > 25 && tierRoll > 0.90)      { tierIndex = 2; tier = 'ace'; }
+    else if (dist > 15 && tierRoll > 0.80) { tierIndex = 1; tier = 'veteran'; }
+
+    // Team size: 2 for rookie, 3 for veteran, 4 for ace.
+    const teamSize = 2 + tierIndex; // 2 / 3 / 4
+
+    // Level scaling matches wild floor but biases slightly higher so
+    // route trainers feel like a proper break. The player's party is
+    // auto-scaled via perks, so this is more "flavor challenge" than
+    // grind wall.
+    const baseLevel = Math.max(4, Math.floor(dist * 1.3) + 2 + tierIndex * 2);
+    const level = baseLevel;
+
+    // Team composition: mix of archetype signature + biome pool.
+    const biomePool = (typeof (globalThis as any).__BIOME_POOLS_CACHE__ === 'object')
+        ? null
+        : null;
+    void biomePool; // keep import graph clean -- App/Service fetch species later
+    const candidatePool = arch.signaturePool;
+    const team: number[] = [];
+    for (let i = 0; i < teamSize; i++) {
+        const pick = Math.floor(hash4(cx, cy, 5555, i) * candidatePool.length);
+        team.push(candidatePool[pick]);
+    }
+
+    const result: RouteTrainerPlacement[] = [
+        { archetype: arch, name, tier, tierIndex, teamSpecies: team, level, teamSize },
+    ];
+
+    // Duo (gauntlet) chance: ~20% of spawned chunks get a second trainer.
+    // They draw independently so you can absolutely run into a Fisherman
+    // standing near a Swimmer -- feels organic.
+    const duoRoll = hash4(cx, cy, 6666, 0);
+    if (duoRoll < 0.20 && dist > 5) {
+        const aIdx2 = Math.floor(hash4(cx, cy, 7777, 0) * archetypes.length);
+        const arch2 = archetypes[aIdx2];
+        const nameIdx2 = Math.floor(hash4(cx, cy, 8888, 0) * arch2.namePool.length);
+        const name2 = arch2.namePool[(nameIdx2 + 1) % arch2.namePool.length]; // avoid dupe
+        const tierIndex2: 0 | 1 | 2 = Math.max(tierIndex - 1 as 0 | 1, 0) as 0 | 1 | 2;
+        const tier2: 'rookie' | 'veteran' | 'ace' =
+            tierIndex2 === 2 ? 'ace' : tierIndex2 === 1 ? 'veteran' : 'rookie';
+        const teamSize2 = 2 + tierIndex2;
+        const level2 = Math.max(4, Math.floor(dist * 1.3) + 2 + tierIndex2 * 2);
+        const team2: number[] = [];
+        for (let i = 0; i < teamSize2; i++) {
+            const pick = Math.floor(hash4(cx, cy, 9999, i) * arch2.signaturePool.length);
+            team2.push(arch2.signaturePool[pick]);
+        }
+        result.push({
+            archetype: arch2, name: name2, tier: tier2, tierIndex: tierIndex2,
+            teamSpecies: team2, level: level2, teamSize: teamSize2,
+        });
+    }
+
+    return result;
+};
+
+/**
+ * Soft cap on how far the player can chunk-transition from origin. Beyond
+ * this, movement is blocked with a "world edge" message. Keeps save sizes
+ * bounded (discoveredChunks array) and avoids Number precision issues at
+ * very large cx/cy that degrade noise-based biome/level rules.
+ *
+ * 200 * 20 = 4000 tiles in any direction. Well past all designed content:
+ *   - all 8 main gyms end at distance 40
+ *   - rift ring is at distance 50
+ *   - world bosses past distance 100
+ *   - elite four past distance 150
+ */
+export const WORLD_MAX_DIST = 200;
+
+/**
+ * Curated gym locations -- ONE unique (cx, cy) per badge, spread around the
+ * compass so the player is pulled into every octant over the full 8-gym arc
+ * rather than shuttling back and forth along a single corridor.
+ *
+ * Design goals:
+ *   1. Each badge has exactly ONE gym in the world (no mirrored copies).
+ *      Finding a gym feels like a real discovery.
+ *   2. Every octant (N, NE, E, SE, S, SW, W, NW) contains at least one gym,
+ *      so whichever direction the player wanders first, they will run into
+ *      *some* gym within ~10 chunks.
+ *   3. Distance grows with badge number so the level curve of the gym
+ *      matches the wild-encounter curve of the surrounding chunks -- a
+ *      badge-3 gym shouldn't sit next to badge-7 wild mons.
+ *   4. All 8 gyms sit at distance < 42, safely inside the rift ring at 50.
+ *
+ * The world remains navigable without this list (wild mons, trainers,
+ * events still spawn everywhere), but without the compass signposts below
+ * this would amount to pixel-hunting. The compass signposts turn this
+ * layout into a *guided* exploration puzzle: "the sign says NE, go NE".
+ */
+export const GYM_LOCATIONS: ReadonlyArray<{ cx: number; cy: number; badge: number }> = [
+    { cx:   5, cy:   0, badge: 1 }, // E   dist 5.0
+    { cx:  -7, cy:   7, badge: 2 }, // SW  dist 9.9
+    { cx:   0, cy: -14, badge: 3 }, // N   dist 14.0
+    { cx:  13, cy:  13, badge: 4 }, // SE  dist 18.4
+    { cx: -22, cy:   0, badge: 5 }, // W   dist 22.0
+    { cx:  19, cy: -19, badge: 6 }, // NE  dist 26.9
+    { cx:   0, cy:  32, badge: 7 }, // S   dist 32.0
+    { cx: -27, cy: -27, badge: 8 }, // NW  dist 38.2
+];
+
+const GUARANTEED_GYMS: Record<string, number> = (() => {
+    const out: Record<string, number> = {};
+    for (const g of GYM_LOCATIONS) out[`${g.cx},${g.cy}`] = g.badge;
+    return out;
+})();
+
+/**
+ * Return the next gym the player needs (based on badges earned so far), or
+ * null if they've already cleared all 8. Used by the compass-signpost
+ * interaction handler to render dynamic "Gym N is to the NE" text.
+ */
+export const getNextGymTarget = (badges: number): { cx: number; cy: number; badge: number } | null => {
+    const next = GYM_LOCATIONS.find(g => g.badge === badges + 1);
+    return next ?? null;
+};
+
+/**
+ * Convert a (dx, dy) offset in chunk space into a human-readable compass
+ * direction. Chunk y grows *downward* on screen (north = -y), so we invert
+ * dy before computing the angle. Returns one of the 8 cardinal/inter-
+ * cardinal names.
+ */
+export const compassDirectionName = (dx: number, dy: number): string => {
+    if (dx === 0 && dy === 0) return 'here';
+    // angle in degrees, 0 = east, 90 = north (math convention)
+    const deg = (Math.atan2(-dy, dx) * 180) / Math.PI;
+    // rotate so north maps to bucket 0, then pick one of 8 buckets of 45°.
+    const norm = ((90 - deg) % 360 + 360) % 360;
+    const idx = Math.round(norm / 45) % 8;
+    return ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][idx];
+};
+
 const HOUSE_LAYOUT = [
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
@@ -274,7 +750,10 @@ export const STATIC_MAPS: Record<string, MapZone> = {
     'center': { 
         id: 'center', name: "Pokemon Center", layout: HOUSE_LAYOUT, 
         portals: { "9,9": "PREV_POS" }, wildLevelRange: [0,0], 
-        npcs: { "9,5": { id: "nurse", name: "Nurse", sprite: TRAINER_SPRITES.nurse, dialogue: ["Heal up!"] } },
+        npcs: {
+            "9,5": { id: "nurse", name: "Nurse", sprite: TRAINER_SPRITES.nurse, dialogue: ["Heal up!"] },
+            "6,5": { id: "guild_clerk", name: "Guild Clerk", sprite: TRAINER_SPRITES.scientist, dialogue: ["The Trainer's Guild posts contracts here.", "Take one, hunt it down, claim your reward."] },
+        },
         biome: 'center'
     },
     'mart': { 
@@ -297,14 +776,28 @@ export const STATIC_MAPS: Record<string, MapZone> = {
  */
 export const getBiomeAt = (cx: number, cy: number): string => {
     const dist = Math.sqrt(cx * cx + cy * cy);
-    const biomeVal = (globalNoise.noise(cx * 0.1, cy * 0.1) + 1) / 2;
-    const moistVal = (moistureNoise.noise(cx * 0.1, cy * 0.1) + 1) / 2;
+    // Noise frequency bumped from 0.10 -> 0.14 so biome patches are smaller
+    // and the player meets more variety within the first ~10 chunks of
+    // walking out of town. Lower values were producing long monolithic
+    // forest stretches that made the world feel one-note up close.
+    //
+    // Moisture uses a *different* frequency (0.19) and a spatial offset so
+    // biome and moisture fields decorrelate -- otherwise a straight walk
+    // picks up the same (biome, moisture) combo for many chunks in a row
+    // because both fields peak/trough together. With independent fields, a
+    // player walking due east sees "forest -> cave -> forest -> lake -> ..."
+    // instead of "forest -> forest -> forest -> ..." for 20 chunks.
+    const biomeVal = (globalNoise.noise(cx * 0.14, cy * 0.14) + 1) / 2;
+    const moistVal = (moistureNoise.noise(cx * 0.19 + 31.7, cy * 0.19 - 17.3) + 1) / 2;
 
     if (Math.floor(dist) === 50) return 'rift';
     if (dist < 3) return 'town';
-    if (biomeVal < 0.2) return moistVal < 0.5 ? 'desert' : 'canyon';
-    if (biomeVal > 0.8) return moistVal < 0.5 ? 'snow' : 'cave';
-    if (biomeVal > 0.6) return moistVal > 0.6 ? 'lake' : 'forest';
+    // Slightly wider extreme thresholds (0.22 / 0.78) so desert / snow /
+    // cave aren't quite as rare as before. Middle band is still majority
+    // forest / lake, keeping the world feel intact.
+    if (biomeVal < 0.22) return moistVal < 0.5 ? 'desert' : 'canyon';
+    if (biomeVal > 0.78) return moistVal < 0.5 ? 'snow' : 'cave';
+    if (biomeVal > 0.6)  return moistVal > 0.6 ? 'lake' : 'forest';
     return moistVal > 0.7 ? 'cave' : 'forest';
 };
 
@@ -335,7 +828,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
             wildLevelRange: [2, 5], biome: 'town',
             trainers: {},
             npcs: {
-                "5,10": { id: "pallet_npc_1", name: "Old Man", sprite: TRAINER_SPRITES.gentleman, dialogue: ["Technology is incredible!", "You can now battle with friends!"] },
+                "5,10": { id: "pallet_npc_1", name: "Old Man", sprite: TRAINER_SPRITES.gentleman, dialogue: ["The old wooden signposts still know the way, y'know.", "If you ever get lost out there, check the nearest one.", "It'll point you toward whichever gym you need next."] },
                 "12,5": { id: "pallet_npc_2", name: "Lass", sprite: TRAINER_SPRITES.lass, dialogue: ["Pallet Town is so peaceful.", "Have you seen Prof. Oak?"] },
                 "15,13": { id: "pallet_npc_3", name: "Fisherman", sprite: TRAINER_SPRITES.fisherman, dialogue: ["The water here is perfect for fishing.", "I caught a huge Magikarp earlier!"] },
                 "2,13": { id: "pallet_npc_4", name: "Bug Catcher", sprite: TRAINER_SPRITES.bugcatcher, dialogue: ["I'm looking for rare bugs in the tall grass!", "Be careful out there."] }
@@ -506,28 +999,128 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
 
     // 4. Procedural POIs (Grouped and logical)
     const poiRoll = rng.next();
-    
+
+    // --- Guaranteed gym placement -----------------------------------------
+    // If this chunk is on the forced-gym list, place the gym deterministically
+    // at the center of the chunk and skip the RNG POI roll so nothing else
+    // can stomp the tiles. Random trainers / clutter still generate around
+    // it afterward, so guaranteed gym chunks still feel alive.
+    const guaranteedGymBadge = GUARANTEED_GYMS[`${cx},${cy}`];
+    let poiPlaced = false;
+    if (guaranteedGymBadge !== undefined) {
+        const gymBadge = guaranteedGymBadge;
+        const hx = 8;
+        const hy = 8;
+        // Even/odd split: red roof (pokecenter-palette) vs blue roof (mart
+        // palette). Same tile IDs the random-gym branch uses below.
+        const roofTile = gymBadge % 2 === 0 ? 30 : 40;
+        const wTile   = gymBadge % 2 === 0 ? 33 : 43;
+        const sTile   = gymBadge % 2 === 0 ? 35 : 45;
+
+        layout[hy][hx] = roofTile; layout[hy][hx + 1] = roofTile + 1; layout[hy][hx + 2] = roofTile + 2;
+        layout[hy + 1][hx] = wTile; layout[hy + 1][hx + 1] = 50; layout[hy + 1][hx + 2] = sTile;
+
+        // Clear the tile in front of the door so the player can always walk
+        // up to it (approach from south).
+        if (layout[hy + 2]) {
+            for (let dx = 0; dx < 3; dx++) {
+                if (layout[hy + 2][hx + dx] !== 3) layout[hy + 2][hx + dx] = 4; // path
+            }
+        }
+
+        const gymLoadout = getGymTeam(gymBadge);
+        const fallbackThemes = [
+            [263, 263], [278, 270, 60], [81, 100, 309], [43, 273, 69],
+            [109, 88, 41], [63, 280, 177], [58, 77, 218], [111, 74, 50],
+        ];
+        const fallbackNames = [
+            'Brock "The Rock & Roller"', 'Misty "The Deep Diver"',
+            'Lt. Surge "The Tech Commando"', 'Erika "The Zen Botanist"',
+            'Koga "The Shadow Ninja"', 'Sabrina "The Cosmic Oracle"',
+            'Blaine "The Spicy Chef"', 'Giovanni "The Shadow CEO"',
+        ];
+        const team = gymLoadout ? gymLoadout.loadout.map((l) => l.id) : fallbackThemes[gymBadge - 1];
+        const level = gymLoadout ? gymLoadout.level : (15 + gymBadge * 10);
+        const leaderName = gymLoadout
+            ? `${gymLoadout.name} "${gymLoadout.title}"`
+            : fallbackNames[gymBadge - 1];
+
+        trainers[`${hx + 1},${hy + 2}`] = {
+            id: `gym_${cx}_${cy}`,
+            name: leaderName,
+            sprite: [TRAINER_SPRITES.leader1, TRAINER_SPRITES.leader2, TRAINER_SPRITES.leader3, TRAINER_SPRITES.leader4][(gymBadge - 1) % 4],
+            team,
+            level,
+            reward: gymBadge * 2000,
+            dialogue: "Another challenger reaches my hall. Show me your strength!",
+            winDialogue: "Impressive. Take this badge.",
+            isGymLeader: true,
+            badgeId: gymBadge,
+            loadout: gymLoadout ? gymLoadout.loadout : undefined,
+        };
+        poiPlaced = true;
+    }
+
     // Always add some random clutter/interactables regardless of main POI.
-    // We bumped iterations from 3 -> 5 now that extra decorative props
-    // (benches, lampposts, mailboxes) are in the pool.
-    for (let i = 0; i < 5; i++) {
+    // Density was previously too aggressive (5 iterations + very wide prop
+    // bands), which made chunks feel like a mailbox warehouse. We now run
+    // fewer rolls and keep decorative-prop odds low so grass still dominates
+    // and gameplay sightlines stay clear.
+    // Track whether this chunk got at least one compass signpost. Used so
+    // we can force one near spawn (dist <= 3) for new players who haven't
+    // met one yet -- otherwise the first gym hint can be a dozen chunks
+    // away by RNG, which is exactly the "where do I even go?" complaint.
+    let compassSignPlaced = false;
+    const placeCompassSign = (rx: number, ry: number): void => {
+        layout[ry][rx] = 53;
+        interactables[`${rx},${ry}`] = {
+            type: 'gym_compass',
+            // Fallback text only -- App.tsx replaces this at interaction
+            // time with fresh "Gym N lies to the NORTHEAST" copy.
+            text: ["A weathered wooden signpost. Its inscription is hard to read from here."],
+        };
+        compassSignPlaced = true;
+    };
+
+    for (let i = 0; i < 3; i++) {
         const rx = rng.nextInt(2, CHUNK_SIZE - 3);
         const ry = rng.nextInt(2, CHUNK_SIZE - 3);
         if (layout[ry][rx] === bgTile) {
             const clutterRoll = rng.next();
-            if (clutterRoll < 0.08) layout[ry][rx] = 56; // Berry Tree
-            else if (clutterRoll < 0.13) layout[ry][rx] = 53; // Signpost
-            else if (clutterRoll < 0.18) layout[ry][rx] = 12; // Item Ball
-            else if (clutterRoll < 0.20) layout[ry][rx] = 65; // Weather Shrine
-            else if (clutterRoll < 0.22) layout[ry][rx] = 66; // Healing Spring
-            // Decorative props. More common than POIs so the world feels lived-in.
-            else if (clutterRoll < 0.30 && (biome === 'forest' || biome === 'lake' || biome === 'grassland')) layout[ry][rx] = 98; // Bench
-            else if (clutterRoll < 0.34 && biome !== 'cave') layout[ry][rx] = 97; // Lamppost
+            if (clutterRoll < 0.10) layout[ry][rx] = 56; // Berry Tree
+            else if (clutterRoll < 0.16) placeCompassSign(rx, ry); // Gym-compass signpost
+            else if (clutterRoll < 0.22) layout[ry][rx] = 12; // Item Ball
+            else if (clutterRoll < 0.25) layout[ry][rx] = 65; // Weather Shrine
+            else if (clutterRoll < 0.28) layout[ry][rx] = 66; // Healing Spring
+            // Decorative props (light sprinkle only).
+            else if (clutterRoll < 0.32 && (biome === 'forest' || biome === 'lake' || biome === 'town')) layout[ry][rx] = 98; // Bench
+            else if (clutterRoll < 0.35 && biome !== 'cave') layout[ry][rx] = 97; // Lamppost
             else if (clutterRoll < 0.37 && biome !== 'cave' && biome !== 'desert') layout[ry][rx] = 99; // Mailbox
         }
     }
 
-    if (poiRoll < 0.05 && dist > 2) {
+    // Guaranteed compass signpost near spawn (dist <= 3). A new player's
+    // first few chunks should always contain a clear "go that way" pointer
+    // so they never feel lost on fresh start. Find any bgTile cell not
+    // already claimed and drop a signpost on it.
+    if (!compassSignPlaced && dist <= 3) {
+        outer: for (let ty = 3; ty < CHUNK_SIZE - 3; ty++) {
+            for (let tx = 3; tx < CHUNK_SIZE - 3; tx++) {
+                if (layout[ty][tx] === bgTile
+                    && !interactables[`${tx},${ty}`]
+                    && !npcs[`${tx},${ty}`]
+                    && !trainers[`${tx},${ty}`]
+                    && !portals[`${tx},${ty}`]) {
+                    placeCompassSign(tx, ty);
+                    break outer;
+                }
+            }
+        }
+    }
+
+    if (poiPlaced) {
+        // Guaranteed gym already placed above -- skip the RNG POI chain.
+    } else if (poiRoll < 0.05 && dist > 2) {
         // Ruins Clearing with a Riddle
         const rx = rng.nextInt(3, 12);
         const ry = rng.nextInt(3, 12);
@@ -701,75 +1294,35 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
                     }
                 };
             } else {
-                // Gym! (Scaled distance)
-                const gymBadge = Math.floor(dist / 15) + 1; 
-                if (gymBadge <= 8) {
-                    // Distinct looks for gyms
-                    const roofTile = gymBadge % 2 === 0 ? 30 : 40; // Alternate red and blue roofs
-                    const wallTile = gymBadge % 2 === 0 ? 33 : 43;
-                    const sideTile = gymBadge % 2 === 0 ? 35 : 45;
-                    
-                    layout[hy][hx] = roofTile; layout[hy][hx+1] = roofTile + 1; layout[hy][hx+2] = roofTile + 2;
-                    layout[hy+1][hx] = wallTile; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = sideTile;
-
-                    // Themed teams for Gym Leaders (Creative themes, not just single type!)
-                    const themes = [
-                        [263, 263], // Brock: "The Sync Starters" (Two Zigzagoon with Harmony Engine)
-                        [278, 270, 60], // Misty: "The Rain Dance" (Wingull, Lotad, Poliwag)
-                        [81, 100, 309], // Lt. Surge: "The Static Field" (Magnemite, Voltorb, Electrike)
-                        [43, 273, 69], // Erika: "The Solar Power" (Oddish, Seedot, Bellsprout)
-                        [109, 88, 41], // Koga: "The Poison Trap" (Koffing, Grimer, Zubat)
-                        [63, 280, 177], // Sabrina: "The Mind Link" (Abra, Ralts, Natu)
-                        [58, 77, 218], // Blaine: "The Heat Wave" (Growlithe, Ponyta, Slugma)
-                        [111, 74, 50] // Giovanni: "The Earth Shaker" (Rhyhorn, Geodude, Diglett)
-                    ];
-
-                    const leaderNames = [
-                        'Brock "The Rock & Roller"',
-                        'Misty "The Deep Diver"',
-                        'Lt. Surge "The Tech Commando"',
-                        'Erika "The Zen Botanist"',
-                        'Koga "The Shadow Ninja"',
-                        'Sabrina "The Cosmic Oracle"',
-                        'Blaine "The Spicy Chef"',
-                        'Giovanni "The Shadow CEO"'
-                    ];
-
-                    const leaderDialogues = [
-                        "Ready to feel the heavy metal rhythm? Let's Rock & Roll!",
-                        "The ocean has secrets you haven't even dreamed of. Dive in!",
-                        "My team is a finely tuned machine. Can you handle the surge?",
-                        "Nature is a delicate balance. Let me show you its hidden power.",
-                        "You won't even see us coming. The shadows are our allies.",
-                        "I've already seen the outcome of this battle. Care to prove me wrong?",
-                        "My kitchen is getting hot! Can you handle the spice?",
-                        "Welcome to my office. Let's discuss your... termination."
-                    ];
-
-                    // Prefer the curated competitive loadout (data/gymTeams.ts) when one
-                    // exists for this badge id. Falls back to the legacy themed roster
-                    // below so gyms 9+ (if any are ever added) don't break.
-                    const gymLoadout = getGymTeam(gymBadge);
-                    const team = gymLoadout ? gymLoadout.loadout.map((l) => l.id) : (themes[gymBadge-1] || [rng.nextInt(1, 151), rng.nextInt(1, 151)]);
-                    const level = gymLoadout ? gymLoadout.level : (15 + (gymBadge * 10));
-                    const leaderName = gymLoadout
-                        ? `${gymLoadout.name} "${gymLoadout.title}"`
-                        : (leaderNames[gymBadge-1] || `Leader ${gymBadge}`);
-
-                    trainers[`${hx+1},${hy+2}`] = {
-                        id: `gym_${cx}_${cy}`,
-                        name: leaderName,
-                        sprite: [TRAINER_SPRITES.leader1, TRAINER_SPRITES.leader2, TRAINER_SPRITES.leader3, TRAINER_SPRITES.leader4][(gymBadge-1) % 4],
-                        team,
-                        level,
-                        reward: gymBadge * 2000,
-                        dialogue: leaderDialogues[gymBadge-1] || "You think you can handle my team? It's a double battle!",
-                        winDialogue: "Impressive. Take this badge.",
-                        isGymLeader: true,
-                        badgeId: gymBadge,
-                        loadout: gymLoadout ? gymLoadout.loadout : undefined,
-                    };
-                }
+                // Veteran Trainer Outpost (replaces the legacy RNG gym slot).
+                // We used to spawn a random extra gym here, but those diluted
+                // the "one unique gym per badge" feeling of the 8 curated
+                // GYM_LOCATIONS above -- a player could stumble on a second
+                // badge-3 gym and rematch it for infinite money, or walk past
+                // three gyms in one chunk, which made the world feel random
+                // instead of curated.
+                //
+                // Instead we place a tough veteran trainer in the same
+                // structure. They gate no progression but give a hefty XP /
+                // money reward and scale with the chunk's distance.
+                layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
+                layout[hy+1][hx] = 33; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 35;
+                const vetLevel = Math.min(80, levelBase + 6);
+                const vetTeam = [
+                    rng.nextInt(1, 151), rng.nextInt(1, 151),
+                    rng.nextInt(1, 151), rng.nextInt(1, 151),
+                ];
+                trainers[`${hx+1},${hy+2}`] = {
+                    id: `veteran_${cx}_${cy}`,
+                    name: "Veteran Trainer",
+                    sprite: TRAINER_SPRITES.veteran,
+                    team: vetTeam,
+                    level: vetLevel,
+                    reward: 800 + Math.floor(dist * 20),
+                    dialogue: "I've trained for decades. Think you can match me?",
+                    winDialogue: "Heh. Kids these days are tougher than I thought.",
+                };
+                decorate(hx - 1, hy + 1, 97); // lamppost
             }
         }
     } else if (poiRoll < 0.55 && dist > 150) {
@@ -1388,6 +1941,128 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
             };
         }
     }
+
+    // Safety sweep: decorative props (bench/lamppost/mailbox) were placed at
+    // random very early. If a trainer or NPC was later dropped on top of one,
+    // OR on the tile directly below one, demote the prop tile back to plain
+    // ground so the sprite isn't visually occluded. Trainer/NPC sprites are
+    // rendered oversized and extend roughly one tile upward, so the tile
+    // ---- ROUTE TRAINER PLACEMENT ---------------------------------------
+    // Runs AFTER all POI placement so we only drop route trainers on
+    // empty chunks (no gym, no ruins, no campsite, etc). Deterministic
+    // on (cx,cy) via getRouteTrainers().
+    //
+    // Why skip when poiPlaced is true: the player should read each chunk
+    // as "one point of interest, tops." Stacking a trainer onto a ruin
+    // or camp makes the screen noisy and lets the trainer ambush from
+    // behind a static sprite the player didn't notice.
+    //
+    // Skip if we're a "danger floor" tile chunk too -- those are
+    // gauntlet-like already.
+    if (!poiPlaced) {
+        const placements = getRouteTrainers(cx, cy, biome);
+        if (placements.length > 0) {
+            // Find up to `placements.length` walkable bgTile cells away
+            // from edges and with no existing sprite/portal. Scan row by
+            // row so the two duo trainers end up side-by-side or close.
+            const openSpots: Array<{ x: number; y: number }> = [];
+            outerScan:
+            for (let ty = 4; ty < CHUNK_SIZE - 4; ty++) {
+                for (let tx = 4; tx < CHUNK_SIZE - 4; tx++) {
+                    const tile = layout[ty]?.[tx];
+                    // Accept grass (tile 2), path (4), or bgTile. Reject
+                    // walls / water / buildings / danger floors.
+                    if (tile !== bgTile && tile !== 2 && tile !== 4 && tile !== patchTile) continue;
+                    const key = `${tx},${ty}`;
+                    if (trainers[key] || npcs[key] || interactables[key] || portals[key]) continue;
+                    openSpots.push({ x: tx, y: ty });
+                    if (openSpots.length >= placements.length + 2) break outerScan;
+                }
+            }
+
+            // Prefer spots near the central crossroads so trainers feel
+            // like they're blocking the path rather than hiding in the
+            // corners. Sort by distance from chunk center.
+            openSpots.sort((a, b) => {
+                const da = Math.abs(a.x - 9.5) + Math.abs(a.y - 9.5);
+                const db = Math.abs(b.x - 9.5) + Math.abs(b.y - 9.5);
+                return da - db;
+            });
+
+            const placedIds: string[] = [];
+            placements.forEach((p, idx) => {
+                const spot = openSpots[idx];
+                if (!spot) return;
+                const key = `${spot.x},${spot.y}`;
+                const tierIdx = p.tierIndex;
+                const tierTag: 'rookie' | 'veteran' | 'ace' =
+                    tierIdx === 2 ? 'ace' : tierIdx === 1 ? 'veteran' : 'rookie';
+                const titlePrefix = tierTag === 'ace' ? 'Ace '
+                    : tierTag === 'veteran' ? 'Senior ' : '';
+                const displayName = `${titlePrefix}${p.archetype.key[0].toUpperCase()}${p.archetype.key.slice(1)} ${p.name}`;
+                const greetingIdx = Math.floor(hash4(cx, cy, 11111 + idx, 0) * p.archetype.greeting.length);
+                const lossIdx = Math.floor(hash4(cx, cy, 22222 + idx, 0) * p.archetype.loss.length);
+                // Reward: money matches existing trainer economy, scaled
+                // by tier (1x / 1.6x / 2.5x) and distance.
+                const tierMoneyMult = tierIdx === 2 ? 2.5 : tierIdx === 1 ? 1.6 : 1.0;
+                const reward = Math.floor((400 + dist * 12) * tierMoneyMult);
+                const trainerId = `route_${cx}_${cy}_${idx}`;
+                placedIds.push(trainerId);
+                trainers[key] = {
+                    id: trainerId,
+                    name: displayName,
+                    sprite: TRAINER_SPRITES[p.archetype.spriteKey],
+                    team: p.teamSpecies,
+                    level: p.level,
+                    reward,
+                    dialogue: p.archetype.greeting[greetingIdx],
+                    winDialogue: p.archetype.loss[lossIdx],
+                    archetype: p.archetype.key,
+                    tier: tierTag,
+                };
+                // Stamp the tile so the sprite renders on a walkable
+                // surface (tile 4 = path) -- this ensures the visible
+                // "trainer on a road" read. If the tile under them is
+                // bgTile or grass, replace it with path so it looks
+                // intentional. We preserve water tiles (swimmers,
+                // fishermen) by leaving tile 3 untouched.
+                if (layout[spot.y][spot.x] !== 3 && layout[spot.y][spot.x] !== 25) {
+                    layout[spot.y][spot.x] = 4;
+                }
+            });
+
+            // Gauntlet wiring: if we placed a duo, link the first to the
+            // second so App.tsx auto-chains the second battle after the
+            // first victory (no heal between). The player sees two
+            // sprites and knows they're committing to both if they
+            // step on the first one.
+            if (placedIds.length >= 2) {
+                const firstKey = Object.keys(trainers).find(k => trainers[k].id === placedIds[0]);
+                if (firstKey) {
+                    trainers[firstKey].gauntletNextTrainerId = placedIds[1];
+                    // Also mark both dialogue strings so the player
+                    // knows what they're getting into.
+                    trainers[firstKey].dialogue = `[Gauntlet] ${trainers[firstKey].dialogue} My partner's waiting -- beat us both!`;
+                }
+            }
+        }
+    }
+
+    // directly above them is also a no-prop zone.
+    const propTiles = new Set([97, 98, 99]);
+    const clearPropAt = (px: number, py: number) => {
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+        if (layout[py]?.[px] !== undefined && propTiles.has(layout[py][px])) {
+            layout[py][px] = bgTile;
+        }
+    };
+    const reserveAroundSprite = (key: string) => {
+        const [sx, sy] = key.split(',').map(Number);
+        clearPropAt(sx, sy);          // on sprite
+        clearPropAt(sx, sy - 1);      // above sprite (sprite head extends up)
+    };
+    Object.keys(trainers).forEach(reserveAroundSprite);
+    Object.keys(npcs).forEach(reserveAroundSprite);
 
     return {
         x: cx, y: cy,

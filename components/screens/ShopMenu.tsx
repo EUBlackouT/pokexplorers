@@ -1,6 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { ITEMS } from '../../services/itemData';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
+import {
+    MenuBackdrop,
+    MenuCard,
+    BrandTitle,
+    BrandEyebrow,
+    CurrencyChip,
+    PushButton,
+    PokeballWatermark,
+} from '../ui/MenuKit';
+
+type Tab = 'all' | 'pokeball' | 'healing' | 'battle' | 'evolution';
+
+const TAB_META: Record<Tab, { label: string; accent: string }> = {
+    all:       { label: 'All',        accent: '#fbbf24' },
+    pokeball:  { label: 'Poké Balls', accent: '#ef4444' },
+    healing:   { label: 'Healing',    accent: '#22c55e' },
+    battle:    { label: 'Battle',     accent: '#3b82f6' },
+    evolution: { label: 'Evolution',  accent: '#a855f7' },
+};
 
 export const ShopMenu: React.FC<{
     onClose: () => void;
@@ -9,106 +29,180 @@ export const ShopMenu: React.FC<{
     onBuy: (item: string, price: number) => void;
     discount?: number;
 }> = ({ onClose, money, inventory, onBuy, discount = 0 }) => {
-    const [activeTab, setActiveTab] = useState<'all' | 'pokeball' | 'healing' | 'battle' | 'evolution'>('all');
+    const [activeTab, setActiveTab] = useState<Tab>('all');
     useEscapeKey(onClose);
 
-    const shopItems = Object.values(ITEMS)
-        .map(item => ({ ...item, price: Math.floor(item.price * (1 - discount)) }))
-        .filter(item => activeTab === 'all' || item.category === activeTab);
+    const shopItems = useMemo(
+        () =>
+            Object.values(ITEMS)
+                .map((item) => ({ ...item, price: Math.floor(item.price * (1 - discount)) }))
+                .filter((item) => activeTab === 'all' || item.category === activeTab),
+        [activeTab, discount],
+    );
+
+    const ownedCount = (itemId: string): number => {
+        if (itemId === 'poke-ball') return inventory.pokeballs ?? 0;
+        if (itemId === 'potion') return inventory.potions ?? 0;
+        if (itemId === 'revive') return inventory.revives ?? 0;
+        if (itemId === 'rare-candy') return inventory.rare_candy ?? 0;
+        return (inventory.items as string[]).filter((i) => i === itemId).length;
+    };
 
     return (
-        <div className="absolute inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4 md:p-8">
-            <div className="bg-[#0a0a0a] border border-white/10 rounded-[2.5rem] p-8 w-full max-w-4xl text-white flex flex-col h-[85vh] shadow-[0_50px_100px_rgba(0,0,0,0.8)] relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/5 blur-[100px] rounded-full -mr-32 -mt-32"></div>
-                <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-600/5 blur-[100px] rounded-full -ml-32 -mb-32"></div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 font-press-start">
+            <MenuBackdrop accent="#3b82f6" />
 
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6 relative z-10">
-                    <div>
-                        <h2 className="text-4xl md:text-5xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                            Poké Mart
-                        </h2>
-                        <p className="text-gray-500 text-[10px] uppercase tracking-[0.4em] font-bold mt-2">Authorized Supply Terminal</p>
-                    </div>
-
-                    <div className="bg-white/5 backdrop-blur-xl px-6 py-4 rounded-2xl border border-white/10 flex items-center gap-4">
-                        <div className="w-10 h-10 bg-yellow-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(234,179,8,0.3)]">
-                            <span className="text-xl">💰</span>
-                        </div>
+            <MenuCard maxWidth="max-w-4xl" className="h-[88vh] max-h-[860px] flex flex-col">
+                {/* Header strip */}
+                <div
+                    className="relative flex-shrink-0 px-6 pt-5 pb-4 border-b border-white/5"
+                    style={{
+                        background:
+                            'linear-gradient(90deg, rgba(59,130,246,0.45) 0%, rgba(59,130,246,0.1) 50%, rgba(30,64,175,0.35) 100%)',
+                    }}
+                >
+                    <PokeballWatermark className="absolute top-4 right-4 w-14 h-14" />
+                    <div className="flex items-end justify-between gap-4 flex-wrap">
                         <div>
-                            <div className="text-[10px] text-yellow-500 font-black uppercase tracking-widest">Credits</div>
-                            <div className="text-2xl font-mono font-bold">${money}</div>
+                            <BrandEyebrow color="#93c5fd">Poké Mart</BrandEyebrow>
+                            <BrandTitle size="md" className="mt-1">SUPPLY TERMINAL</BrandTitle>
+                            {discount > 0 && (
+                                <div className="text-[9px] uppercase tracking-widest text-emerald-300 mt-2">
+                                    Member discount: −{Math.round(discount * 100)}%
+                                </div>
+                            )}
                         </div>
+                        <CurrencyChip
+                            label="Credits"
+                            value={`$${money.toLocaleString()}`}
+                            accent="#fbbf24"
+                            icon={<span className="text-black font-black text-base">$</span>}
+                        />
                     </div>
                 </div>
 
-                <div className="flex gap-2 mb-8 overflow-x-auto pb-2 scrollbar-hide relative z-10">
-                    {(['all', 'pokeball', 'healing', 'battle', 'evolution'] as const).map(tab => (
-                        <button
-                            key={tab}
-                            onClick={() => setActiveTab(tab)}
-                            className={`px-6 py-3 rounded-xl text-[10px] uppercase font-black tracking-widest transition-all border ${
-                                activeTab === tab
-                                    ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]'
-                                    : 'bg-white/5 border-white/5 text-gray-500 hover:text-white hover:bg-white/10'
-                            }`}
-                        >
-                            {tab}
-                        </button>
-                    ))}
+                {/* Tab bar */}
+                <div className="flex-shrink-0 px-4 pt-3 pb-2 flex gap-2 overflow-x-auto scrollbar-hide border-b border-white/5">
+                    {(Object.keys(TAB_META) as Tab[]).map((tab) => {
+                        const isActive = activeTab === tab;
+                        const meta = TAB_META[tab];
+                        return (
+                            <button
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className="relative px-3 py-2 rounded-lg text-[9px] uppercase font-black tracking-widest transition-all shrink-0"
+                                style={{
+                                    color: isActive ? '#0f172a' : '#94a3b8',
+                                    backgroundColor: isActive ? meta.accent : 'rgba(255,255,255,0.04)',
+                                    boxShadow: isActive ? `0 0 18px ${meta.accent}66` : 'none',
+                                }}
+                            >
+                                {meta.label}
+                                {isActive && (
+                                    <motion.div
+                                        layoutId="shop-tab-accent"
+                                        className="absolute -bottom-0.5 left-2 right-2 h-[2px] rounded-full"
+                                        style={{ backgroundColor: meta.accent }}
+                                    />
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
 
-                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto pr-2 custom-scrollbar relative z-10">
-                    {shopItems.map(item => (
-                        <button
-                            key={item.id}
-                            onClick={() => onBuy(item.id, item.price)}
-                            disabled={money < item.price}
-                            className={`group relative p-5 rounded-2xl border transition-all duration-300 flex items-center justify-between overflow-hidden ${
-                                money >= item.price
-                                    ? 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/20 hover:scale-[1.02]'
-                                    : 'bg-white/5 border-white/5 opacity-40 cursor-not-allowed'
-                            }`}
+                {/* Item grid */}
+                <div className="flex-1 overflow-y-auto px-4 py-4 custom-scrollbar">
+                    <AnimatePresence mode="wait">
+                        <motion.div
+                            key={activeTab}
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -6 }}
+                            transition={{ duration: 0.15 }}
+                            className="grid grid-cols-1 md:grid-cols-2 gap-2.5"
                         >
-                            <div className="flex items-center gap-4 relative z-10">
-                                <div className="w-16 h-16 bg-black/40 rounded-xl flex items-center justify-center p-3 border border-white/5 group-hover:scale-110 transition-transform duration-500">
-                                    <img src={item.icon} className="w-12 h-12 object-contain drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]" alt={item.name} referrerPolicy="no-referrer" />
+                            {shopItems.length === 0 && (
+                                <div className="md:col-span-2 text-center text-[10px] text-slate-500 uppercase tracking-widest py-16">
+                                    Shelf empty in this aisle.
                                 </div>
-                                <div className="text-left">
-                                    <div className="font-black uppercase text-xs tracking-tight group-hover:text-blue-400 transition-colors">{item.name}</div>
-                                    <div className="text-[9px] text-gray-500 max-w-[180px] leading-relaxed mt-1 line-clamp-2">{item.description}</div>
-                                    <div className="flex items-center gap-2 mt-2">
-                                        <div className="text-[8px] font-black uppercase text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded">
-                                            Owned: {
-                                                item.id === 'poke-ball' ? inventory.pokeballs :
-                                                item.id === 'potion' ? inventory.potions :
-                                                item.id === 'revive' ? inventory.revives :
-                                                item.id === 'rare-candy' ? inventory.rare_candy :
-                                                inventory.items.filter((i: string) => i === item.id).length
-                                            }
+                            )}
+                            {shopItems.map((item) => {
+                                const owned = ownedCount(item.id);
+                                const canAfford = money >= item.price;
+                                const accent = TAB_META[item.category as Tab]?.accent ?? '#fbbf24';
+                                return (
+                                    <motion.button
+                                        key={item.id}
+                                        whileHover={canAfford ? { y: -2, scale: 1.01 } : undefined}
+                                        onClick={() => canAfford && onBuy(item.id, item.price)}
+                                        disabled={!canAfford}
+                                        className="relative p-3 rounded-xl border border-white/10 transition-colors text-left flex items-center gap-3 overflow-hidden"
+                                        style={{
+                                            background: canAfford
+                                                ? `linear-gradient(90deg, ${accent}18 0%, rgba(2,6,23,0.85) 100%)`
+                                                : 'rgba(2,6,23,0.6)',
+                                            opacity: canAfford ? 1 : 0.45,
+                                            cursor: canAfford ? 'pointer' : 'not-allowed',
+                                        }}
+                                    >
+                                        {/* Left color rail */}
+                                        <div className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: accent }} />
+
+                                        {/* Icon tile */}
+                                        <div
+                                            className="w-14 h-14 rounded-lg border border-white/10 flex items-center justify-center shrink-0"
+                                            style={{ background: 'rgba(2,6,23,0.7)' }}
+                                        >
+                                            <img
+                                                src={item.icon}
+                                                className="w-10 h-10 object-contain drop-shadow"
+                                                alt={item.name}
+                                                referrerPolicy="no-referrer"
+                                                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                                            />
                                         </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="text-right relative z-10">
-                                <div className="text-xl font-mono font-bold text-white group-hover:text-yellow-400 transition-colors">${item.price}</div>
-                                <div className="text-[8px] font-black uppercase text-gray-600 mt-1">Purchase</div>
-                            </div>
 
-                            <div className="absolute inset-0 bg-gradient-to-r from-blue-600/0 via-blue-600/5 to-blue-600/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                        </button>
-                    ))}
+                                        {/* Name + desc */}
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-[10px] uppercase font-black tracking-wider truncate text-white">
+                                                    {item.name}
+                                                </div>
+                                                <div
+                                                    className="text-[8px] uppercase font-black px-1.5 py-[2px] rounded-full whitespace-nowrap"
+                                                    style={{ color: accent, background: `${accent}22`, border: `1px solid ${accent}55` }}
+                                                >
+                                                    ×{owned}
+                                                </div>
+                                            </div>
+                                            <div className="text-[7px] text-slate-400 leading-tight line-clamp-2 mt-0.5">
+                                                {item.description}
+                                            </div>
+                                        </div>
+
+                                        {/* Price */}
+                                        <div className="text-right shrink-0">
+                                            <div className="text-sm font-mono font-black text-amber-300 leading-none">
+                                                ${item.price}
+                                            </div>
+                                            <div className="text-[7px] uppercase text-slate-500 tracking-widest mt-0.5">
+                                                {canAfford ? 'Buy' : 'Short'}
+                                            </div>
+                                        </div>
+                                    </motion.button>
+                                );
+                            })}
+                        </motion.div>
+                    </AnimatePresence>
                 </div>
 
-                <div className="mt-8 flex justify-center relative z-10">
-                    <button
-                        onClick={onClose}
-                        className="group relative px-16 py-4 bg-white text-black font-black uppercase tracking-[0.4em] text-xs hover:bg-red-600 hover:text-white transition-all rounded-full overflow-hidden shadow-2xl"
-                    >
-                        <span className="relative z-10">Close Terminal</span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                    </button>
+                {/* Footer */}
+                <div className="flex-shrink-0 px-6 py-4 border-t border-white/5 bg-black/20">
+                    <PushButton onClick={onClose} color="amber">
+                        Close Mart
+                    </PushButton>
                 </div>
-            </div>
+            </MenuCard>
         </div>
     );
 };

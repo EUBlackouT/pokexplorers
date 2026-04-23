@@ -203,7 +203,7 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
     {
       "pokemon": "Zigzagoon",
       "availability": "early",
-      "abilities_new": ["HarmonyEngine", "LuckyBark"],
+      "abilities_new": ["Symmetry", "HarmonyEngine", "LuckyBark"],
       "learnset_additions": [
         { "move": "Normal Wave of Quick Step", "level": 10 }
       ]
@@ -270,14 +270,6 @@ export const POKEMON_ASSIGNMENTS: PokemonAssignment[] = [
       "abilities_new": ["SyncBoost", "ChlorophyllPlus"],
       "learnset_additions": [
         { "move": "Grass Surge", "level": 10 }
-      ]
-    },
-    {
-      "pokemon": "Zigzagoon",
-      "availability": "early",
-      "abilities_new": ["HarmonyEngine", "LuckyBark"],
-      "learnset_additions": [
-        { "move": "Lucky Bark", "level": 5 }
       ]
     },
     {

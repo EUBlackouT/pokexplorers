@@ -30,38 +30,45 @@ const CHOICE_SCARF = { id: 'choice-scarf', name: 'Choice Scarf' };
 const FOCUS_SASH = { id: 'focus-sash', name: 'Focus Sash' };
 const ASSAULT_VEST = { id: 'assault-vest', name: 'Assault Vest' };
 const EXPERT_BELT = { id: 'expert-belt', name: 'Expert Belt' };
+const SITRUS_BERRY = { id: 'sitrus-berry', name: 'Sitrus Berry' };
+const LUM_BERRY = { id: 'lum-berry', name: 'Lum Berry' };
 
-// --- Gym 1: Mira -- Forest / Grass+Bug, fusion core: Butterfree + Parasect ---
+// --- Gym 1: Twig & Toby -- "The Symmetric Raccoons" ------------------------
+// Signature gimmick: twin Zigzagoon with the Symmetry ability each holding a
+// Sitrus Berry. As either one drops below 50% HP, Sitrus fires + Symmetry
+// heals the ally for the same amount -- a self-sustaining berry economy.
+// Linoone follows up with Buddy Berry support so hanging on to that Lum Berry
+// feels even stickier, and the Mightyena ace cleans up with Jetstream speed.
 const GYM_1: GymTeam = {
     badgeId: 1,
-    name: 'Mira',
-    title: 'Verdant Weaver',
-    type: 'grass',
+    name: 'Twig',
+    title: 'Symmetric Raccoons',
+    type: 'normal',
     level: 15,
     loadout: [
         {
-            id: 12, // Butterfree
-            ability: 'RuneBloom',
-            heldItem: FOCUS_SASH,
-            ensureMoves: ['sleep-powder', 'bug-buzz', 'psychic', 'Silk Snare'],
+            id: 263, // Zigzagoon A
+            ability: 'Symmetry',
+            heldItem: SITRUS_BERRY,
+            ensureMoves: ['headbutt', 'tackle', 'sand-attack', 'Normal Wave of Quick Step'],
         },
         {
-            id: 47, // Parasect -- bug/grass fusion partner
-            ability: 'SourSap',
+            id: 263, // Zigzagoon B -- mirror of A, the symmetry pair
+            ability: 'Symmetry',
+            heldItem: SITRUS_BERRY,
+            ensureMoves: ['headbutt', 'tackle', 'sand-attack', 'Normal Wave of Quick Step'],
+        },
+        {
+            id: 264, // Linoone -- keeps the berry loop going and applies pressure
+            ability: 'BuddyBerry',
+            heldItem: LUM_BERRY,
+            ensureMoves: ['extreme-speed', 'headbutt', 'belly-drum', 'rest'],
+        },
+        {
+            id: 262, // Mightyena -- ACE, Jetstream sweeper
+            ability: 'Jetstream',
             heldItem: LIFE_ORB,
-            ensureMoves: ['spore', 'x-scissor', 'Grass Surge', 'seed-bomb'],
-        },
-        {
-            id: 45, // Vileplume
-            ability: 'VenomousAura',
-            heldItem: ASSAULT_VEST,
-            ensureMoves: ['giga-drain', 'sludge-bomb', 'moonblast', 'dazzling-gleam'],
-        },
-        {
-            id: 71, // Victreebel -- ACE
-            ability: 'Resonance',
-            heldItem: LIFE_ORB,
-            ensureMoves: ['leaf-blade', 'Grass Surge', 'poison-jab', 'Swords Dance'],
+            ensureMoves: ['crunch', 'play-rough', 'sucker-punch', 'Dark Wave'],
             levelDelta: +2,
         },
     ],

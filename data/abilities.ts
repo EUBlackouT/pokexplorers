@@ -1031,5 +1031,38 @@ export const NEW_ABILITIES: Record<string, AbilityData> = {
     "category": "General",
     "description": "On switch-in, sets Gravity for 5 turns.",
     "tags": ["gravity", "entry"]
+  },
+  // --- Early-pool signature abilities (v2 expansion) ------------------------
+  // Designed around the multiplayer doubles + fusion gimmick so they feel
+  // relevant without being overpowered on Gen-1 base stats.
+  "BuddyBerry": {
+    "category": "Doubles",
+    "description": "When this Pokémon or its ally consumes a Berry, both Pokémon also restore 1/16 max HP. Pairs beautifully with Symmetry and Sitrus Berry stacks.",
+    "tags": ["berry", "ally-buff", "doubles"]
+  },
+  "ShellCurl": {
+    "category": "General",
+    "description": "The first time this Pokémon drops below 50% HP each battle, its Defense and Sp. Def rise by 1 stage.",
+    "tags": ["defensive", "once-per-battle"]
+  },
+  "EmberSpark": {
+    "category": "Signature",
+    "description": "The first Fire-type move this Pokémon uses each battle gets +25 base power.",
+    "tags": ["fire", "once-per-battle"]
+  },
+  "MoonCharm": {
+    "category": "General",
+    "description": "Fairy and Normal-type moves used by this Pokémon have a +1 critical-hit ratio.",
+    "tags": ["fairy", "normal", "crit"]
+  },
+  "DreamEater": {
+    "category": "General",
+    "description": "At the end of each turn, restores 1/8 max HP for each sleeping foe on the field.",
+    "tags": ["sleep", "heal"]
+  },
+  "TwinFocus": {
+    "category": "Doubles",
+    "description": "When this Pokémon and its ally target the same foe on the same turn, both of their damaging moves deal 1.2× damage against that foe.",
+    "tags": ["doubles", "focus-fire"]
   }
 };

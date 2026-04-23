@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { multiplayer } from '../../services/multiplayer';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
+import { MenuBackdrop, MenuCard, BrandTitle, BrandEyebrow, PushButton } from '../ui/MenuKit';
 
 export const OnlineMenu: React.FC<{
     onBack: () => void;
@@ -13,7 +15,7 @@ export const OnlineMenu: React.FC<{
 
     const joinRoom = async () => {
         const cleanId = roomId.trim().toUpperCase();
-        if (cleanId.length < 4) { setErrorMsg("Enter valid room ID."); return; }
+        if (cleanId.length < 4) { setErrorMsg('Enter a valid room ID.'); return; }
         setStatus('connecting');
         setErrorMsg('');
         try {
@@ -27,23 +29,56 @@ export const OnlineMenu: React.FC<{
     };
 
     return (
-        <div className="min-h-screen bg-[#020617] text-white p-4 md:p-12 font-sans flex flex-col items-center justify-center relative overflow-hidden">
-            <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
-                <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,#1e3a8a_0%,transparent_70%)]"></div>
-                <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-blue-600/20 blur-[120px] rounded-full animate-pulse"></div>
+        <div className="min-h-screen flex items-center justify-center p-6 font-press-start relative overflow-hidden text-white">
+            {/* Painted room backdrop */}
+            <div className="fixed inset-0 pointer-events-none" style={{
+                background: 'radial-gradient(ellipse at center, rgba(59,130,246,0.25) 0%, rgba(2,6,23,0.98) 55%, #020617 100%)',
+            }} />
+            <div className="fixed inset-0 pointer-events-none opacity-40">
+                <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/30 blur-[120px] rounded-full animate-pulse" />
+                <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/20 blur-[120px] rounded-full animate-pulse delay-700" />
             </div>
 
-            <div className="max-w-md w-full z-10 bg-white/5 backdrop-blur-2xl border border-white/10 p-10 rounded-[2.5rem] shadow-2xl">
-                <div className="text-center mb-10">
-                    <h2 className="text-4xl font-black tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                        Join Friend
-                    </h2>
-                    <p className="text-gray-500 text-[10px] uppercase tracking-[0.4em] font-bold mt-2">Enter the Rift Synchronization Code</p>
+            {/* Floating particles */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                {[...Array(12)].map((_, i) => (
+                    <motion.div
+                        key={i}
+                        initial={{
+                            x: Math.random() * (typeof window === 'undefined' ? 800 : window.innerWidth),
+                            y: Math.random() * (typeof window === 'undefined' ? 600 : window.innerHeight),
+                            opacity: 0,
+                        }}
+                        animate={{
+                            y: [null, Math.random() * -200 - 40],
+                            opacity: [0, 0.5, 0],
+                            scale: [0, 1, 0],
+                        }}
+                        transition={{ duration: 5 + Math.random() * 8, repeat: Infinity, delay: Math.random() * 4 }}
+                        className="absolute w-1 h-1 bg-cyan-300 rounded-full blur-sm"
+                    />
+                ))}
+            </div>
+
+            <MenuBackdrop accent="#60a5fa" />
+
+            <MenuCard maxWidth="max-w-md">
+                <div
+                    className="relative px-6 pt-6 pb-4 border-b border-white/5"
+                    style={{
+                        background: 'linear-gradient(90deg, rgba(59,130,246,0.4) 0%, rgba(59,130,246,0.1) 60%, transparent 100%)',
+                    }}
+                >
+                    <BrandEyebrow color="#93c5fd">Co-op Rift Link</BrandEyebrow>
+                    <BrandTitle size="md" className="mt-1">JOIN A FRIEND</BrandTitle>
+                    <p className="text-[9px] uppercase tracking-[0.35em] text-slate-400 mt-2">Enter the 4+ character room code</p>
                 </div>
 
-                <div className="space-y-6">
-                    <div className="space-y-2">
-                        <label htmlFor="rift-room-id" className="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-2">Room ID</label>
+                <div className="p-6 space-y-5">
+                    <div>
+                        <label htmlFor="rift-room-id" className="block text-[9px] font-black uppercase tracking-[0.35em] text-slate-300 mb-2">
+                            Room ID
+                        </label>
                         <input
                             id="rift-room-id"
                             type="text"
@@ -52,40 +87,41 @@ export const OnlineMenu: React.FC<{
                             maxLength={12}
                             onChange={(e) => setRoomId(e.target.value.toUpperCase())}
                             onKeyDown={(e) => { if (e.key === 'Enter' && roomId.trim().length >= 4 && status !== 'connecting') joinRoom(); }}
-                            placeholder="ENTER CODE"
-                            className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 text-center text-xl font-mono font-bold tracking-[0.5em] focus:outline-none focus:border-blue-500 placeholder:text-white/20 transition-colors"
+                            placeholder="CODE"
+                            className="w-full bg-black/50 border-2 border-white/10 rounded-xl px-6 py-4 text-center text-2xl font-mono font-black tracking-[0.4em] focus:outline-none focus:border-blue-400 placeholder:text-white/15 transition-colors"
                         />
-                        <div className="text-[9px] text-gray-600 uppercase tracking-widest text-center font-bold mt-1">Ask your friend for their 4+ character code</div>
+                        <div className="text-[8px] text-slate-500 uppercase tracking-[0.3em] text-center font-bold mt-2">
+                            Ask your friend to share theirs
+                        </div>
                     </div>
 
                     {errorMsg && (
-                        <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-bold uppercase p-3 rounded-xl text-center">
+                        <motion.div
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[10px] font-bold uppercase tracking-widest p-3 rounded-lg text-center"
+                        >
                             {errorMsg}
-                        </div>
+                        </motion.div>
                     )}
 
-                    <div className="flex flex-col gap-3">
-                        <button
+                    <div className="space-y-2">
+                        <PushButton
                             onClick={joinRoom}
                             disabled={status === 'connecting' || roomId.trim().length < 4}
-                            className={`
-                                w-full py-5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg
-                                ${status === 'connecting' || roomId.trim().length < 4
-                                    ? 'bg-white/5 text-white/20 cursor-not-allowed'
-                                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}
-                            `}
+                            color="blue"
                         >
-                            {status === 'connecting' ? 'Syncing...' : 'Connect to Rift'}
-                        </button>
+                            {status === 'connecting' ? 'Syncing…' : 'Connect to Rift'}
+                        </PushButton>
                         <button
                             onClick={onBack}
-                            className="w-full py-4 text-gray-500 hover:text-white text-[10px] font-black uppercase tracking-widest transition-colors"
+                            className="w-full py-3 text-[9px] font-black uppercase tracking-[0.35em] text-slate-400 hover:text-white transition-colors"
                         >
-                            Return to Menu
+                            ← Back to Menu
                         </button>
                     </div>
                 </div>
-            </div>
+            </MenuCard>
         </div>
     );
 };

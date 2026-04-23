@@ -53,6 +53,45 @@
     100% { transform: translateX(200%) skewX(-12deg); }
   }
 
+  /* --- Battle VFX keyframes ----------------------------------------------- */
+  /* Radial particle burst: the span is centered on its parent, we transform
+     out to (--dx, --dy) with fade + scale. Used by BattleFxOverlay sparks and
+     by MoveVFX impact bursts. */
+  @keyframes vfx-spark {
+    0%   { transform: translate(-50%, -50%) scale(0.4); opacity: 1; }
+    60%  { opacity: 1; }
+    100% { transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, 0px))) scale(0.1); opacity: 0; }
+  }
+
+  /* Expanding shockwave ring -- used at impact points for big moves. */
+  @keyframes vfx-ring {
+    0%   { transform: translate(-50%, -50%) scale(0);   opacity: 0.9; }
+    100% { transform: translate(-50%, -50%) scale(3);   opacity: 0; }
+  }
+
+  /* Quick impact "hit flash" -- white burst that punches through on contact. */
+  @keyframes vfx-hit-flash {
+    0%   { transform: translate(-50%, -50%) scale(0.2); opacity: 0; }
+    30%  { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(2);   opacity: 0; }
+  }
+
+  /* Rain / shard fall: particle falls from above with some horizontal drift. */
+  @keyframes vfx-drop {
+    0%   { transform: translate(var(--start-x, 0), -20vh) scale(0.6); opacity: 0; }
+    15%  { opacity: 1; }
+    100% { transform: translate(var(--end-x, 0), 70vh)  scale(1);   opacity: 0; }
+  }
+
+  /* Beam line pulse -- for the beam core that stretches between attacker and
+     defender. We grow length then fade. */
+  @keyframes vfx-beam {
+    0%   { transform: scaleX(0) scaleY(1);   opacity: 0; }
+    15%  { transform: scaleX(1) scaleY(1.3); opacity: 1; }
+    80%  { transform: scaleX(1) scaleY(1);   opacity: 0.9; }
+    100% { transform: scaleX(1) scaleY(0.4); opacity: 0; }
+  }
+
   .animate-float {
     animation: float 4s ease-in-out infinite;
   }

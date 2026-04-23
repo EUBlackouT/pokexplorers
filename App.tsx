@@ -19,10 +19,12 @@ import {
     handleEndOfTurnStatus,
     calculateStatsFull,
     getEvolutionTarget,
-    TYPE_COLORS
+    TYPE_COLORS,
+    getEffectiveDefensiveTypes,
 } from './services/pokeService';
 import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx } from './services/soundService';
-import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE } from './services/mapData';
+import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE, WORLD_MAX_DIST, getNextGymTarget, compassDirectionName, getGrassAura, getChunkOutbreak } from './services/mapData';
+import { applyBountyEvent, rollBounties } from './data/bounties';
 import { ITEMS } from './services/itemData';
 import { generateBattleBackground, MENU_BACKGROUND_URL, getStaticBackground } from './services/imageService';
 import { multiplayer, NetworkPayload } from './services/multiplayer';
@@ -32,9 +34,12 @@ import { HealthBar } from './components/HealthBar';
 import { PokemonSprite } from './components/PokemonSprite';
 import { StarterSelect } from './components/StarterSelect';
 import { Overworld } from './components/Overworld';
+import { CatchComboBadge } from './components/ui/CatchComboBadge';
+import { BountyBoard } from './components/screens/BountyBoard';
 import { ActionButton } from './components/ui/ActionButton';
 import { MoveButton } from './components/ui/MoveButton';
 import { MoveVFX } from './components/ui/MoveVFX';
+import { BattleFxOverlay } from './components/ui/BattleFxOverlay';
 import { EmoteOverlay } from './components/ui/EmoteOverlay';
 import { SyncGauge } from './components/ui/SyncGauge';
 import { AudioWidget } from './components/ui/AudioWidget';
@@ -59,10 +64,113 @@ import { popupAbility, popupStat, popupStatus, popupWeather, popupCrit, popupEff
 import { writeSave, loadSave, hasSave, deleteSave, exportSaveToString, importSaveFromString, getLastSavedAt, formatSavedAt } from './utils/saveGame';
 import { EvolutionScene } from './components/screens/EvolutionScene';
 import { TradeScreen, TradeOffer, TradeSession, makeEmptyOffer } from './components/screens/TradeScreen';
+import {
+    migrateMeta,
+    hasTalent,
+    hasVaultUnlock,
+    getKeystoneLevel,
+    warden_level,
+    swift_level,
+    swift_healMult,
+    purse_essenceMult,
+    purse_xpMult,
+    purse_startingMoney,
+    stability_scalingMult,
+    catchers_catchMult,
+    catchers_shinyTier,
+    catchers_permitBonus,
+    scavenger_dropBonus,
+    scavenger_shopDiscount,
+    scavenger_startItems,
+    TOKEN_AWARDS,
+} from './data/meta';
+import { TERA_TYPES, MEGA_ELIGIBLE, MEGA_ATK_MULT, MEGA_DEF_MULT, Z_DAMAGE_MULT } from './data/riftForms';
 
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * RIVAL MILESTONES ------------------------------------------------------
+ *
+ * The rival intercepts the player the first time they cross each of
+ * these chunk-distance thresholds. Acts as a pacing beat between gyms:
+ * distance-based rather than badge-based so exploration-focused players
+ * also hit them, and gym-rushers get them lined up nicely on the
+ * way to the later gyms.
+ *
+ * Each team is built to be MEANINGFUL at that progression tier (not
+ * trivially stomped), and unique rewards hint at the "growing up"
+ * narrative: mid-game you get a held item, late-game you get an
+ * evolution stone for a pseudo-legendary.
+ *
+ * All teams are >= 2 mons so the double-battle engine can deploy a
+ * proper pair -- this is the invariant the multiplayer coop depends
+ * on.
+ */
+interface RivalMilestone {
+    dist: number;
+    level: number;
+    team: number[];
+    greeting: string;
+    loss: string;
+    /** Reward item id dropped on win (in addition to money). */
+    trophy?: string;
+    /** Flat money bonus (tier reward). */
+    money: number;
+}
+const RIVAL_MILESTONES: RivalMilestone[] = [
+    {
+        dist: 25, level: 26, team: [18, 59, 65, 134],
+        greeting: "Well, look who wandered this far. Time to remind you who's better.",
+        loss: "Tch. You got lucky. It won't happen again.",
+        trophy: 'expert-belt',
+        money: 2500,
+    },
+    {
+        dist: 50, level: 46, team: [6, 59, 94, 130, 135],
+        greeting: "Still at it? Then I'll put you down harder.",
+        loss: "...You've actually gotten stronger. Damn.",
+        trophy: 'weakness-policy',
+        money: 6000,
+    },
+    {
+        dist: 100, level: 70, team: [6, 149, 143, 130, 248, 59],
+        greeting: "Champion-level territory. Nowhere to run this time.",
+        loss: "Heh. Maybe I should start calling you rival.",
+        trophy: 'fusion-core',
+        money: 15000,
+    },
+    {
+        dist: 150, level: 85, team: [6, 149, 248, 445, 373, 59],
+        greeting: "You've gone farther than anyone I know. Except me.",
+        loss: "Alright. You've earned the title.",
+        trophy: 'chrono-prism',
+        money: 28000,
+    },
+    {
+        dist: 200, level: 95, team: [6, 149, 248, 445, 373, 384],
+        greeting: "The edge of the world, and you're still going. One last match.",
+        loss: "...Go. Show them what you are.",
+        trophy: 'master-ball',
+        money: 50000,
+    },
+];
+
+function buildRivalTrainer(m: RivalMilestone): TrainerData {
+    return {
+        id: `rival_milestone_${m.dist}`,
+        name: `Rival Gary -- Mile ${m.dist}`,
+        sprite: 'https://play.pokemonshowdown.com/sprites/trainers/blue.png',
+        team: m.team,
+        level: m.level,
+        reward: m.money,
+        dialogue: m.greeting,
+        winDialogue: m.loss,
+        tier: 'rival',
+        archetype: 'rival',
+    };
+}
 
 export default function App() {
   console.log('App Rendering: Start');
@@ -78,29 +186,16 @@ export default function App() {
       discoveredChunks: [], discoveryPoints: 0,
       meta: {
           riftEssence: 0,
+          riftTokens: 0,
           unlockedStarters: [1, 4, 7, 25, 133],
           unlockedPacks: [],
           mainQuestProgress: {
               currentQuestId: 'q1',
               completedQuests: []
           },
-          upgrades: {
-              startingMoney: 0,
-              attackBoost: 0,
-              defenseBoost: 0,
-              xpMultiplier: 0,
-              startingPermits: 0,
-              shinyChance: 0,
-              lootQuality: 0,
-              riftStability: 0,
-              mercenaryGuild: 0,
-              evolutionaryInsight: 0,
-              speedBoost: 0,
-              critBoost: 0,
-              healingBoost: 0,
-              captureBoost: 0,
-              essenceMultiplier: 0
-          }
+          talents: [],
+          vaultUnlocks: [],
+          keystones: {},
       },
       run: {
           isNuzlocke: true,
@@ -157,6 +252,10 @@ export default function App() {
   const [currentEmote, setCurrentEmote] = useState<string | null>(null);
   const [comboVfx, setComboVfx] = useState<boolean>(false);
   const [dialogue, setDialogue] = useState<string[] | null>(null);
+  // Rift Transform (Tera / Mega / Z) picker modal state. Null while
+  // closed; when set, the in-battle overlay shows the option chooser
+  // for the currently active player mon.
+  const [transformPicker, setTransformPicker] = useState<null | 'root' | 'tera'>(null);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const showToast = useCallback((message: string, tier: ToastTier = 'info', opts: { kicker?: string; ttl?: number } = {}) => {
     setToasts((prev) => [...prev, makeToast(message, tier, opts)]);
@@ -206,7 +305,10 @@ export default function App() {
           showToast('No save found.', 'info', { kicker: 'LOAD' });
           return;
       }
-      setPlayerState(file.player);
+      // v1 -> v2 meta migration: folds legacy `upgrades.*` into keystones
+      // and seeds talents/vaultUnlocks/riftTokens defaults. Idempotent.
+      const migrated: PlayerGlobalState = { ...file.player, meta: migrateMeta(file.player.meta) };
+      setPlayerState(migrated);
       setPhase(GamePhase.OVERWORLD);
       setMusicStarted(true);
       showToast(`Welcome back, ${file.player.name || 'Trainer'}.`, 'reward', { kicker: 'LOAD', ttl: 2400 });
@@ -229,7 +331,8 @@ export default function App() {
   const handleImportSave = useCallback((payload: string): boolean => {
       const file = importSaveFromString(payload);
       if (!file) return false;
-      setPlayerState(file.player);
+      const migrated: PlayerGlobalState = { ...file.player, meta: migrateMeta(file.player.meta) };
+      setPlayerState(migrated);
       refreshSaveMeta();
       showToast('Save imported.', 'reward', { kicker: 'IMPORT' });
       return true;
@@ -360,6 +463,33 @@ export default function App() {
   const lastSyncRef = useRef("");
   const lastMapSyncRef = useRef("");
   const onDataRef = useRef<(data: any) => void>(() => {});
+  // Transient flag: true when the *current* wild battle was triggered by
+  // stepping on an "anomaly" aura tile. Read + cleared by the catch
+  // handler so the player gets their capture permit refunded. Using a
+  // ref (not playerState) keeps this out of the save file and dodges the
+  // stale-state bug where a fled anomaly battle would leak a refund into
+  // the next catch. Cleared unconditionally on return to OVERWORLD.
+  const pendingAnomalyRef = useRef<false | 'rustling' | 'alpha' | 'anomaly'>(false);
+  // One-shot species override for the next wild battle (used by Mass
+  // Outbreak chunks). Cleared on every OVERWORLD re-entry.
+  const pendingOutbreakRef = useRef<number | null>(null);
+  // Remembers which outbreak chunks we've already shown the intro
+  // toast for, so chunk re-entry isn't spammy. String key = "cx,cy".
+  const seenOutbreakChunksRef = useRef<Set<string>>(new Set());
+  // Gauntlet queue: after a trainer-battle victory, if the defeated
+  // trainer had a `gauntletNextTrainerId`, we stash the next
+  // TrainerData here. The effect below watches (phase, dialogue) and
+  // fires the next startBattle when the victory dialogue closes, so
+  // the player's team HP/status carries over untouched.
+  const pendingGauntletNextRef = useRef<TrainerData | null>(null);
+  // Rival intercept queue -- see RIVAL_MILESTONES below. The rival
+  // ambushes the player when they FIRST cross a distance milestone.
+  // We record which milestones have already fired via the
+  // `rival_beaten_<n>` story flag so a milestone can't re-trigger
+  // even after whiteout + reload. If the player flees, they can
+  // retrigger at the next chunk transition past that milestone
+  // (the ref gets set again in the movement handler).
+  const pendingRivalRef = useRef<TrainerData | null>(null);
 
   const [remotePlayers, setRemotePlayers] = useState<Map<string, any>>(new Map());
   const [battleChallenge, setBattleChallenge] = useState<{ challengerId: string, playerInfo: any } | null>(null);
@@ -779,9 +909,7 @@ export default function App() {
   function handleRunEnd() {
       const distance = Math.floor(Math.sqrt(playerState.chunkPos.x ** 2 + playerState.chunkPos.y ** 2));
       let essenceAwarded = Math.floor(distance / 2) + (playerState.badges * 5);
-      if (playerState.meta.upgrades.essenceMultiplier > 0) {
-          essenceAwarded = Math.floor(essenceAwarded * (1 + playerState.meta.upgrades.essenceMultiplier * 0.1));
-      }
+      essenceAwarded = Math.floor(essenceAwarded * purse_essenceMult(playerState.meta));
       
       setDialogue([
           "YOUR EXPEDITION HAS ENDED.",
@@ -791,18 +919,30 @@ export default function App() {
       ]);
 
       setPlayerState(prev => {
-          const startingPermits = 2 + (prev.meta.upgrades.startingPermits || 0);
-          const startingMoney = 500 + (prev.meta.upgrades.startingMoney * 1000);
-          
-          // Mercenary Guild: Start with random items
+          const startingPermits = 2 + catchers_permitBonus(prev.meta);
+          const startingMoney = purse_startingMoney(prev.meta);
+
+          // Scavenger Cache: start-of-run stash of random held items.
           const items: string[] = [];
-          if (prev.meta.upgrades.mercenaryGuild > 0) {
+          const startCount = scavenger_startItems(prev.meta);
+          if (startCount > 0) {
               const pool = ['choice-band', 'life-orb', 'leftovers', 'focus-sash', 'expert-belt'];
-              for (let i = 0; i < prev.meta.upgrades.mercenaryGuild; i++) {
+              for (let i = 0; i < startCount; i++) {
                   items.push(pool[Math.floor(Math.random() * pool.length)]);
               }
           }
 
+          // Wild Instinct talent: start a pinned catch-combo tracker so
+          // the very first catch lands in a combo (we just store a
+          // placeholder target species until the starter is picked).
+          const startComboShell = hasTalent(prev.meta, 'wild_instinct')
+              ? { speciesId: 0, speciesName: '(starter)', count: 0, best: prev.catchCombo?.best ?? 0 }
+              : undefined;
+
+          const prevLt = prev.lifetime ?? {
+              shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0,
+              totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] as string[],
+          };
           return {
               ...prev,
               meta: {
@@ -819,7 +959,7 @@ export default function App() {
                   badgesEarned: 0,
                   perks: []
               },
-              team: [], 
+              team: [],
               money: startingMoney,
               badges: 0,
               chunkPos: { x: 0, y: 0 },
@@ -828,7 +968,15 @@ export default function App() {
               inventory: { pokeballs: 0, potions: 5, revives: 0, rare_candy: 0, items: items },
               defeatedTrainers: [],
               discoveredChunks: [],
-              discoveryPoints: 0
+              discoveryPoints: 0,
+              // Strip run-scoped story flags so rival milestones etc.
+              // re-trigger in the new run. Keystone-level flags (the
+              // `unlocked_*` ones) would live on meta, not here.
+              storyFlags: prev.storyFlags.filter(f => !f.startsWith('rival_') && !f.startsWith('outbreak_token_') && f !== 'second_wind_used'),
+              catchCombo: startComboShell,
+              // Stash the run-start timestamp so Rift Ledger (2x tokens
+              // in the first hour) can reliably query it.
+              lifetime: { ...prevLt, runStartedAt: Date.now() } as any,
           };
       });
       setPhase(GamePhase.MENU);
@@ -895,8 +1043,8 @@ export default function App() {
           if (speedStage > 0) speed *= (1 + 0.5 * speedStage);
           else if (speedStage < 0) speed *= (1 / (1 + 0.5 * Math.abs(speedStage)));
 
-          // Meta Upgrades
-          speed *= (1 + playerState.meta.upgrades.speedBoost * 0.05);
+          // Meta Upgrades -- Swift Ring keystone: +5% speed per level
+          speed *= (1 + swift_level(playerState.meta) * 0.05);
 
           if (actor.status === 'paralysis') speed *= 0.5;
           if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
@@ -988,7 +1136,7 @@ export default function App() {
           return;
       }
       
-      let speed = (actor?.stats.speed || 0) * (1 + playerState.meta.upgrades.speedBoost * 0.05);
+      let speed = (actor?.stats.speed || 0) * (1 + swift_level(playerState.meta) * 0.05);
       if (actor.status === 'paralysis') speed *= 0.5;
       if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
       if (actor.heldItem?.id === 'lagging-tail') speed *= 0.5;
@@ -1030,6 +1178,14 @@ export default function App() {
       if (actor.nextMovePriorityBoost && move) {
           priority += 1;
           actor.nextMovePriorityBoost = false; // Reset
+      }
+
+      // Link Crystal (held item): fusion moves gain +1 priority, ONCE per
+      // battle. We stash the used-flag on the actor so it resets between
+      // battles (Pokemon objects are cloned per-encounter in setup).
+      if (isFusionMove && actor.heldItem?.id === 'link-crystal' && !(actor as any)._usedLinkCrystal) {
+          priority += 1;
+          (actor as any)._usedLinkCrystal = true;
       }
 
       const action = { actorIndex: currentActorIndex, targetIndex, move, item, isPlayer: true, isFusion: isFusionMove, speed, priority, switchIndex };
@@ -1255,6 +1411,25 @@ export default function App() {
                   return;
               }
 
+              if (npc.id === 'guild_clerk') {
+                  // If the player has no active slate, roll a fresh trio so
+                  // the first visit immediately shows available contracts.
+                  if (!playerState.bounties || playerState.bounties.active.length === 0) {
+                      const fresh = rollBounties({
+                          playerBadges: playerState.badges,
+                          maxDistance: playerState.run.maxDistanceReached,
+                          // Talent: Bounty Broker expands the slate from 3 to 4.
+                          slateSize: hasTalent(playerState.meta, 'bounty_broker') ? 4 : 3,
+                      });
+                      setPlayerState(prev => ({
+                          ...prev,
+                          bounties: { active: fresh, rerollAvailableAt: Date.now() },
+                      }));
+                  }
+                  setPhase(GamePhase.BOUNTY_BOARD);
+                  return;
+              }
+
               if (npc.challenge) {
                   const challengeKey = `challenge_${npc.id}`;
                   if (playerState.storyFlags.includes(challengeKey)) {
@@ -1343,7 +1518,50 @@ export default function App() {
           }
           if (currentMap.interactables?.[key]) { 
               const interactable = currentMap.interactables[key];
-              
+
+              // Gym compass signpost: dynamically compute direction to the
+              // player's next unearned gym so the same sign stays useful
+              // across the whole run. Pre-baked text on the interactable is
+              // ignored in this branch.
+              if (interactable.type === 'gym_compass') {
+                  const target = getNextGymTarget(playerState.badges);
+                  if (!target) {
+                      // All 8 badges cleared -- point to the rift ring.
+                      setDialogue([
+                          "The signpost is etched with swirling sigils.",
+                          "'When the eight are bound, seek the rift at the edge of the world.'",
+                          "(All 8 gyms cleared. Travel to distance 50 in any direction.)"
+                      ]);
+                  } else {
+                      // currentMap.id is 'chunk_CX_CY' for overworld chunks.
+                      // Extract the player's current chunk to compute a
+                      // compass direction from here to the next gym.
+                      let pcx = 0, pcy = 0;
+                      const m = currentMap.id.match(/^chunk_(-?\d+)_(-?\d+)$/);
+                      if (m) {
+                          pcx = parseInt(m[1], 10);
+                          pcy = parseInt(m[2], 10);
+                      }
+                      const dx = target.cx - pcx;
+                      const dy = target.cy - pcy;
+                      const chunkDist = Math.round(Math.sqrt(dx * dx + dy * dy));
+                      const dirName = compassDirectionName(dx, dy).toUpperCase();
+                      if (chunkDist === 0) {
+                          setDialogue([
+                              `"The next challenger's hall stands right here."`,
+                              `(Gym ${target.badge} is in this very chunk. Look around!)`
+                          ]);
+                      } else {
+                          setDialogue([
+                              `A weathered wooden signpost, freshly carved.`,
+                              `"Gym ${target.badge} lies to the ${dirName}."`,
+                              `"Roughly ${chunkDist} chunks further. Press on, challenger."`
+                          ]);
+                      }
+                  }
+                  return;
+              }
+
               // Special interactable logic: Statue Riddle
               if (interactable.text.some(t => t.includes("creature of the deep"))) {
                   const leadPokemon = playerState.team[0];
@@ -1382,7 +1600,7 @@ export default function App() {
           currentMap = loadedChunks[playerState.mapId];
           if (!currentMap) {
               const [,cx,cy] = playerState.mapId.split('_');
-              currentMap = generateChunk(parseInt(cx), parseInt(cy), playerState.meta.upgrades.riftStability);
+              currentMap = generateChunk(parseInt(cx), parseInt(cy), getKeystoneLevel(playerState.meta, 'rift_stability'));
               setLoadedChunks(prev => ({ ...prev, [currentMap.id]: currentMap }));
           }
       } else {
@@ -1416,7 +1634,17 @@ export default function App() {
           if (transitioned) {
               const nextDist = Math.sqrt(ncx*ncx + ncy*ncy);
               const distFloor = Math.floor(nextDist);
-              
+
+              // Hard world edge. Beyond WORLD_MAX_DIST, distance-based biome
+              // levels and Number precision start misbehaving, and
+              // discoveredChunks / loadedChunks would balloon indefinitely.
+              // Block the step with a flavor message rather than letting the
+              // game silently choke on a huge save.
+              if (nextDist > WORLD_MAX_DIST) {
+                  setDialogue(["A strange mist swallows the horizon...", "The world ends here. Turn back."]);
+                  return;
+              }
+
               let permitsEarned = 0;
               if (distFloor > playerState.run.maxDistanceReached && distFloor % 5 === 0 && distFloor > 0) {
                   permitsEarned = 1;
@@ -1425,6 +1653,38 @@ export default function App() {
               if (distFloor === 50 && playerState.badges < 8) {
                   setDialogue(["A powerful Rift Barrier blocks the way.", "You need 8 Badges to enter the Rift Core."]);
                   return;
+              }
+
+              // Rival intercept: when the player steps into a chunk whose
+              // floor-distance crosses an unvisited milestone, the rival
+              // queues. Gating is by the `rival_encountered_<n>` story
+              // flag rather than by `maxDistanceReached`:
+              //   - Old gate silently lost the milestone forever if the
+              //     player fled (maxDistance had already advanced past
+              //     the milestone dist, so the inner check failed next
+              //     transition). Now we explicitly flag the encounter
+              //     the moment we queue the ref, and the flag sticks
+              //     through save/reload.
+              //   - Flee without winning = milestone permanently lost
+              //     (encountered set, beaten not set). Intentional trade
+              //     -- forces commitment. Trophy is gone.
+              //   - Returning players whose save pre-dates this system
+              //     will encounter the rivals they missed, in order of
+              //     milestone distance. Low-stakes catch-up content.
+              const candidateMilestone = RIVAL_MILESTONES.find(m =>
+                  distFloor >= m.dist
+                  && !playerState.storyFlags.includes(`rival_encountered_${m.dist}`)
+                  && !playerState.storyFlags.includes(`rival_beaten_${m.dist}`)
+              );
+              if (candidateMilestone && !pendingRivalRef.current) {
+                  pendingRivalRef.current = buildRivalTrainer(candidateMilestone);
+                  // Commit the encountered flag immediately so that a
+                  // flee on the very next frame still treats this
+                  // milestone as "presented once."
+                  setPlayerState(prev => prev.storyFlags.includes(`rival_encountered_${candidateMilestone.dist}`)
+                      ? prev
+                      : { ...prev, storyFlags: [...prev.storyFlags, `rival_encountered_${candidateMilestone.dist}`] }
+                  );
               }
 
               const nextChunkId = `chunk_${ncx}_${ncy}`;
@@ -1484,7 +1744,15 @@ export default function App() {
                       position: { x: p1x, y: p1y },
                       p2Position: { x: p2x, y: p2y },
                       money: prev.money + bonusMoney,
-                      discoveredChunks: [...prev.discoveredChunks, nextChunkId],
+                      // Cap discovered chunks at 10,000 with FIFO eviction.
+                      // Prevents unbounded save bloat + keeps `.includes`
+                      // cost sane on very long runs. The player still keeps
+                      // their total *count* for achievements (discoveryPoints
+                      // and maxDistanceReached persist independently).
+                      discoveredChunks: (() => {
+                          const next = [...prev.discoveredChunks, nextChunkId];
+                          return next.length > 10000 ? next.slice(next.length - 10000) : next;
+                      })(),
                       discoveryPoints: prev.discoveryPoints + bonusPoints,
                       team: updatedTeam,
                       storyFlags: newPerks.length > 0
@@ -1507,7 +1775,19 @@ export default function App() {
                       }
                       setPlayerState(prev => {
                           const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
-                          return { ...prev, lifetime: { ...lt, visitedBiomes: [...lt.visitedBiomes, curBiome] } };
+                          const nextVisited = [...lt.visitedBiomes, curBiome];
+                          // Bounty tick: biome + distance.
+                          let nextB = applyBountyEvent(prev.bounties?.active, { type: 'biome_visit', distinctCount: nextVisited.length });
+                          nextB = applyBountyEvent(nextB, { type: 'distance_update', distance: prev.run.maxDistanceReached });
+                          const nextBState = prev.bounties ? { ...prev.bounties, active: nextB || prev.bounties.active } : prev.bounties;
+                          return { ...prev, lifetime: { ...lt, visitedBiomes: nextVisited }, bounties: nextBState };
+                      });
+                  } else {
+                      // Distance tick still fires even if biome was already visited.
+                      setPlayerState(prev => {
+                          if (!prev.bounties) return prev;
+                          const nextB = applyBountyEvent(prev.bounties.active, { type: 'distance_update', distance: prev.run.maxDistanceReached });
+                          return { ...prev, bounties: { ...prev.bounties, active: nextB || prev.bounties.active } };
                       });
                   }
 
@@ -1536,10 +1816,53 @@ export default function App() {
               }
 
               if (!loadedChunks[nextChunkId]) {
-                  const nextChunk = generateChunk(ncx, ncy, playerState.meta.upgrades.riftStability);
+                  const nextChunk = generateChunk(ncx, ncy, getKeystoneLevel(playerState.meta, 'rift_stability'));
                   setLoadedChunks(prev => ({ ...prev, [nextChunkId]: nextChunk }));
               }
-              
+
+              // Mass Outbreak announcement: fire once per chunk per
+              // session. The TOAST is session-scoped (refs), but the
+              // Rift Token reward is persisted via a storyFlag so we
+              // don't pay the player twice across reloads.
+              {
+                  const chunkKey = `${ncx},${ncy}`;
+                  if (!seenOutbreakChunksRef.current.has(chunkKey)) {
+                      const chunkBiome = loadedChunks[nextChunkId]?.biome
+                          ?? generateChunk(ncx, ncy, getKeystoneLevel(playerState.meta, 'rift_stability')).biome;
+                      const outbreak = getChunkOutbreak(ncx, ncy, chunkBiome);
+                      if (outbreak) {
+                          const outbreakFlag = `outbreak_token_${ncx}_${ncy}`;
+                          const firstTime = !playerState.storyFlags.includes(outbreakFlag);
+                          fetchPokemon(outbreak.speciesId, 1, false, 0, 1)
+                              .then(m => {
+                                  const baseMsg = `A SWARM of ${m.name.toUpperCase()} is thriving here! Chain them for big rewards.`;
+                                  showToast(
+                                      firstTime ? `${baseMsg} +${TOKEN_AWARDS.outbreakFirstEncounter} Rift Token!` : baseMsg,
+                                      'reward',
+                                      { kicker: 'Mass Outbreak', ttl: 5500 }
+                                  );
+                              })
+                              .catch(() => {
+                                  showToast('A Mass Outbreak is active in this area!', 'reward', { kicker: 'Mass Outbreak', ttl: 5500 });
+                              });
+                          if (firstTime) {
+                              // Rift Ledger doubles fresh-run rewards.
+                              const award = hasTalent(playerState.meta, 'rift_ledger')
+                                  && (playerState.lifetime as any)?.runStartedAt
+                                  && (Date.now() - (playerState.lifetime as any).runStartedAt) < 3_600_000
+                                  ? TOKEN_AWARDS.outbreakFirstEncounter * 2
+                                  : TOKEN_AWARDS.outbreakFirstEncounter;
+                              setPlayerState(prev => ({
+                                  ...prev,
+                                  storyFlags: [...prev.storyFlags, outbreakFlag],
+                                  meta: { ...prev.meta, riftTokens: (prev.meta.riftTokens || 0) + award },
+                              }));
+                          }
+                      }
+                      seenOutbreakChunksRef.current.add(chunkKey);
+                  }
+              }
+
               setPlayerState(prev => ({
                   ...prev,
                   mapId: nextChunkId,
@@ -1753,7 +2076,7 @@ export default function App() {
               nextChunkPos = { x: parseInt(cx), y: parseInt(cy) };
               setCurrentWeather('none'); // Reset weather on chunk change
               if (!loadedChunks[targetMapId]) {
-                  const nextChunk = generateChunk(nextChunkPos.x, nextChunkPos.y, playerState.meta.upgrades.riftStability);
+                  const nextChunk = generateChunk(nextChunkPos.x, nextChunkPos.y, getKeystoneLevel(playerState.meta, 'rift_stability'));
                   setLoadedChunks(prev => ({ ...prev, [targetMapId]: nextChunk }));
               }
           }
@@ -1811,9 +2134,48 @@ export default function App() {
       // feeling different on different days without mechanical whiplash.
       encounterRateMult *= getDailyEvent().encounterMult;
 
-      if (tileType === 2 && Math.random() < (0.15 * encounterRateMult)) {
-          startBattle(2, playerState.nextEncounterRare || false, false, undefined, currentMap.biome, tileType);
-          if (playerState.nextEncounterRare) setPlayerState(prev => ({ ...prev, nextEncounterRare: false }));
+      if (tileType === 2) {
+          // Grass-aura lookup: rustling = guaranteed + normal strength,
+          // alpha = guaranteed + treated as boss, anomaly = guaranteed +
+          // treated as boss with a capture-permit refund on catch.
+          const cMatch = playerState.mapId.match(/^chunk_(-?\d+)_(-?\d+)$/);
+          const auraCx = cMatch ? parseInt(cMatch[1], 10) : 0;
+          const auraCy = cMatch ? parseInt(cMatch[2], 10) : 0;
+          const aura = cMatch ? getGrassAura(auraCx, auraCy, newPos.x, newPos.y) : 'normal';
+
+          let willBattle = false;
+          let promoteBoss = playerState.nextEncounterRare || false;
+          if (aura === 'normal') {
+              willBattle = Math.random() < (0.15 * encounterRateMult);
+          } else if (aura === 'rustling') {
+              willBattle = true; // guaranteed
+          } else if (aura === 'alpha') {
+              willBattle = true;
+              promoteBoss = true;
+          } else if (aura === 'anomaly') {
+              willBattle = true;
+              promoteBoss = true;
+          }
+
+          if (willBattle) {
+              // Stash the aura tier so the catch / battle-log hooks can
+              // surface rewards + flavor. Cleared inside startBattle.
+              if (aura !== 'normal') pendingAnomalyRef.current = aura;
+
+              // Mass Outbreak override: if we're in an outbreak chunk,
+              // 70% of aura-less encounters and 100% of rustle-tier
+              // encounters surface the outbreak species. Alpha / anomaly
+              // override the override -- those tiers are meant to break
+              // the pattern and surprise the player.
+              const outbreak = cMatch ? getChunkOutbreak(auraCx, auraCy, currentMap.biome) : null;
+              if (outbreak && aura !== 'alpha' && aura !== 'anomaly') {
+                  const forceOutbreak = aura === 'rustling' || Math.random() < 0.7;
+                  if (forceOutbreak) pendingOutbreakRef.current = outbreak.speciesId;
+              }
+
+              startBattle(2, promoteBoss, false, undefined, currentMap.biome, tileType);
+              if (playerState.nextEncounterRare) setPlayerState(prev => ({ ...prev, nextEncounterRare: false }));
+          }
       }
       else if (tileType === 19 && Math.random() < (0.15 * encounterRateMult)) {
           startBattle(3, true, false, undefined, currentMap.biome, tileType);
@@ -1826,11 +2188,40 @@ export default function App() {
     if (bId) setBattleId(bId);
     setPhase(GamePhase.BATTLE);
       // --- SYNC BOOST ABILITY ---
-      let initialCombo = 0;
-      playerState.team.slice(0, 2).forEach(p => {
+      // Talent: Rift Catalyst seeds the Sync gauge so fusion comes online
+      // sooner. Stacks with held items & SyncBoost, but capped to 100 below.
+      let initialCombo = hasTalent(playerState.meta, 'rift_catalyst') ? 25 : 0;
+      const activeLeads = playerState.team.slice(0, 2).filter(p => p && !p.isFainted);
+      activeLeads.forEach(p => {
           if (p.ability.name === 'SyncBoost') initialCombo += 10;
+          // Rift Shard: pre-charges the gauge each battle. Stacks across
+          // both active slots if the player commits two holders.
+          if (p.heldItem?.id === 'rift-shard') initialCombo += 20;
       });
-      setBattleState(prev => ({ ...prev, phase: 'player_input', logs: isTrainer ? ["Trainer Battle!"] : ["Wild Encounter!"], isTrainerBattle: isTrainer, currentTrainerId: trainerData?.id, backgroundUrl: '', comboMeter: initialCombo }));
+      // Dual Pendant: if any active lead holds one and their slot-mate
+      // shares at least one type, dump 20 gauge on entry. The shared-type
+      // gate prevents a Pendant holder paired with *any* random mon from
+      // winning the early tempo race for free -- you have to theme-build.
+      if (activeLeads.length >= 2) {
+          const [a, b] = activeLeads;
+          const sharesType = a.types.some(t => b.types.includes(t));
+          if (sharesType) {
+              if (a.heldItem?.id === 'dual-pendant') initialCombo += 20;
+              if (b.heldItem?.id === 'dual-pendant') initialCombo += 20;
+          }
+      }
+      initialCombo = Math.min(100, initialCombo);
+      // Aura banner: if the last tile-step set a pending aura, surface it
+      // in the opening battle log so the player knows *why* this encounter
+      // is guaranteed/stronger.
+      const auraTier = pendingAnomalyRef.current;
+      const openingLog =
+          isTrainer ? "Trainer Battle!" :
+          auraTier === 'rustling' ? "The grass rustled! A wild encounter!" :
+          auraTier === 'alpha'    ? "ALPHA ENCOUNTER! The ground trembles..." :
+          auraTier === 'anomaly'  ? "!! ANOMALY !! Reality warps around you..." :
+          "Wild Encounter!";
+      setBattleState(prev => ({ ...prev, phase: 'player_input', logs: [openingLog], isTrainerBattle: isTrainer, currentTrainerId: trainerData?.id, backgroundUrl: '', comboMeter: initialCombo }));
     try {
       let currentMap;
       if (playerState.mapId.startsWith('chunk_')) {
@@ -1870,10 +2261,23 @@ export default function App() {
       );
       console.log('Setting Battle Background URL:', bgUrl, { isGym, isChampion, isHaunted, legendarySpeciesId });
       
-      // Calculate Difficulty Scaling
+      // Calculate Rift Pressure (difficulty scaling).
+      //
+      // Coefficients used to be 0.15 (distance) + 0.10 (badges). Combined with
+      // scaling ALL enemy stats (including Def/SpD/Speed), mid-game fights felt
+      // like players were punching through concrete. Now that we only scale
+      // HP/Atk/SpA, we can also tune these coefficients DOWN a notch so the
+      // curve stays meaningful without being oppressive.
+      //
+      //   distance factor: 0.15  -> 0.10
+      //   badge factor:    0.10  -> 0.07
+      //
+      // Example: badge 5, 40 chunks out, no Rift Stability:
+      //   OLD:  1 + (2^1.2 * 0.15 + 5^1.1 * 0.10) = 1.93x
+      //   NEW:  1 + (2^1.2 * 0.10 + 5^1.1 * 0.07) = 1.64x (only HP/Atk/SpA)
       const distance = Math.floor(Math.sqrt(playerState.chunkPos.x ** 2 + playerState.chunkPos.y ** 2));
-      const stabilityMult = 1 - (playerState.meta.upgrades.riftStability * 0.1);
-      const difficulty = 1 + (Math.pow(distance / 20, 1.2) * 0.15 + Math.pow(playerState.badges, 1.1) * 0.1) * stabilityMult;
+      const stabilityMult = 1 - (getKeystoneLevel(playerState.meta, 'rift_stability') * 0.1);
+      const difficulty = 1 + (Math.pow(distance / 20, 1.2) * 0.10 + Math.pow(playerState.badges, 1.1) * 0.07) * stabilityMult;
 
       // Set background immediately
       setBattleState(prev => ({ ...prev, backgroundUrl: bgUrl }));
@@ -1896,10 +2300,14 @@ export default function App() {
                   const { fetchCompetitivePokemon } = await import('./services/pokeService');
                   enemies = await Promise.all(trainerData.team.map(id => fetchCompetitivePokemon(id, trainerData.level)));
               }
-              // Apply difficulty scaling on top of whatever competitive set we built.
+              // Apply Rift Pressure to gym leaders on top of their competitive set.
+              // ONLY HP / Atk / SpA scale -- same rule as wild / trainer fetchPokemon,
+              // so the player's damage output isn't quietly halved by scaled Def/SpD
+              // and gym leaders don't out-speed everything because Speed inflated.
               enemies.forEach(e => {
-                  Object.keys(e.stats).forEach(stat => {
-                      e.stats[stat as keyof StatBlock] = Math.floor(e.stats[stat as keyof StatBlock] * difficulty);
+                  const scaledKeys: Array<keyof StatBlock> = ['hp', 'attack', 'special-attack'];
+                  scaledKeys.forEach(stat => {
+                      e.stats[stat] = Math.floor(e.stats[stat] * difficulty);
                   });
                   e.currentHp = e.maxHp = e.stats.hp;
               });
@@ -1911,8 +2319,12 @@ export default function App() {
           const minLvl = Math.min(wildCap, currentMap.wildLevelRange[0]);
           const maxLvl = Math.min(wildCap, currentMap.wildLevelRange[1]);
           // Daily event bumps shiny odds on top of meta upgrade.
-          const effectiveShiny = playerState.meta.upgrades.shinyChance * getDailyEvent().shinyMult;
-          enemies = await getWildPokemon(enemyCount, [minLvl, maxLvl], biome, tileType, effectiveShiny, difficulty);
+          const effectiveShiny = catchers_shinyTier(playerState.meta) * getDailyEvent().shinyMult;
+          // Mass Outbreak: if the player stepped into tall grass inside
+          // an outbreak chunk, the override forces every rolled wild to
+          // the outbreak species -- pure chaining fuel.
+          const outbreakOverride = pendingOutbreakRef.current ?? undefined;
+          enemies = await getWildPokemon(enemyCount, [minLvl, maxLvl], biome, tileType, effectiveShiny, difficulty, outbreakOverride);
           if (isBoss) {
               // Boss wilds used to get +5 levels, which routinely broke the
               // "wild cap" contract and forced grinding. +2 keeps them a real
@@ -1945,6 +2357,15 @@ export default function App() {
       // --- WEATHER & ENTRY ABILITIES ---
       let startWeather = initialWeather;
       let startLogs = isTrainer ? [`Trainer ${trainerData.name} wants to battle!`] : [`A wild ${enemies[0].name} appeared!`];
+
+      // Surface Rift Pressure to the player so they understand WHY enemies
+      // feel tanky / hit hard this deep into the rift. Only add the log once
+      // the scaling is actually material (>= 10% above baseline) -- earlier
+      // than that it would just be noise.
+      if (difficulty >= 1.10) {
+          const pct = Math.round((difficulty - 1) * 100);
+          startLogs.push(`Rift Pressure ×${difficulty.toFixed(2)} — enemies are harder by +${pct}% HP / Atk / Sp.Atk.`);
+      }
       const allInitial = [...playerTeam.slice(0, 2), ...enemies.slice(0, 2)];
       
       let startTailwind = 0;
@@ -2038,7 +2459,8 @@ export default function App() {
         tailwindTurns: startTailwind,
         enemyTailwindTurns: startEnemyTailwind,
         aegisFieldTurns: startAegis,
-        enemyAegisFieldTurns: startEnemyAegis
+        enemyAegisFieldTurns: startEnemyAegis,
+        riftPressure: difficulty,
       });
 
     } catch (e) { setPhase(GamePhase.OVERWORLD); }
@@ -2049,24 +2471,65 @@ export default function App() {
       const isPlayer = battleState.playerTeam.some(mon => mon && mon.id === p.id);
       const team = isPlayer ? battleState.playerTeam : battleState.enemyTeam;
       const ally = team.find(mon => mon && !mon.isFainted && mon.id !== p.id);
+      const side: 'player' | 'enemy' = isPlayer ? 'player' : 'enemy';
+      const slot = Math.max(0, team.findIndex(mon => mon?.id === p.id)) as 0 | 1;
+      const allySlot = ally ? (Math.max(0, team.findIndex(mon => mon?.id === ally.id)) as 0 | 1) : 0;
+
+      // --- ShellCurl: first time below 50% HP each battle, +1 Def / +1 SpD. ---
+      // Sits at the top of checkBerries because it shares the "crossed 50%"
+      // trigger with Sitrus Berry and should fire before the heal (so the
+      // stats are up while the berry restores HP, giving the same turn both).
+      if (p.ability.name === 'ShellCurl' && !p.usedShellCurl && p.currentHp <= p.maxHp / 2 && p.currentHp > 0) {
+          if (p.statStages) {
+              p.statStages.defense = Math.min(6, (p.statStages.defense || 0) + 1);
+              p.statStages['special-defense'] = Math.min(6, (p.statStages['special-defense'] || 0) + 1);
+          }
+          p.usedShellCurl = true;
+          logs.push(`${p.name} curled up! Its Defense and Sp. Def rose!`);
+          popupAbility(side, slot, 'Shell Curl');
+          popupStat(side, slot, 'defense', 1);
+          popupStat(side, slot, 'special-defense', 1);
+      }
+
+      // Helper: check if this side has BuddyBerry active (on either mon).
+      const buddyHolder = (p.ability.name === 'BuddyBerry') ? p : (ally?.ability.name === 'BuddyBerry' ? ally : undefined);
+      const fireBuddyBerry = (consumer: Pokemon) => {
+          if (!buddyHolder) return;
+          const buddyHeal = Math.floor(consumer.maxHp / 16);
+          const teamMates = [consumer, ally].filter(Boolean) as Pokemon[];
+          for (const mate of teamMates) {
+              if (!mate.isFainted) {
+                  mate.currentHp = Math.min(mate.maxHp, mate.currentHp + Math.floor(mate.maxHp / 16));
+              }
+          }
+          logs.push(`${buddyHolder.name}'s Buddy Berry shared a small snack!`);
+          // Fire the popup on whoever actually owns the ability.
+          const holderSlot = Math.max(0, team.findIndex(mon => mon?.id === buddyHolder.id)) as 0 | 1;
+          popupAbility(side, holderSlot, 'Buddy Berry');
+      };
 
       if (p.heldItem?.id === 'sitrus-berry' && p.currentHp <= p.maxHp / 2) {
           const heal = Math.floor(p.maxHp / 4);
           p.currentHp = Math.min(p.maxHp, p.currentHp + heal);
           logs.push(`${p.name} consumed its Sitrus Berry and restored HP!`);
+          popupItem(side, slot, 'Sitrus Berry');
           
           // Symmetry Ability: Share berry effect with ally
           if (p.ability.name === 'Symmetry' && ally) {
               ally.currentHp = Math.min(ally.maxHp, ally.currentHp + heal);
               logs.push(`${ally.name} also restored HP due to Symmetry!`);
+              popupAbility(side, slot, 'Symmetry');
+              popupCustom(side, allySlot, '+HP', '#6ee7b7');
           }
           
           // Stash Ability: Copy ally's berry
           if (ally && ally.ability.name === 'Stash' && !ally.heldItem) {
               ally.heldItem = { ...p.heldItem };
               logs.push(`${ally.name}'s Stash copied ${p.name}'s ${p.heldItem.name}!`);
+              popupAbility(side, allySlot, 'Stash');
           }
           
+          fireBuddyBerry(p);
           p.heldItem = undefined;
       }
       if (p.heldItem?.id === 'oran-berry' && p.currentHp <= p.maxHp / 2) {
@@ -2110,20 +2573,25 @@ export default function App() {
           p.status = undefined;
           p.confusionTurns = 0;
           logs.push(`${p.name} consumed its Lum Berry and cured its ${oldStatus}!`);
+          popupItem(side, slot, 'Lum Berry');
 
           // Symmetry Ability: Share berry effect with ally
           if (p.ability.name === 'Symmetry' && ally) {
               ally.status = undefined;
               ally.confusionTurns = 0;
               logs.push(`${ally.name} was also cured due to Symmetry!`);
+              popupAbility(side, slot, 'Symmetry');
+              popupStatus(side, allySlot, 'cured');
           }
 
           // Stash Ability: Copy ally's berry
           if (ally && ally.ability.name === 'Stash' && !ally.heldItem) {
               ally.heldItem = { ...p.heldItem };
               logs.push(`${ally.name}'s Stash copied ${p.name}'s ${p.heldItem.name}!`);
+              popupAbility(side, allySlot, 'Stash');
           }
 
+          fireBuddyBerry(p);
           p.heldItem = undefined;
       }
   };
@@ -2143,24 +2611,27 @@ export default function App() {
           p.currentHp = Math.max(0, p.currentHp - damage);
           tempLogs.push(`${p.name} was hurt by the Stealth Rocks!`);
       }
+      // Tera note: Gen 9 rule -- Tera'd mons use their Tera type for hazard
+      // grounding checks (a Tera-Fire Dragapult now eats Spikes, etc.).
+      const defTypes = getEffectiveDefensiveTypes(p);
       if (hazards.includes('Spikes')) {
           const spikesCount = hazards.filter(h => h === 'Spikes').length;
           const damageMult = spikesCount === 1 ? 0.125 : (spikesCount === 2 ? 0.166 : 0.25);
-          if (!p.types.includes('flying') && p.ability.name !== 'Levitate' && p.heldItem?.id !== 'heavy-duty-boots') {
+          if (!defTypes.includes('flying') && p.ability.name !== 'Levitate' && p.heldItem?.id !== 'heavy-duty-boots') {
               const damage = Math.floor(p.maxHp * damageMult);
               p.currentHp = Math.max(0, p.currentHp - damage);
               tempLogs.push(`${p.name} was hurt by the Spikes!`);
           }
       }
       if (hazards.includes('Toxic Spikes') && !p.status) {
-          if (!p.types.includes('flying') && p.ability.name !== 'Levitate' && p.heldItem?.id !== 'heavy-duty-boots') {
-              if (p.types.includes('poison')) {
+          if (!defTypes.includes('flying') && p.ability.name !== 'Levitate' && p.heldItem?.id !== 'heavy-duty-boots') {
+              if (defTypes.includes('poison')) {
                   setBattleState(prev => ({
                       ...prev,
                       [isPlayer ? 'playerHazards' : 'enemyHazards']: (prev[isPlayer ? 'playerHazards' : 'enemyHazards'] || []).filter(h => h !== 'Toxic Spikes')
                   }));
                   tempLogs.push(`${p.name} absorbed the Toxic Spikes!`);
-              } else if (!p.types.includes('steel')) {
+              } else if (!defTypes.includes('steel')) {
                   const tsCount = hazards.filter(h => h === 'Toxic Spikes').length;
                   p.status = tsCount === 1 ? 'poison' : 'toxic';
                   tempLogs.push(`${p.name} was poisoned by the Toxic Spikes!`);
@@ -2168,7 +2639,7 @@ export default function App() {
           }
       }
       if (hazards.includes('Sticky Web')) {
-          if (!p.types.includes('flying') && p.ability.name !== 'Levitate' && p.heldItem?.id !== 'heavy-duty-boots') {
+          if (!defTypes.includes('flying') && p.ability.name !== 'Levitate' && p.heldItem?.id !== 'heavy-duty-boots') {
               if (p.statStages) {
                   p.statStages.speed = Math.max(-6, (p.statStages.speed || 0) - 1);
                   tempLogs.push(`${p.name} was caught in the Sticky Web!`);
@@ -2302,7 +2773,37 @@ export default function App() {
      });
 
     console.log('Full Queue:', fullQueue);
-    
+
+    // --- TwinFocus resolution ----------------------------------------------
+    // Before any action fires, scan for pairs of actors on the same side who
+    // targeted the same opposing slot with a damaging move. If either holder
+    // has TwinFocus, flag both actions so damageCalc can apply the 1.2x.
+    (() => {
+        const pAttackers = fullQueue.filter(a => a.isPlayer && a.move && a.move.damage_class !== 'status' && typeof a.targetIndex === 'number');
+        const eAttackers = fullQueue.filter(a => !a.isPlayer && a.move && a.move.damage_class !== 'status' && typeof a.targetIndex === 'number');
+        const flagTwins = (pool: any[], team: Pokemon[]) => {
+            if (pool.length < 2) return;
+            // Group by targetIndex
+            const byTarget: Record<number, any[]> = {};
+            pool.forEach(a => {
+                if (!byTarget[a.targetIndex]) byTarget[a.targetIndex] = [];
+                byTarget[a.targetIndex].push(a);
+            });
+            Object.values(byTarget).forEach(group => {
+                if (group.length < 2) return;
+                const hasTwinFocus = group.some(a => team[a.actorIndex]?.ability?.name === 'TwinFocus');
+                if (hasTwinFocus) {
+                    group.forEach(a => {
+                        const actor = team[a.actorIndex];
+                        if (actor) actor.allySharedTarget = true;
+                    });
+                }
+            });
+        };
+        flagTwins(pAttackers, playerTeam);
+        flagTwins(eAttackers, enemyTeam);
+    })();
+
     let tempPTeam = JSON.parse(JSON.stringify(playerTeam));
     let tempETeam = JSON.parse(JSON.stringify(enemyTeam));
     let tempLogs = [...battleState.logs];
@@ -2434,6 +2935,14 @@ export default function App() {
         if (isSuper) popupEffective(target, slot, 'super');
         else if (isNotVery) popupEffective(target, slot, 'resist');
 
+        // Scale the shake to the hit: crit and super-effective both bump the
+        // intensity one tier. Keeps the default battle snappy while making big
+        // moments genuinely feel like big moments.
+        let shake: BattleState['screenShake'] = false;
+        if (damage > 40 || (isCrit && damage > 25) || (isSuper && damage > 25)) shake = 'heavy';
+        else if (damage > 20 || isCrit || isSuper) shake = 'medium';
+        else if (damage > 8) shake = 'light';
+
         setBattleState(prev => ({ 
             ...prev, 
             vfx: { 
@@ -2445,7 +2954,7 @@ export default function App() {
                 isSuperEffective: isSuper, 
                 isNotVeryEffective: isNotVery 
             },
-            screenShake: damage > 20 // Shake on significant hits
+            screenShake: shake,
         }));
         await delay(800);
         setBattleState(prev => ({ ...prev, vfx: null, screenShake: false }));
@@ -3020,9 +3529,20 @@ export default function App() {
                     
                     // Rift Upgrade Capture Boost
                     if (action.isPlayer) {
-                        catchRate *= (1 + (playerState.meta.upgrades.captureBoost * 0.05));
+                        catchRate *= catchers_catchMult(playerState.meta);
                     }
-                    
+
+                    // Catch Combo bonus: chaining the same species ramps the
+                    // effective catch rate. Caps at +60% so Master / Ultra
+                    // balls remain meaningfully stronger for zero-prep grabs.
+                    const comboAlign = playerState.catchCombo && playerState.catchCombo.speciesId === target.id
+                        ? playerState.catchCombo.count
+                        : 0;
+                    if (comboAlign > 0) {
+                        // +2.5% per chain step, capped at +60% (24 chain).
+                        catchRate *= 1 + Math.min(0.6, comboAlign * 0.025);
+                    }
+
                     if (Math.random() * 255 < catchRate || action.item === 'master-ball') {
                         playCry(target.id, target.name);
                         tempLogs.push(`Gotcha! ${target.name} was caught!`);
@@ -3054,18 +3574,176 @@ export default function App() {
                         newMon.currentHp = newMon.maxHp;
                         newMon.status = undefined;
 
+                        // Catch-Combo IV / shiny boost. Chain tiers:
+                        //   5+:  guarantee 1 perfect IV, shiny 1/2048
+                        //   10+: guarantee 2 perfect IVs, shiny 1/1024
+                        //   20+: guarantee 3 perfect IVs, shiny 1/512
+                        //   30+: guarantee 4 perfect IVs, shiny 1/256
+                        //   50+: guarantee 5 perfect IVs, shiny 1/128
+                        //
+                        // Previous tuning ramped to 1/50 @ x50 which made
+                        // shinies feel inevitable once you bothered chaining.
+                        // The new curve keeps them a pursuit: a 50-chain is
+                        // a full play-session commitment and still only ~30%
+                        // cumulative shiny odds, which is a fun goal rather
+                        // than a guaranteed outcome.
+                        const comboForThisCatch = playerState.catchCombo && playerState.catchCombo.speciesId === target.id
+                            ? playerState.catchCombo.count + 1 // +1 because this catch is about to bump it
+                            : 1;
+                        let guaranteedPerfect = 0;
+                        let shinyDenom = 4096;
+                        if (comboForThisCatch >= 50) { guaranteedPerfect = 5; shinyDenom = 128; }
+                        else if (comboForThisCatch >= 30) { guaranteedPerfect = 4; shinyDenom = 256; }
+                        else if (comboForThisCatch >= 20) { guaranteedPerfect = 3; shinyDenom = 512; }
+                        else if (comboForThisCatch >= 10) { guaranteedPerfect = 2; shinyDenom = 1024; }
+                        else if (comboForThisCatch >= 5)  { guaranteedPerfect = 1; shinyDenom = 2048; }
+
+                        if (guaranteedPerfect > 0 && newMon.ivs) {
+                            const statKeys = Object.keys(newMon.ivs) as Array<keyof typeof newMon.ivs>;
+                            // Shuffle stat keys so the guaranteed 31s aren't always HP/Atk/Def.
+                            for (let i = statKeys.length - 1; i > 0; i--) {
+                                const j = Math.floor(Math.random() * (i + 1));
+                                [statKeys[i], statKeys[j]] = [statKeys[j], statKeys[i]];
+                            }
+                            for (let i = 0; i < guaranteedPerfect && i < statKeys.length; i++) {
+                                (newMon.ivs as any)[statKeys[i]] = 31;
+                            }
+                        }
+                        if (!newMon.isShiny && Math.random() < 1 / shinyDenom) {
+                            newMon.isShiny = true;
+                        }
+
+                        if (guaranteedPerfect > 0) {
+                            tempLogs.push(`COMBO x${comboForThisCatch}! ${newMon.name} inherited ${guaranteedPerfect} perfect IVs!`);
+                        }
+
+                        // Talent: Held Legacy -- 25% of freshly caught mons
+                        // come with a small pool of held items, if they don't
+                        // already hold something the species spawned with.
+                        if (!newMon.heldItem && hasTalent(playerState.meta, 'held_legacy') && Math.random() < 0.25) {
+                            const pool = [
+                                { id: 'oran-berry', name: 'Oran Berry' },
+                                { id: 'sitrus-berry', name: 'Sitrus Berry' },
+                                { id: 'leftovers', name: 'Leftovers' },
+                                { id: 'rift-shard', name: 'Rift Shard' },
+                                { id: 'focus-sash', name: 'Focus Sash' },
+                            ];
+                            newMon.heldItem = pool[Math.floor(Math.random() * pool.length)];
+                            tempLogs.push(`${newMon.name} was holding a ${newMon.heldItem.name}!`);
+                        }
+
+                        // Talent: Synchrony -- first catch of a run inherits
+                        // the starter's Nature so players can target Modest/
+                        // Adamant/Timid runs without re-rolling forever.
+                        // "First catch" = team currently just the starter.
+                        if (hasTalent(playerState.meta, 'sync_inherit') && playerState.team.length === 1) {
+                            const starterNature = playerState.team[0].nature;
+                            if (starterNature && newMon.nature !== starterNature) {
+                                newMon.nature = starterNature;
+                                tempLogs.push(`Synchrony! ${newMon.name} shares your starter's ${starterNature} nature.`);
+                            }
+                        }
+
                         setPlayerState(prev => {
                             const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
                             const shinyBump = newMon.isShiny ? 1 : 0;
                             const nextLifetime = { ...lt, shiniesCaught: lt.shiniesCaught + shinyBump };
-                            if (prev.team.length < 6) {
-                                // Auto-scale the catch to the party floor so a
-                                // caught mon is immediately usable, not a
-                                // grind project.
-                                const scaledNew = autoScaleTeamToFloor([newMon], prev.badges, prev.run.maxDistanceReached)[0];
-                                return { ...prev, team: [...prev.team, scaledNew], lifetime: nextLifetime };
+
+                            // Catch-Combo chain update: same species -> +1,
+                            // different -> reset chain to 1 on the new species.
+                            const prevCombo = prev.catchCombo;
+                            const samSpecies = prevCombo && prevCombo.speciesId === newMon.id;
+                            const nextCount = samSpecies ? prevCombo!.count + 1 : 1;
+                            const nextBest = Math.max(prevCombo?.best ?? 0, nextCount);
+                            const nextCombo = {
+                                speciesId: newMon.id,
+                                speciesName: newMon.name,
+                                count: nextCount,
+                                best: nextBest,
+                            };
+                            if (samSpecies && (nextCount === 5 || nextCount === 10 || nextCount === 20 || nextCount === 30 || nextCount === 50)) {
+                                // Milestone toast so the player notices the
+                                // system is rewarding them.
+                                showToast(`Catch Combo x${nextCount}!`, 'reward', { kicker: newMon.name });
                             }
-                            return { ...prev, lifetime: nextLifetime };
+                            // Anomaly refund: if this was an "anomaly grass"
+                            // wild, give the permit back so the player isn't
+                            // punished by item scarcity for chasing rare
+                            // auras. Ref is cleared after processing so
+                            // subsequent non-anomaly catches don't inherit.
+                            const anomalyPending = pendingAnomalyRef.current === 'anomaly';
+                            const alphaPending   = pendingAnomalyRef.current === 'alpha';
+                            const refundedPermits = anomalyPending
+                                ? prev.run.capturePermits + 1
+                                : prev.run.capturePermits;
+                            const nextFlags = prev.storyFlags;
+
+                            // Rift Token drops on catch of rare-aura mons.
+                            // Award is deferred to the state update below
+                            // (consumed on the meta merge). We only decide
+                            // *here* so the toast text matches the actual
+                            // award under all branches.
+                            let catchTokens = 0;
+                            if (anomalyPending) {
+                                catchTokens += TOKEN_AWARDS.anomalyCatch;
+                                showToast(
+                                    `Anomaly captured! +1 Permit · +${TOKEN_AWARDS.anomalyCatch} Rift Token`,
+                                    'reward', { kicker: 'RIFT TOKEN' }
+                                );
+                                pendingAnomalyRef.current = false;
+                            } else if (alphaPending) {
+                                catchTokens += TOKEN_AWARDS.alphaCatch;
+                                showToast(
+                                    `Alpha captured! +${TOKEN_AWARDS.alphaCatch} Rift Token`,
+                                    'reward', { kicker: 'RIFT TOKEN' }
+                                );
+                                pendingAnomalyRef.current = false;
+                            }
+                            // Rift Ledger: double tokens in first hour of run.
+                            if (catchTokens > 0 && hasTalent(prev.meta, 'rift_ledger')) {
+                                const runStart = (prev.lifetime as any)?.runStartedAt as number | undefined;
+                                if (runStart && Date.now() - runStart < 3_600_000) {
+                                    catchTokens *= 2;
+                                }
+                            }
+
+                            // Bounty progress: tick catch_any + catch_type,
+                            // then also apply combo_update since the combo
+                            // count just changed.
+                            const caughtTypes = (newMon.types || []).map((t: string) => (t || '').toLowerCase());
+                            let nextBounties = applyBountyEvent(prev.bounties?.active, { type: 'catch', typeIds: caughtTypes });
+                            nextBounties = applyBountyEvent(nextBounties, { type: 'combo_update', count: nextCount });
+                            const nextBountyState = prev.bounties ? { ...prev.bounties, active: nextBounties || prev.bounties.active } : prev.bounties;
+
+                            const mergedMeta = catchTokens > 0
+                                ? { ...prev.meta, riftTokens: (prev.meta.riftTokens || 0) + catchTokens }
+                                : prev.meta;
+
+                            // Vault: Seventh Seal expands the roster to 7.
+                            // Battles still only deploy up to 6 actives.
+                            const teamCap = hasVaultUnlock(prev.meta, 'team_slot_7') ? 7 : 6;
+                            if (prev.team.length < teamCap) {
+                                const scaledNew = autoScaleTeamToFloor([newMon], prev.badges, prev.run.maxDistanceReached)[0];
+                                return {
+                                    ...prev,
+                                    team: [...prev.team, scaledNew],
+                                    catchCombo: nextCombo,
+                                    lifetime: nextLifetime,
+                                    storyFlags: nextFlags,
+                                    meta: mergedMeta,
+                                    run: { ...prev.run, capturePermits: refundedPermits },
+                                    bounties: nextBountyState,
+                                };
+                            }
+                            return {
+                                ...prev,
+                                catchCombo: nextCombo,
+                                lifetime: nextLifetime,
+                                storyFlags: nextFlags,
+                                meta: mergedMeta,
+                                run: { ...prev.run, capturePermits: refundedPermits },
+                                bounties: nextBountyState,
+                            };
                         });
 
                         if (tempETeam.every((p: Pokemon) => p.isFainted)) {
@@ -3091,7 +3769,7 @@ export default function App() {
                     else if (action.item === 'full-restore') { healAmount = actor.maxHp; cureStatus = true; }
                     
                     if (action.isPlayer && healAmount > 0 && healAmount < actor.maxHp) {
-                        healAmount = Math.floor(healAmount * (1 + (playerState.meta.upgrades.healingBoost * 0.05)));
+                        healAmount = Math.floor(healAmount * swift_healMult(playerState.meta));
                     }
                     
                     actor.currentHp = Math.min(actor.maxHp, actor.currentHp + healAmount);
@@ -3243,7 +3921,30 @@ export default function App() {
                     tempETeam[actorIdx] = { ...tempETeam[actorIdx], animationState: 'attack' };
                     actor = tempETeam[actorIdx];
                 }
-                
+
+                // --- FUSION MOVE CUE ---------------------------------------
+                // Fusion moves are the headline gimmick of the whole game so
+                // they deserve their own visual + audio punch. We fire a
+                // popup banner on the actor, a low rumble SFX, and kick on
+                // the screen shake early (before damageCalc completes) so
+                // players can't miss that a Link move just happened.
+                if (action.isFusion || action.move.isFusion) {
+                    const actorSide: 'player' | 'enemy' = action.isPlayer ? 'player' : 'enemy';
+                    popupCustom(
+                        actorSide,
+                        actorIdx as 0 | 1,
+                        `LINK · ${action.move.name}`,
+                        '#f5d67d',
+                        '⚡',
+                    );
+                    // Charge sound: use a dramatic hit-stop effect. Falls back
+                    // to the regular move SFX below if this URL fails.
+                    playSound('https://play.pokemonshowdown.com/audio/sfx/megaevo.mp3', 0.55);
+                    setBattleState(prev => ({ ...prev, screenShake: 'heavy' }));
+                    await delay(320);
+                    setBattleState(prev => ({ ...prev, screenShake: false }));
+                }
+
                 playMoveSfx(action.move.type || 'normal', action.move.name, action.move.sfx);
                 const realTargetIndex = targetTeam.findIndex(mon => mon === target);
                 await setVFX(action.move.type, action.isPlayer ? 'enemy' : 'player', realTargetIndex, action.move.name);
@@ -3266,6 +3967,13 @@ export default function App() {
                     continue;
                 }
 
+                // Z-Move: pierces Protect. We set the flag on the actor so
+                // pokeService's protect check lets this hit through; the
+                // flag is consumed visually + numerically in the shim below.
+                if (actor.zCharged) {
+                    actor.ignoresProtect = true;
+                }
+
                 const res = calculateDamage(
                     actor, 
                     target, 
@@ -3283,11 +3991,58 @@ export default function App() {
                     tempPTeam,
                     tempETeam,
                     battleState,
-                    playerState.meta.upgrades.attackBoost,
-                    playerState.meta.upgrades.defenseBoost,
-                    playerState.meta.upgrades.speedBoost,
-                    playerState.meta.upgrades.critBoost
+                    warden_level(playerState.meta),   // attackBoost (5% dmg/lvl)
+                    warden_level(playerState.meta),   // defenseBoost (5% reduction/lvl)
+                    swift_level(playerState.meta),    // speedBoost (5% speed/lvl)
+                    warden_level(playerState.meta)    // critBoost (2% crit/lvl)
                 );
+
+                // --- Rift Transform damage shim ----------------------------
+                // Tera's STAB + defensive typing are now handled inside
+                // pokeService.calculateDamage() / getDamageMultiplier() so
+                // ALL downstream math (effectiveness messages, crits,
+                // secondary effects) sees the real numbers. What stays here:
+                // Mega (persistent attacker/defender stats) and Z-Move
+                // (one-shot multiplier + protect pierce).
+                if (action.move.damage_class !== 'status' && res.damage > 0) {
+                    if (actor.megaActive) {
+                        res.damage = Math.floor(res.damage * MEGA_ATK_MULT);
+                    }
+                    if (target.megaActive) {
+                        res.damage = Math.floor(res.damage / MEGA_DEF_MULT);
+                    }
+                    if (actor.zCharged) {
+                        res.damage = Math.floor(res.damage * Z_DAMAGE_MULT);
+                        actor.zCharged = false;
+                        popupCustom(
+                            action.isPlayer ? 'player' : 'enemy',
+                            actorIdx as 0 | 1,
+                            'Z-MOVE!',
+                            '#fbbf24',
+                            '✦',
+                        );
+                    }
+                }
+
+                // --- Early-pool signature-ability popups ---
+                // Fire visible banners when the new abilities proc. The stat
+                // mutations themselves are resolved inside damageCalc (power /
+                // crit), so here we only need to announce.
+                const actorSide: 'player' | 'enemy' = action.isPlayer ? 'player' : 'enemy';
+                const actorSlot = action.actorIndex as 0 | 1;
+                const moveTypeLower = (action.move?.type || '').toLowerCase();
+                // EmberSpark set .usedEmberSpark inside damageCalc; that's our
+                // signal that it procced *this* hit (flag was false before).
+                if (actor.ability.name === 'EmberSpark' && actor.usedEmberSpark && moveTypeLower === 'fire' && !(actor as any)._emberSparkAnnounced) {
+                    popupAbility(actorSide, actorSlot, 'Ember Spark');
+                    (actor as any)._emberSparkAnnounced = true;
+                }
+                if (actor.ability.name === 'MoonCharm' && res.isCritical && (moveTypeLower === 'fairy' || moveTypeLower === 'normal')) {
+                    popupAbility(actorSide, actorSlot, 'Moon Charm');
+                }
+                if (actor.ability.name === 'TwinFocus' && actor.allySharedTarget && res.damage > 0) {
+                    popupAbility(actorSide, actorSlot, 'Twin Focus');
+                }
 
                 // BackdraftClause Ability
                 if (res.wasBlockedByProtect && action.isFusion && actor.ability.name === 'BackdraftClause' && !actor.usedBackdraftClause) {
@@ -3643,7 +4398,7 @@ export default function App() {
                     if (action.move.meta?.healing && action.move.damage_class === 'status') {
                         let healAmount = Math.floor(actor.maxHp * action.move.meta.healing / 100);
                         if (action.isPlayer) {
-                            healAmount = Math.floor(healAmount * (1 + (playerState.meta.upgrades.healingBoost * 0.05)));
+                            healAmount = Math.floor(healAmount * swift_healMult(playerState.meta));
                         }
                         if (healAmount > 0) {
                             actor.currentHp = Math.min(actor.maxHp, actor.currentHp + healAmount);
@@ -4235,6 +4990,20 @@ export default function App() {
                 }
 
                 // --- COMBO METER UPDATE ---
+                // Harmony Bell (held item): when holder fires a fusion move,
+                // restore 25% max HP to the ally. Runs BEFORE the reset-gauge
+                // branch below so we still fire even though the hit dumped
+                // the gauge to 0.
+                if (action.isFusion && actor.heldItem?.id === 'harmony-bell') {
+                    const allyIdx = 1 - action.actorIndex;
+                    const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
+                    if (ally && !ally.isFainted) {
+                        const heal = Math.floor(ally.maxHp * 0.25);
+                        ally.currentHp = Math.min(ally.maxHp, ally.currentHp + heal);
+                        tempLogs.push(`${actor.name}'s Harmony Bell chimed -- ${ally.name} recovered HP!`);
+                    }
+                }
+
                 setBattleState(prev => {
                     if (action.isFusion) {
                         if (action.isPlayer) return { ...prev, comboMeter: 0, fusionChargeActive: false };
@@ -4254,6 +5023,10 @@ export default function App() {
                         }
                     }
 
+                    // Fusion Core (held item): 25% multiplicative boost to
+                    // per-hit gauge fill. Applied at the end so it compounds
+                    // with Harmony Engine / SyncPulse etc.
+
                     // Partner Boost Ability
                     if (action.isFusion) {
                         const allyIdx = 1 - actorIdx;
@@ -4271,7 +5044,9 @@ export default function App() {
                     let pulseChance = 0.3;
                     if (actor.ability.name === 'Amplifier') pulseChance = 0.6;
                     if (actor.ability.name === 'SyncPulse' && Math.random() < pulseChance) boost += 10;
-                    
+
+                    if (actor.heldItem?.id === 'fusion-core') boost = Math.floor(boost * 1.25);
+
                     if (action.isPlayer) {
                         const newMeter = Math.min(100, prev.comboMeter + boost);
                         return { ...prev, comboMeter: newMeter, fusionChargeActive: newMeter === 100 };
@@ -4589,7 +5364,7 @@ export default function App() {
                         const streakBonus = 1 + Math.min(1, battleState.battleStreak * 0.1);
                         let itemXpMult = 1;
                         if (actor.heldItem?.id === 'lucky-egg') itemXpMult = 1.5;
-                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * (1 + playerState.meta.upgrades.xpMultiplier) * itemXpMult * getDailyEvent().xpMult);
+                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * purse_xpMult(playerState.meta) * itemXpMult * getDailyEvent().xpMult);
                         const playerLevelCap = getPlayerLevelCap(playerState.badges);
                         const avgLevel = playerState.team.reduce((a, b) => a + b.level, 0) / playerState.team.length;
                         const r = await gainExperience(actor, xpGain, playerLevelCap, avgLevel);
@@ -4988,11 +5763,15 @@ export default function App() {
                     if (actor.heldItem?.id === 'heat-rock' && sec.weatherChange === 'sun') duration = 8;
                     if (actor.heldItem?.id === 'smooth-rock' && sec.weatherChange === 'sand') duration = 8;
                     if (actor.heldItem?.id === 'icy-rock' && (sec.weatherChange === 'hail' || sec.weatherChange === 'snow')) duration = 8;
+                    // Vault: Field Theorist -- your weather lingers +2 turns.
+                    if (action.isPlayer && hasVaultUnlock(playerState.meta, 'field_theorist')) duration += 2;
                     setBattleState(prev => ({ ...prev, weather: sec.weatherChange as WeatherType, weatherTurns: duration }));
                     tempLogs.push(`The weather changed to ${sec.weatherChange}!`);
                 }
                 if (sec.terrainChange) {
-                    const duration = actor.heldItem?.id === 'terrain-extender' ? 8 : 5;
+                    let duration = actor.heldItem?.id === 'terrain-extender' ? 8 : 5;
+                    // Vault: Field Theorist -- same +2 extension on terrain.
+                    if (action.isPlayer && hasVaultUnlock(playerState.meta, 'field_theorist')) duration += 2;
                     setBattleState(prev => ({ ...prev, terrain: sec.terrainChange as TerrainType, terrainTurns: duration }));
                     tempLogs.push(`The terrain changed to ${sec.terrainChange}!`);
                 }
@@ -5617,6 +6396,18 @@ export default function App() {
                     const heal = Math.floor(ally.maxHp / 16);
                     tempPTeam[allyIdx] = { ...ally, currentHp: Math.min(ally.maxHp, ally.currentHp + heal) };
                     tempLogs.push(`${mon.name}'s Lifebloom healed its ally!`);
+                    popupAbility('player', allyIdx as 0 | 1, 'Lifebloom');
+                }
+            }
+
+            // DreamEater: heal 1/8 max HP per sleeping foe on the field.
+            if (mon.ability.name === 'DreamEater') {
+                const sleepingFoes = tempETeam.filter(f => f && !f.isFainted && f.status === 'sleep').length;
+                if (sleepingFoes > 0) {
+                    const heal = Math.floor(mon.maxHp / 8) * sleepingFoes;
+                    tempPTeam[i] = { ...mon, currentHp: Math.min(mon.maxHp, mon.currentHp + heal) };
+                    tempLogs.push(`${mon.name} drained the dreams of ${sleepingFoes} foe${sleepingFoes > 1 ? 's' : ''}!`);
+                    popupAbility('player', i as 0 | 1, 'Dream Eater');
                 }
             }
 
@@ -5912,6 +6703,18 @@ export default function App() {
                     const heal = Math.floor(ally.maxHp / 16);
                     tempETeam[allyIdx] = { ...ally, currentHp: Math.min(ally.maxHp, ally.currentHp + heal) };
                     tempLogs.push(`Enemy ${mon.name}'s Lifebloom restored its ally's HP!`);
+                    popupAbility('enemy', allyIdx as 0 | 1, 'Lifebloom');
+                }
+            }
+
+            // DreamEater (Enemy): heal 1/8 per sleeping player-team foe.
+            if (mon.ability.name === 'DreamEater') {
+                const sleepingFoes = tempPTeam.filter(f => f && !f.isFainted && f.status === 'sleep').length;
+                if (sleepingFoes > 0) {
+                    const heal = Math.floor(mon.maxHp / 8) * sleepingFoes;
+                    tempETeam[i] = { ...mon, currentHp: Math.min(mon.maxHp, mon.currentHp + heal) };
+                    tempLogs.push(`Enemy ${mon.name} drained the dreams of ${sleepingFoes} foe${sleepingFoes > 1 ? 's' : ''}!`);
+                    popupAbility('enemy', i as 0 | 1, 'Dream Eater');
                 }
             }
 
@@ -6358,7 +7161,32 @@ export default function App() {
     if (tempETeam.every((p: Pokemon) => p.isFainted)) victory = true;
 
     if (gameOver) {
-        // White out logic
+        // Talent: Second Wind -- once per run, the first total-team wipe
+        // instead revives the lead to 50% HP and the fight continues.
+        // We mark it consumed by setting a story flag so a later wipe in
+        // the same run just triggers the normal run-end flow.
+        const alreadyUsed = !!playerState.storyFlags?.includes('second_wind_used');
+        if (hasTalent(playerState.meta, 'second_wind') && !alreadyUsed) {
+            const leadIdx = tempPTeam.findIndex(p => p);
+            if (leadIdx >= 0) {
+                const lead = tempPTeam[leadIdx];
+                lead.currentHp = Math.max(1, Math.floor(lead.maxHp * 0.5));
+                lead.isFainted = false;
+                lead.status = 'none';
+                setPlayerState(prev => ({
+                    ...prev,
+                    storyFlags: [...(prev.storyFlags || []), 'second_wind_used'],
+                }));
+                setBattleState(prev => ({
+                    ...prev,
+                    playerTeam: tempPTeam,
+                    logs: [...prev.logs, `${lead.name} found a second wind and stood back up at half HP!`],
+                    phase: 'player_input',
+                }));
+                playSound('https://play.pokemonshowdown.com/audio/sfx/megaevo.mp3', 0.5);
+                return;
+            }
+        }
         handleRunEnd();
         return;
     }
@@ -6367,8 +7195,12 @@ export default function App() {
         const newStreak = battleState.battleStreak + 1;
         setBattleState(prev => ({ ...prev, battleStreak: newStreak }));
 
-        // Permanent Death: Remove fainted monsters from team
-        const survivingTeam = tempPTeam.filter(p => !p.isFainted);
+        // Permanent Death: Remove fainted monsters from team. Also strip
+        // in-battle Rift transform flags (Tera/Mega/Z) so they don't
+        // bleed into the overworld / next encounter.
+        const survivingTeam = tempPTeam
+            .filter(p => !p.isFainted)
+            .map(p => ({ ...p, teraType: undefined, megaActive: false, zCharged: false }));
         
         if (survivingTeam.length === 0) {
             handleRunEnd();
@@ -6405,7 +7237,10 @@ export default function App() {
 
         // Loot Drop Logic
         const loot: string[] = [];
-        const lootQuality = playerState.meta.upgrades.lootQuality || 0;
+        // Scavenger Cache keystone -> "+15% drop chance per level".
+        // Expressed here in legacy "lootQuality level" units so the rest
+        // of this function doesn't need to change its thresholds.
+        const lootQuality = getKeystoneLevel(playerState.meta, 'scavenger_cache');
         const dropChance = 0.2 + (newStreak * 0.05) + (lootQuality * 0.1); // Scavenger upgrade increases drop chance
         if (Math.random() < dropChance) {
             const pool = ['poke-ball', 'great-ball', 'potion', 'super-potion', 'revive', 'rare-candy'];
@@ -6451,22 +7286,58 @@ export default function App() {
                 currentMap = MAPS[playerState.mapId];
             }
             
-            const trainer = Object.values(currentMap?.trainers || {}).find((t: any) => t.id === battleState.currentTrainerId) as TrainerData | undefined;
+            // Rival milestone trainers don't live in any map -- they're
+            // synthesized by buildRivalTrainer() on demand. Detect them
+            // by id prefix so we can award the milestone flag / trophy.
+            const rivalMilestoneId = battleState.currentTrainerId?.startsWith('rival_milestone_')
+                ? battleState.currentTrainerId
+                : null;
+            const rivalMilestone = rivalMilestoneId
+                ? RIVAL_MILESTONES.find(m => `rival_milestone_${m.dist}` === rivalMilestoneId)
+                : null;
+
+            const trainer = rivalMilestone
+                ? buildRivalTrainer(rivalMilestone)
+                : (Object.values(currentMap?.trainers || {}).find((t: any) => t.id === battleState.currentTrainerId) as TrainerData | undefined);
             const isGymLeader = trainer?.isGymLeader;
-            
-            // Capture Permits: 2 for Gym Leader, 1 for regular Trainer
-            const permitsEarned = isGymLeader ? 2 : 1;
-            
-            // Immediate Rift Essence: 5 for Gym Leader, 1 for regular Trainer
-            let essenceEarned = isGymLeader ? 5 : 1;
-            if (playerState.meta.upgrades.essenceMultiplier > 0) {
-                essenceEarned = Math.floor(essenceEarned * (1 + playerState.meta.upgrades.essenceMultiplier * 0.1));
-                // Ensure at least 1 extra if level is high enough but floor rounded it down
-                if (playerState.meta.upgrades.essenceMultiplier >= 5 && essenceEarned === (isGymLeader ? 5 : 1)) {
-                    essenceEarned += 1;
+            const isRival = !!rivalMilestone;
+
+            // Gauntlet linkage: if this trainer has a queued partner,
+            // resolve it from the SAME map and stash it for the
+            // phase/dialogue effect to auto-trigger after the victory
+            // dialogue closes. Team HP is NOT healed when chaining.
+            let gauntletNext: TrainerData | undefined;
+            if (trainer?.gauntletNextTrainerId && currentMap?.trainers) {
+                const next = Object.values(currentMap.trainers).find(
+                    (t: any) => t.id === trainer.gauntletNextTrainerId
+                    && !playerState.defeatedTrainers.includes(t.id)
+                ) as TrainerData | undefined;
+                if (next) {
+                    gauntletNext = next;
+                    pendingGauntletNextRef.current = next;
                 }
             }
-            
+            const chainingGauntlet = !!gauntletNext;
+
+            // Capture Permits: 2 for Gym Leader, 1 for regular Trainer.
+            // Gauntlet chaining defers permit payout to the FINAL battle
+            // so the player doesn't double-dip in the middle of a combo.
+            const permitsEarned = chainingGauntlet ? 0 : (isGymLeader ? 2 : 1);
+
+            // Immediate Rift Essence: 5 for Gym Leader, 1 for regular Trainer
+            let essenceEarned = chainingGauntlet ? 0 : (isGymLeader ? 5 : 1);
+            if (!chainingGauntlet) {
+                // Essence Purse keystone: +10% essence per level.
+                const mult = purse_essenceMult(playerState.meta);
+                if (mult > 1) {
+                    essenceEarned = Math.floor(essenceEarned * mult);
+                    // Nudge so a full-stacked Purse never stalls at the floor.
+                    if (getKeystoneLevel(playerState.meta, 'essence_purse') >= 5 && essenceEarned === (isGymLeader ? 5 : 1)) {
+                        essenceEarned += 1;
+                    }
+                }
+            }
+
             // Streak Bonus for Money: +20% per streak point
             const moneyBonus = 1 + (newStreak * 0.2);
             const baseMoney = isGymLeader ? 2000 : 500;
@@ -6474,11 +7345,16 @@ export default function App() {
             if (survivingTeam.some(p => p.heldItem?.id === 'amulet-coin')) moneyMult = 2;
             const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult * getDailyEvent().moneyMult);
 
-            // Victory Heal: Heal surviving team by 25%
-            survivingTeam.forEach(p => {
-                const healAmt = Math.floor(p.maxHp * 0.25);
-                p.currentHp = Math.min(p.maxHp, p.currentHp + healAmt);
-            });
+            // Victory Heal: normally +25% on win. Suppress entirely when
+            // chaining a gauntlet -- the whole point of a "two trainers
+            // in a row" encounter is that the *sum* of the fights is
+            // the test, so a free heal between battles would defeat it.
+            if (!chainingGauntlet) {
+                survivingTeam.forEach(p => {
+                    const healAmt = Math.floor(p.maxHp * 0.25);
+                    p.currentHp = Math.min(p.maxHp, p.currentHp + healAmt);
+                });
+            }
 
             setPlayerState(prev => {
                 const newItems = [...prev.inventory.items, ...loot];
@@ -6486,6 +7362,10 @@ export default function App() {
                 if (loot.length === 0) {
                     const pool = ['great-ball', 'super-potion', 'revive', 'rare-candy'];
                     newItems.push(pool[Math.floor(Math.random() * pool.length)]);
+                }
+                // Rival trophy -- guaranteed unique drop per milestone.
+                if (isRival && rivalMilestone?.trophy) {
+                    newItems.push(rivalMilestone.trophy);
                 }
 
                 const newBadges = isGymLeader ? prev.badges + 1 : prev.badges;
@@ -6497,16 +7377,63 @@ export default function App() {
                     : survivingTeam;
 
                 const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
+                // Bounty tick: trainer defeated.
+                const nextBounties = applyBountyEvent(prev.bounties?.active, { type: 'trainer_defeat' });
+                const nextBountyState = prev.bounties ? { ...prev.bounties, active: nextBounties || prev.bounties.active } : prev.bounties;
+                // Rival milestone flag: permanent, gates re-triggering
+                // the same milestone on future explorations + feeds
+                // into quest hooks / story checks.
+                const rivalFlag = isRival && rivalMilestone
+                    ? [`rival_beaten_${rivalMilestone.dist}`]
+                    : [];
+
+                // Rift Token award ----------------------------------------
+                // Flagship content grants Rift Tokens -- the chase currency
+                // that gates Vault unlocks (Terastallization / Mega / Z).
+                // See data/meta.ts TOKEN_AWARDS for the rates.
+                let tokensEarned = 0;
+                if (!chainingGauntlet) {
+                    if (isGymLeader) tokensEarned += TOKEN_AWARDS.gymLeader;
+                    if (isRival)     tokensEarned += TOKEN_AWARDS.rivalMilestone;
+                    // Champion tag: story `_beaten_rift-champion` flag used
+                    // by existing end-game flow; treat as a capstone drop.
+                    if (trainer?.badgeId === 9) tokensEarned += TOKEN_AWARDS.championClear;
+                    // Talent: Rift Ledger doubles tokens during the first
+                    // hour of this run. We reuse `lifetime.runStartedAt` if
+                    // available, otherwise never double (safe fallback).
+                    if (tokensEarned > 0 && hasTalent(prev.meta, 'rift_ledger')) {
+                        const runStart = (prev.lifetime as any)?.runStartedAt as number | undefined;
+                        if (runStart && Date.now() - runStart < 3_600_000) {
+                            tokensEarned *= 2;
+                        }
+                    }
+                }
+
                 return {
                     ...prev,
                     team: finalTeam,
                     money: prev.money + finalMoney,
                     badges: newBadges,
-                    defeatedTrainers: [...prev.defeatedTrainers, battleState.currentTrainerId!],
+                    // FIFO cap at 5000 -- matches the discoveredChunks
+                    // pattern. Route trainers can populate this fast
+                    // (~17% chunk rate * many chunks); without a cap
+                    // the .includes() checks on chunk load + movement
+                    // would creep toward O(5000)+ per render. If a
+                    // very-old trainer's id evicts and the player
+                    // returns, they re-fight the encounter; that's
+                    // the better failure mode than save bloat.
+                    defeatedTrainers: (() => {
+                        const next = [...prev.defeatedTrainers, battleState.currentTrainerId!];
+                        return next.length > 5000 ? next.slice(next.length - 5000) : next;
+                    })(),
+                    storyFlags: rivalFlag.length > 0
+                        ? [...prev.storyFlags, ...rivalFlag]
+                        : prev.storyFlags,
                     inventory: { ...prev.inventory, items: newItems },
                     meta: {
                         ...prev.meta,
-                        riftEssence: prev.meta.riftEssence + essenceEarned
+                        riftEssence: prev.meta.riftEssence + essenceEarned,
+                        riftTokens: (prev.meta.riftTokens || 0) + tokensEarned,
                     },
                     run: {
                         ...prev.run,
@@ -6518,19 +7445,48 @@ export default function App() {
                         totalMoneyEarned: lt.totalMoneyEarned + finalMoney,
                         currentStreak: newStreak,
                         biggestStreak: Math.max(lt.biggestStreak, newStreak),
-                    }
+                    },
+                    bounties: nextBountyState,
                 };
             });
             
-            const victoryMsgs = isGymLeader ? 
-                ["Gym Leader defeated!", "You earned a Badge!", "You received 2 Capture Permits!", "Gained 5 Rift Essence!", "Your team was partially healed!"] : 
-                [`Trainer defeated! You got ${finalMoney}.`, "You received a Capture Permit!", "Gained 1 Rift Essence!", "Your team was partially healed!"];
-            
+            const victoryMsgs = isGymLeader ?
+                [
+                    "Gym Leader defeated!",
+                    "You earned a Badge!",
+                    "You received 2 Capture Permits!",
+                    `Gained ${essenceEarned} Rift Essence + ${TOKEN_AWARDS.gymLeader} Rift Tokens!`,
+                    "Your team was partially healed!"
+                ] :
+                isRival && rivalMilestone ?
+                    [
+                        `You defeated ${trainer?.name}!`,
+                        `"${trainer?.winDialogue ?? '...'}"`,
+                        `You got $${finalMoney}.`,
+                        rivalMilestone.trophy
+                            ? `Trophy: ${ITEMS[rivalMilestone.trophy]?.name ?? rivalMilestone.trophy}!`
+                            : 'Legendary match...',
+                        `(Milestone ${rivalMilestone.dist} cleared · +${TOKEN_AWARDS.rivalMilestone} Rift Tokens)`,
+                    ] :
+                chainingGauntlet ?
+                    [
+                        `${trainer?.name ?? 'Trainer'} defeated! You got ${finalMoney}.`,
+                        `${gauntletNext!.name} steps forward -- no rest, no heal!`,
+                    ] :
+                    [`Trainer defeated! You got ${finalMoney}.`, "You received a Capture Permit!", "Gained 1 Rift Essence!", "Your team was partially healed!"];
+
             if (loot.length > 0) {
-                loot.forEach(id => victoryMsgs.push(`Found a ${ITEMS[id].name}!`));
+                if (chainingGauntlet) {
+                    // Surface loot as toasts during a gauntlet chain so
+                    // the dialogue stays short and the player hits the
+                    // next battle snappier.
+                    loot.forEach(id => showToast(`+${ITEMS[id].name}`, 'reward', { kicker: 'Loot' }));
+                } else {
+                    loot.forEach(id => victoryMsgs.push(`Found a ${ITEMS[id].name}!`));
+                }
             }
-            if (newStreak > 1) victoryMsgs.push(`Battle Streak: ${newStreak}!`);
-            
+            if (newStreak > 1 && !chainingGauntlet) victoryMsgs.push(`Battle Streak: ${newStreak}!`);
+
             setDialogue(victoryMsgs);
 
             if (isGymLeader) {
@@ -6671,6 +7627,99 @@ export default function App() {
       });
       showToast(`${updated.name.toUpperCase()} learned a new move`, 'reward', { kicker: 'Relearner' });
   }
+    // --- Bounty Board handlers ---
+    // Reroll is on a soft timer rather than a hard cash cost. The guild
+    // posts fresh contracts on a schedule; paying 1500 lets you jump the
+    // queue. This way the board always feels alive, and the player doesn't
+    // get punished for browsing.
+    const BOUNTY_REROLL_COST = 1500;
+    const BOUNTY_REROLL_COOLDOWN_MS = 10 * 60 * 1000; // 10 min passive refresh
+    function handleBountyClaim(bountyId: string) {
+        // Capture the reward name BEFORE dispatching state so the toast
+        // always matches the claimed item (was subject to a stale-read
+        // race previously).
+        const snapshot = playerState.bounties?.active.find(bb => bb.id === bountyId);
+        const itemName = snapshot?.rewardItemId ? (ITEMS[snapshot.rewardItemId]?.name ?? snapshot.rewardItemId) : null;
+
+        setPlayerState(prev => {
+            if (!prev.bounties) return prev;
+            const target = prev.bounties.active.find(b => b.id === bountyId);
+            if (!target) return prev;
+            if (target.progress < target.targetCount) return prev; // safety
+
+            const newInventory = { ...prev.inventory };
+            let newPermits = prev.run.capturePermits;
+            if (target.rewardItemId) {
+                if (target.rewardItemId === 'poke-ball') newPermits += 1;
+                else if (target.rewardItemId === 'potion') newInventory.potions += 1;
+                else if (target.rewardItemId === 'revive') newInventory.revives += 1;
+                else if (target.rewardItemId === 'rare-candy') newInventory.rare_candy += 1;
+                else newInventory.items = [...(newInventory.items || []), target.rewardItemId];
+            }
+
+            // Auto-refill: roll a single fresh contract into the claimed
+            // slot so the board always shows 3 options. The player
+            // shouldn't have to leave the building and come back just to
+            // re-queue work.
+            const refill = rollBounties({
+                playerBadges: prev.badges,
+                maxDistance: prev.run.maxDistanceReached,
+            });
+            // rollBounties returns a fresh trio; we only need ONE card,
+            // and it must not dupe existing active templates.
+            const taken = new Set(prev.bounties.active.filter(b => b.id !== bountyId).map(b => b.templateId));
+            const singleRefill = refill.find(r => !taken.has(r.templateId)) ?? refill[0];
+            const remainingPlusOne = prev.bounties.active
+                .filter(b => b.id !== bountyId)
+                .concat([singleRefill]);
+
+            return {
+                ...prev,
+                money: prev.money + target.rewardMoney,
+                inventory: newInventory,
+                run: { ...prev.run, capturePermits: newPermits },
+                bounties: { ...prev.bounties, active: remainingPlusOne },
+            };
+        });
+
+        showToast(itemName ? `Claimed: +${itemName}` : 'Bounty claimed!', 'reward', { kicker: 'Guild' });
+    }
+    function handleBountyReroll() {
+        const now = Date.now();
+        const cooldownReady = !playerState.bounties || (playerState.bounties.rerollAvailableAt ?? 0) <= now;
+        const slateSize = hasTalent(playerState.meta, 'bounty_broker') ? 4 : 3;
+        if (cooldownReady) {
+            // Free reroll: cooldown expired, the guild just posted new work.
+            const fresh = rollBounties({
+                playerBadges: playerState.badges,
+                maxDistance: playerState.run.maxDistanceReached,
+                slateSize,
+            });
+            setPlayerState(prev => ({
+                ...prev,
+                bounties: { active: fresh, rerollAvailableAt: now + BOUNTY_REROLL_COOLDOWN_MS },
+            }));
+            showToast('Fresh contracts posted!', 'reward', { kicker: 'Guild' });
+            return;
+        }
+        // Paid reroll: skip the queue. Bounty Broker gives one discount per
+        // visit -- the first paid reroll is half-cost.
+        const rerollCost = hasTalent(playerState.meta, 'bounty_broker')
+            ? Math.floor(BOUNTY_REROLL_COST / 2)
+            : BOUNTY_REROLL_COST;
+        if (playerState.money < rerollCost) return;
+        const fresh = rollBounties({
+            playerBadges: playerState.badges,
+            maxDistance: playerState.run.maxDistanceReached,
+            slateSize,
+        });
+        setPlayerState(prev => ({
+            ...prev,
+            money: prev.money - rerollCost,
+            bounties: { active: fresh, rerollAvailableAt: now + BOUNTY_REROLL_COOLDOWN_MS },
+        }));
+    }
+
     function handleBuy(item: string, price: number) {
         if (playerState.money >= price) {
             setPlayerState(prev => {
@@ -6822,6 +7871,72 @@ export default function App() {
       }
   }, [playerState.mapId, playerState.chunkPos, playerState.discoveredChunks.length, playerState.lifetime?.graveyardsVisited, playerState.defeatedTrainers, loadedChunks, phase, showToast]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
+  // Clear any pending aura tier / outbreak override when we leave
+  // BATTLE back to the overworld (flee / victory / whiteout / shop
+  // transitions all exit through OVERWORLD). Guarantees no aura or
+  // forced-species flag bleeds into the next fight.
+  useEffect(() => {
+      if (phase === GamePhase.OVERWORLD) {
+          pendingAnomalyRef.current = false;
+          pendingOutbreakRef.current = null;
+      }
+  }, [phase]);
+
+  // Gauntlet chain: when the victory dialogue from a gauntlet trainer
+  // closes (phase back in OVERWORLD, dialogue cleared), immediately
+  // fire the next battle with the queued partner. The player's team
+  // HP/status was intentionally NOT healed by the previous victory
+  // handler, so the follow-up fight carries over damage. This is the
+  // whole point -- two trainers in a row test your surviving squad.
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      if (dialogue) return;
+      const next = pendingGauntletNextRef.current;
+      if (!next) return;
+      // Safety: if every mon fainted (edge case with burns/rocks
+      // post-victory), skip the chain -- triggering a battle with an
+      // empty party softlocks the engine.
+      const alive = playerState.team.some(p => !p.isFainted && p.currentHp > 0);
+      if (!alive) {
+          pendingGauntletNextRef.current = null;
+          return;
+      }
+      // Consume the ref BEFORE calling startBattle so a mid-chain
+      // effect re-run doesn't double-trigger.
+      pendingGauntletNextRef.current = null;
+      showToast(`Gauntlet: ${next.name} engages!`, 'warning', { kicker: 'Trainer' });
+      startBattle(0, false, true, next);
+  }, [phase, dialogue]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rival intercept: same pattern as the gauntlet chain. Triggers the
+  // cinematic rival battle on the next clean OVERWORLD frame after the
+  // chunk-entry dialogue (or landmark banner) settles. Unlike gauntlet,
+  // we DO heal/save a beat before -- the rival is a big event, not a
+  // stamina test like the duo gauntlet. Player gets 3s to react; we
+  // also drop a story toast so they understand what's happening.
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      if (dialogue) return;
+      const pending = pendingRivalRef.current;
+      if (!pending) return;
+      // Don't ambush in the middle of already-chained content.
+      if (pendingGauntletNextRef.current) return;
+      const alive = playerState.team.some(p => !p.isFainted && p.currentHp > 0);
+      if (!alive) {
+          // Clear it so whiteout + heal doesn't re-surface this same
+          // battle mid-shop. We'll re-arm on the next milestone cross.
+          pendingRivalRef.current = null;
+          return;
+      }
+      pendingRivalRef.current = null;
+      // Big-event toast -- the rival dialogue itself is shown as the
+      // battle's opening log line via the trainer's `dialogue` field.
+      showToast(`${pending.name} blocks your path!`, 'warning', {
+          kicker: 'Rival',
+          ttl: 4500,
+      });
+      startBattle(0, false, true, pending);
+  }, [phase, dialogue]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { isHostRef.current = multiplayer.isHost; }, [multiplayer.isHost]);
 
   // Prefetch the hand-crafted battle background for the player's current biome
@@ -7505,7 +8620,7 @@ export default function App() {
                 <StarterSelect 
                     onSelect={handleStarterSelect} 
                     unlockedPacks={playerState.meta.unlockedPacks} 
-                    shinyBoost={playerState.meta.upgrades.shinyChance} 
+                    shinyBoost={catchers_shinyTier(playerState.meta)} 
                     upgrades={playerState.meta.upgrades}
                     networkRole={networkRole}
                     multiplayer={multiplayer}
@@ -7522,12 +8637,36 @@ export default function App() {
                 />
             ); 
         }
-        if (phase === GamePhase.SHOP) return <ShopMenu onClose={()=>setPhase(GamePhase.OVERWORLD)} money={playerState.money} inventory={playerState.inventory} onBuy={handleBuy} discount={playerState.meta.upgrades.evolutionaryInsight} />;
+        if (phase === GamePhase.SHOP) return <ShopMenu onClose={()=>setPhase(GamePhase.OVERWORLD)} money={playerState.money} inventory={playerState.inventory} onBuy={handleBuy} discount={scavenger_shopDiscount(playerState.meta)} />;
+
+        if (phase === GamePhase.BOUNTY_BOARD) {
+            const active = playerState.bounties?.active ?? [];
+            const rerollAt = playerState.bounties?.rerollAvailableAt ?? 0;
+            return (
+                <BountyBoard
+                    bounties={active}
+                    onClaim={handleBountyClaim}
+                    onReroll={handleBountyReroll}
+                    onClose={() => setPhase(GamePhase.OVERWORLD)}
+                    rerollMsRemaining={Math.max(0, rerollAt - Date.now())}
+                    rerollCost={BOUNTY_REROLL_COST}
+                    playerMoney={playerState.money}
+                    comboInfo={playerState.catchCombo && playerState.catchCombo.count > 0 ? {
+                        count: playerState.catchCombo.count,
+                        speciesName: playerState.catchCombo.speciesName,
+                        best: playerState.catchCombo.best,
+                    } : undefined}
+                />
+            );
+        }
         
         if (phase === GamePhase.OVERWORLD) {
             const distance = Math.floor(Math.sqrt(playerState.chunkPos.x ** 2 + playerState.chunkPos.y ** 2));
-            const stabilityMult = 1 - (playerState.meta.upgrades.riftStability * 0.1);
-            const riftIntensity = Math.min(100, Math.floor((Math.pow(distance / 20, 1.2) * 15 + Math.pow(playerState.badges, 1.1) * 10) * stabilityMult));
+            const stabilityMult = 1 - (getKeystoneLevel(playerState.meta, 'rift_stability') * 0.1);
+            // Kept in sync with the battle-side Rift Pressure formula
+            // (distance coeff 0.10, badge coeff 0.07). Times 100 so the HUD
+            // shows an intuitive percentage above the baseline 1.0x.
+            const riftIntensity = Math.min(100, Math.floor((Math.pow(distance / 20, 1.2) * 10 + Math.pow(playerState.badges, 1.1) * 7) * stabilityMult));
             
             return (
                 <div className="relative overflow-hidden w-screen h-screen bg-black">
@@ -7640,7 +8779,9 @@ export default function App() {
                     storyFlags={playerState.storyFlags} 
                     badges={playerState.badges} 
                     isScanning={isScanning}
+                    auraSight={hasTalent(playerState.meta, 'aura_sight')}
                 />
+                <CatchComboBadge combo={playerState.catchCombo} />
                 {battleChallenge && (
                     <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[100] p-4">
                         <div className="bg-blue-900 border-4 border-blue-400 p-8 rounded-2xl text-center max-w-sm shadow-2xl animate-in zoom-in duration-300">
@@ -7799,10 +8940,30 @@ export default function App() {
              <EmoteOverlay emote={currentEmote} />
              {comboVfx && <div className="absolute inset-0 z-50 bg-white/20 animate-pulse"></div>}
              <motion.div 
-                animate={battleState.screenShake ? { x: [-10, 10, -10, 10, 0] } : {}}
-                transition={{ duration: 0.2 }}
+                animate={(() => {
+                    // Variable-intensity screen shake. Heavy moves kick more
+                    // and add a subtle vertical jitter + tiny rotation so the
+                    // camera feels punched. Tuned short (180-320ms) so battles
+                    // still feel snappy. `true` == legacy payloads == medium.
+                    const s = battleState.screenShake;
+                    if (!s) return {};
+                    if (s === 'heavy') {
+                        return { x: [-22, 22, -18, 16, -10, 6, 0], y: [0, -4, 2, -3, 1, 0, 0], rotate: [0, -0.6, 0.4, -0.3, 0.2, 0, 0] };
+                    }
+                    if (s === 'medium' || s === true) {
+                        return { x: [-14, 14, -10, 8, -5, 0], y: [0, -2, 1, 0, 0, 0], rotate: [0, -0.3, 0.2, 0, 0, 0] };
+                    }
+                    // 'light'
+                    return { x: [-8, 8, -5, 3, 0] };
+                })()}
+                transition={{ duration: battleState.screenShake === 'heavy' ? 0.36 : 0.22, ease: 'easeInOut' }}
                 className="flex-1 relative z-10 p-4 flex flex-col justify-between min-h-0 overflow-hidden"
              >
+                  {/* Battle-field-wide VFX overlay (type flash, vignette,
+                   * shockwave, screen sparks). Mounted once at the battle
+                   * container level so it scales to the whole fight, not a
+                   * single Pokemon's sprite box. */}
+                  <BattleFxOverlay vfx={battleState.vfx} />
                   {battleState.battleStreak > 1 && (
                       <div className="absolute top-4 right-4 z-50">
                           <motion.div 
@@ -7821,6 +8982,39 @@ export default function App() {
                           </motion.div>
                       </div>
                   )}
+                  {/* Rift Pressure chip — shown whenever the enemies have a
+                   *  material stat buff (>=10% above baseline). Colour ramps
+                   *  up from amber → crimson so the player can read the
+                   *  pressure at a glance. Clicking does nothing; it's a
+                   *  diegetic "this fight is harder than vanilla" marker. */}
+                  {battleState.riftPressure && battleState.riftPressure >= 1.10 && (() => {
+                      const p = battleState.riftPressure;
+                      const pct = Math.round((p - 1) * 100);
+                      const sev = p >= 1.60 ? 'crimson' : p >= 1.30 ? 'orange' : 'amber';
+                      const colors = sev === 'crimson'
+                          ? { border: 'border-red-500/60', text: 'text-red-400', label: 'text-red-500', shadow: '0_0_15px_rgba(239,68,68,0.35)' }
+                          : sev === 'orange'
+                          ? { border: 'border-orange-500/60', text: 'text-orange-400', label: 'text-orange-500', shadow: '0_0_15px_rgba(249,115,22,0.3)' }
+                          : { border: 'border-amber-500/60', text: 'text-amber-300', label: 'text-amber-500', shadow: '0_0_15px_rgba(245,158,11,0.3)' };
+                      return (
+                          <div className={`absolute ${battleState.battleStreak > 1 ? 'top-16' : 'top-4'} right-4 z-50`}>
+                              <motion.div
+                                  initial={{ scale: 0, opacity: 0, y: -8 }}
+                                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                                  transition={{ delay: 0.15 }}
+                                  title={`Enemies have +${pct}% HP / Attack / Sp. Attack from Rift Pressure. Invest in Rift Stability to soften this.`}
+                                  className={`bg-black/60 backdrop-blur-md border ${colors.border} px-3 py-1.5 rounded-full flex items-center gap-2 shadow-[${colors.shadow}]`}
+                              >
+                                  <div className="flex flex-col leading-none">
+                                      <div className={`text-[8px] ${colors.label} font-black uppercase tracking-tighter`}>Rift Pressure</div>
+                                      <div className="text-sm font-black text-white italic">×{p.toFixed(2)}</div>
+                                  </div>
+                                  <div className="w-px h-5 bg-white/20" />
+                                  <div className={`text-[10px] font-bold ${colors.text}`}>+{pct}%</div>
+                              </motion.div>
+                          </div>
+                      );
+                  })()}
                   {battleState.fusionChargeActive && battleState.phase === 'player_input' && (
                       <div className="absolute top-32 left-1/2 -translate-x-1/2 z-[100]">
                           <motion.button
@@ -7964,6 +9158,32 @@ export default function App() {
                                       })}
                                   </div>
                                   <div className="grid grid-cols-3 md:grid-cols-1 gap-2">
+                                      {(() => {
+                                          // Power button only renders when the player
+                                          // has unlocked at least one transform in the
+                                          // Vault. Each has its own per-battle/per-run
+                                          // gating enforced inside the picker below.
+                                          const metaV = playerState.meta;
+                                          const canTera = hasVaultUnlock(metaV, 'tera');
+                                          const canMega = hasVaultUnlock(metaV, 'mega');
+                                          const canZ = hasVaultUnlock(metaV, 'zmove');
+                                          if (!canTera && !canMega && !canZ) return null;
+                                          // Already-used flags -- if the active mon is
+                                          // mid-transform or has already popped, hide.
+                                          const used = !!activePlayer?.megaActive || !!activePlayer?.teraType || !!activePlayer?.zCharged;
+                                          const canMegaNow = canMega && !battleState.playerUsedMegaThisBattle && activePlayer && MEGA_ELIGIBLE.has(activePlayer.id);
+                                          const canZNow = canZ && !battleState.playerUsedZThisBattle;
+                                          const canTeraNow = canTera; // once per battle per mon; enforced by teraType flag
+                                          const anyAvailable = canTeraNow || canMegaNow || canZNow;
+                                          return (
+                                              <ActionButton
+                                                  label={used ? 'POWER·ON' : 'POWER'}
+                                                  color="bg-gradient-to-br from-purple-600 via-fuchsia-600 to-amber-500"
+                                                  onClick={() => { unlockAudio(); if (isMyTurn && anyAvailable) setTransformPicker('root'); }}
+                                                  disabled={!isMyTurn || !anyAvailable || used}
+                                              />
+                                          );
+                                      })()}
                                       <ActionButton label="BAG" color="bg-blue-600" onClick={()=>{ unlockAudio(); if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'ITEM', selectedMove:null}})) }} disabled={!isMyTurn} />
                                       <ActionButton label="POKEMON" color="bg-green-600" onClick={()=>{ 
                                           unlockAudio();
@@ -8124,10 +9344,159 @@ export default function App() {
         }
     };
 
+    // --- Rift Transform activation helpers ------------------------------
+    // These mutate battleState via setter, logging and popup-ing so the
+    // player sees feedback. Each transform has its own gating: Mega and Z
+    // are per-battle; Tera is per-mon (once you pick a tera type it
+    // persists till the mon faints / ends battle).
+    const activateMega = () => {
+        setBattleState(prev => {
+            if (!prev.playerTeam || prev.playerUsedMegaThisBattle) return prev;
+            const idx = prev.activePlayerIndex;
+            const team = prev.playerTeam.map((m, i) => i === idx ? { ...m, megaActive: true } : m);
+            popupCustom('player', idx as 0 | 1, 'MEGA EVO', '#f472b6', '✦');
+            return {
+                ...prev,
+                playerTeam: team,
+                playerUsedMegaThisBattle: true,
+                logs: [...prev.logs, `${team[idx].name} Mega Evolved!`],
+            };
+        });
+        playSound('https://play.pokemonshowdown.com/audio/sfx/megaevo.mp3', 0.7);
+        setTransformPicker(null);
+    };
+    const activateZ = () => {
+        setBattleState(prev => {
+            if (!prev.playerTeam || prev.playerUsedZThisBattle) return prev;
+            const idx = prev.activePlayerIndex;
+            const team = prev.playerTeam.map((m, i) => i === idx ? { ...m, zCharged: true } : m);
+            popupCustom('player', idx as 0 | 1, 'Z-POWER', '#fbbf24', '⚡');
+            return {
+                ...prev,
+                playerTeam: team,
+                playerUsedZThisBattle: true,
+                logs: [...prev.logs, `${team[idx].name} is charged with Z-Power! Next move is a Z-Move!`],
+            };
+        });
+        playSound('https://play.pokemonshowdown.com/audio/sfx/megaevo.mp3', 0.6);
+        setTransformPicker(null);
+    };
+    const activateTera = (type: string) => {
+        setBattleState(prev => {
+            if (!prev.playerTeam) return prev;
+            const idx = prev.activePlayerIndex;
+            const team = prev.playerTeam.map((m, i) => i === idx ? { ...m, teraType: type } : m);
+            popupCustom('player', idx as 0 | 1, `TERA·${type.toUpperCase()}`, '#c084fc', '◆');
+            return {
+                ...prev,
+                playerTeam: team,
+                logs: [...prev.logs, `${team[idx].name} Terastallized into ${type}-type!`],
+            };
+        });
+        playSound('https://play.pokemonshowdown.com/audio/sfx/megaevo.mp3', 0.7);
+        setTransformPicker(null);
+    };
+
     return (
         <>
             <AudioWidget />
             {renderContent()}
+            {transformPicker && phase === GamePhase.BATTLE && battleState && (() => {
+                const idx = battleState.activePlayerIndex;
+                const active = battleState.playerTeam?.[idx];
+                if (!active) return null;
+                const canTera = hasVaultUnlock(playerState.meta, 'tera') && !active.teraType;
+                const canMega = hasVaultUnlock(playerState.meta, 'mega') && !battleState.playerUsedMegaThisBattle && MEGA_ELIGIBLE.has(active.id) && !active.megaActive;
+                const canZ = hasVaultUnlock(playerState.meta, 'zmove') && !battleState.playerUsedZThisBattle && !active.zCharged;
+                return (
+                    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setTransformPicker(null)}>
+                        <motion.div
+                            initial={{ scale: 0.8, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="relative bg-gradient-to-br from-slate-900 via-purple-950/80 to-slate-900 border-2 border-purple-400/60 rounded-2xl p-6 md:p-8 max-w-2xl w-full shadow-[0_0_60px_rgba(192,132,252,0.4)]"
+                        >
+                            <div className="text-center mb-4">
+                                <div className="text-[10px] uppercase tracking-[0.4em] text-purple-300 mb-1">Rift Transform</div>
+                                <div className="text-2xl md:text-3xl font-black text-white">Channel Power — {active.name}</div>
+                                <div className="text-xs text-slate-400 mt-1">One transform per turn. Mega & Z are once per battle.</div>
+                            </div>
+                            {transformPicker === 'root' && (
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <button
+                                        disabled={!canMega}
+                                        onClick={activateMega}
+                                        className={`p-4 rounded-xl border-2 text-left transition ${canMega ? 'bg-pink-900/40 border-pink-400/60 hover:bg-pink-800/60 hover:border-pink-300' : 'bg-slate-800/40 border-slate-700/50 opacity-40 cursor-not-allowed'}`}
+                                    >
+                                        <div className="text-xs uppercase tracking-wider text-pink-300 mb-1">Mega Evolution</div>
+                                        <div className="text-lg font-bold text-white mb-2">+30% Atk · +20% Def</div>
+                                        <div className="text-[10px] text-slate-300 leading-tight">
+                                            {!hasVaultUnlock(playerState.meta, 'mega') ? 'Locked in Vault.' :
+                                             battleState.playerUsedMegaThisBattle ? 'Already used this battle.' :
+                                             !MEGA_ELIGIBLE.has(active.id) ? `${active.name} is not Mega-eligible.` :
+                                             'For the rest of the battle.'}
+                                        </div>
+                                    </button>
+                                    <button
+                                        disabled={!canZ}
+                                        onClick={activateZ}
+                                        className={`p-4 rounded-xl border-2 text-left transition ${canZ ? 'bg-amber-900/40 border-amber-400/60 hover:bg-amber-800/60 hover:border-amber-300' : 'bg-slate-800/40 border-slate-700/50 opacity-40 cursor-not-allowed'}`}
+                                    >
+                                        <div className="text-xs uppercase tracking-wider text-amber-300 mb-1">Z-Move</div>
+                                        <div className="text-lg font-bold text-white mb-2">Next hit ×1.8</div>
+                                        <div className="text-[10px] text-slate-300 leading-tight">
+                                            {!hasVaultUnlock(playerState.meta, 'zmove') ? 'Locked in Vault.' :
+                                             battleState.playerUsedZThisBattle ? 'Already used this battle.' :
+                                             'Pierces Protect. Can\'t miss.'}
+                                        </div>
+                                    </button>
+                                    <button
+                                        disabled={!canTera}
+                                        onClick={() => setTransformPicker('tera')}
+                                        className={`p-4 rounded-xl border-2 text-left transition ${canTera ? 'bg-purple-900/40 border-purple-400/60 hover:bg-purple-800/60 hover:border-purple-300' : 'bg-slate-800/40 border-slate-700/50 opacity-40 cursor-not-allowed'}`}
+                                    >
+                                        <div className="text-xs uppercase tracking-wider text-purple-300 mb-1">Terastallize</div>
+                                        <div className="text-lg font-bold text-white mb-2">Override type</div>
+                                        <div className="text-[10px] text-slate-300 leading-tight">
+                                            {!hasVaultUnlock(playerState.meta, 'tera') ? 'Locked in Vault.' :
+                                             active.teraType ? `Already Tera ${active.teraType}.` :
+                                             'Pick any type. 2× STAB on matching moves.'}
+                                        </div>
+                                    </button>
+                                </div>
+                            )}
+                            {transformPicker === 'tera' && (
+                                <div>
+                                    <div className="text-xs text-center text-slate-300 mb-3">Pick the type this Pokémon becomes.</div>
+                                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                                        {TERA_TYPES.map(t => (
+                                            <button
+                                                key={t}
+                                                onClick={() => activateTera(t)}
+                                                className="p-2 rounded-lg bg-slate-800/60 hover:bg-purple-800/60 border border-slate-700 hover:border-purple-400 text-white text-[10px] uppercase tracking-wider font-bold transition"
+                                            >
+                                                {t}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <button
+                                        onClick={() => setTransformPicker('root')}
+                                        className="mt-4 w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs uppercase tracking-wider"
+                                    >
+                                        Back
+                                    </button>
+                                </div>
+                            )}
+                            <button
+                                onClick={() => setTransformPicker(null)}
+                                className="absolute top-3 right-3 text-slate-400 hover:text-white text-xl leading-none"
+                            >
+                                ×
+                            </button>
+                        </motion.div>
+                    </div>
+                );
+            })()}
             {activeEvolution && (
                 <EvolutionScene
                     key={`evo-${activeEvolution.monUid}-${activeEvolution.after.id}`}

@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { Coordinate, Chunk } from '../types';
-import { MAPS, generateChunk, CHUNK_SIZE } from '../services/mapData';
+import { MAPS, generateChunk, CHUNK_SIZE, getGrassAura, type GrassAura } from '../services/mapData';
 import { BiomeAmbient } from './ui/BiomeAmbient';
 
 interface Props {
@@ -18,6 +18,8 @@ interface Props {
     storyFlags?: string[];
     badges?: number;
     isScanning?: boolean;
+    /** Aura Sight talent -- amplifies alpha/anomaly tile glow. */
+    auraSight?: boolean;
 }
 
 const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, onClick }) => {
@@ -81,7 +83,7 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
 };
 
 
-export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, customLayout, myPlayerId, networkRole = null, onInteract, onChallenge, remotePlayers = new Map(), storyFlags = [], badges = 0, isScanning = false }) => {
+export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, customLayout, myPlayerId, networkRole = null, onInteract, onChallenge, remotePlayers = new Map(), storyFlags = [], badges = 0, isScanning = false, auraSight = false }) => {
     const [timeOfDay, setTimeOfDay] = useState<'day' | 'sunset' | 'night'>('day');
     const [weather, setWeather] = useState<'none' | 'rain' | 'snow' | 'sandstorm'>('none');
     const containerRef = useRef<HTMLDivElement>(null);
@@ -133,8 +135,13 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
     if (mapId.startsWith('chunk_')) {
         currentMap = loadedChunks[mapId];
         if (!currentMap) {
+            // Preview-only fallback. Runs when the player state points at a
+            // chunk the host/save didn't persist (e.g. after a reload mid
+            // transition). We don't know the current riftStability here, so
+            // we stay conservative with `0`; the authoritative copy rendered
+            // by App.tsx is generated with the live upgrade value.
             const [,cx,cy] = mapId.split('_');
-            currentMap = generateChunk(parseInt(cx), parseInt(cy));
+            currentMap = generateChunk(parseInt(cx), parseInt(cy), 0);
         }
     } else {
         currentMap = MAPS[mapId];
@@ -215,6 +222,12 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             t === 75 || t === 76 || t === 77 || t === 86) return 0;
         return 4;
     };
+
+    // Extract integer chunk coords from the map id (or 0,0 for static maps).
+    // Used for deterministic per-tile aura rolls on tall-grass cells.
+    const chunkMatch = mapId.match(/^chunk_(-?\d+)_(-?\d+)$/);
+    const currentCx = chunkMatch ? parseInt(chunkMatch[1], 10) : 0;
+    const currentCy = chunkMatch ? parseInt(chunkMatch[2], 10) : 0;
 
     const renderTile = (tile: number, x: number, y: number) => {
         const key = `${x},${y}`;
@@ -319,7 +332,39 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
         switch (effectiveTile) {
             case 0: className += "tile-grass"; break;
             case 1: className += `tile-tree tile-tree-v${treeVar} tile-grass`; break;
-            case 2: className += "tile-tall-grass tile-grass"; break; 
+            case 2: {
+                className += "tile-tall-grass tile-grass";
+                // Only chunk-based maps get auras -- static MAPS (Pallet
+                // interior, Rift, caves) don't pre-roll encounters anyway.
+                const aura: GrassAura = chunkMatch ? getGrassAura(currentCx, currentCy, x, y) : 'normal';
+                if (aura !== 'normal') {
+                    className += ` tile-aura-${aura}`;
+                    // Aura Sight talent: add a beacon marker on rare auras
+                    // so they read from across the screen. The glow/particle
+                    // layers already render -- this pins a tall column of
+                    // light so alpha/anomaly tiles pop out of distant grass.
+                    const beacon = auraSight && (aura === 'alpha' || aura === 'anomaly');
+                    content = (
+                        <>
+                            <div className={`aura-glow aura-${aura}`} aria-hidden="true" />
+                            <div className={`aura-particles aura-particles-${aura}`} aria-hidden="true" />
+                            {beacon && (
+                                <div
+                                    aria-hidden="true"
+                                    className="absolute left-1/2 -translate-x-1/2 bottom-0 w-2 h-40 pointer-events-none animate-pulse"
+                                    style={{
+                                        background: aura === 'anomaly'
+                                            ? 'linear-gradient(to top, rgba(236,72,153,0.9), rgba(236,72,153,0) 80%)'
+                                            : 'linear-gradient(to top, rgba(251,191,36,0.9), rgba(251,191,36,0) 80%)',
+                                        filter: 'blur(1px)',
+                                    }}
+                                />
+                            )}
+                        </>
+                    );
+                }
+                break;
+            }
             case 3: className += "tile-water"; break;
             case 4: className += "tile-path"; break;
             case 5: 
@@ -338,15 +383,22 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             case 9: className += "tile-path"; content = <div className="absolute inset-0 bg-purple-900/50 animate-pulse"></div>; break;
             case 10: className += "tile-checkered"; content = <div className="absolute bottom-0 w-full h-3/4 bg-blue-600 border-t-4 border-blue-400"></div>; break;
             case 12: // Item Ball
-                className += bgClass; 
+                className += bgClass;
                 content = (
-                    <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-auto cursor-pointer" onClick={() => onInteract?.(x, y)}>
-                        <img 
-                            src="https://play.pokemonshowdown.com/sprites/itemicons/pokeball.png" 
-                            className="w-10 h-10 object-contain drop-shadow-md animate-bounce" 
-                            alt="Item Ball" 
-                            referrerPolicy="no-referrer"
-                        />
+                    <div
+                        className="absolute inset-0 flex items-center justify-center z-10 pointer-events-auto cursor-pointer"
+                        onClick={() => onInteract?.(x, y)}
+                        aria-label="Item Ball"
+                    >
+                        <div className="overworld-item-ball" aria-hidden="true">
+                            <div className="overworld-item-ball-glow" />
+                            <div className="overworld-item-ball-core">
+                                <div className="overworld-item-ball-top" />
+                                <div className="overworld-item-ball-bot" />
+                                <div className="overworld-item-ball-seam" />
+                                <div className="overworld-item-ball-btn" />
+                            </div>
+                        </div>
                     </div>
                 );
                 break;
@@ -695,6 +747,9 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 );
                 break;
             case 97: // Lamppost (glows warm at night)
+                // If an NPC/trainer already claimed this tile, fall back to
+                // plain grass so the sprite isn't covered by the prop.
+                if (trainer || npc) { className += "tile-grass"; break; }
                 className += "tile-grass tile-lamppost";
                 content = (
                     <>
@@ -705,6 +760,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 );
                 break;
             case 98: // Wooden park bench
+                if (trainer || npc) { className += "tile-grass"; break; }
                 className += "tile-grass tile-bench";
                 content = (
                     <>
@@ -716,6 +772,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 );
                 break;
             case 99: // Mailbox
+                if (trainer || npc) { className += "tile-grass"; break; }
                 className += "tile-grass tile-mailbox";
                 content = (
                     <>
@@ -730,8 +787,9 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
         // Grass tone variation so flat pastures don't look like linoleum. Only
         // plain grass-like tiles get toned; decorated grass tiles already have
-        // their own visual focus so we leave them alone.
-        const applyGrassTone = (effectiveTile === 0);
+        // their own visual focus so we leave them alone. We also skip any tile
+        // hosting a trainer/npc so the subtle tint can never recolor a sprite.
+        const applyGrassTone = (effectiveTile === 0) && !trainer && !npc;
         // Edge blend overlay element (drawn last so it layers on top of
         // pseudo-element props like trees/flowers). Only emitted when needed
         // to avoid a wasteful DOM node on every tile.
@@ -755,108 +813,249 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
         );
     };
 
+    const biomeClass = `biome-${currentMap?.biome || 'forest'}`;
+
     return (
-        <div className="w-full h-full relative bg-[#0f172a] overflow-hidden">
+        <div className={`w-full h-full relative bg-[#0f172a] overflow-hidden ${biomeClass}`}>
             <style>{`
                 .tile-base { position: relative; width: ${TILE_SIZE}px; height: ${TILE_SIZE}px; box-sizing: border-box; image-rendering: pixelated; }
-                
-                .tile-grass { 
-                  background-color: #4ade80; 
-                  background-image: 
-                    radial-gradient(circle at 20% 20%, rgba(255,255,255,0.1) 0%, transparent 10%),
-                    radial-gradient(circle at 80% 80%, rgba(0,0,0,0.05) 0%, transparent 10%),
-                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 50c0-2 1-4 3-4s3 2 3 4M30 50c0-3 2-6 5-6s5 3 5 6M50 50c0-2 1-4 3-4s3 2 3 4M20 20c0-1 1-2 2-2s2 1 2 2M40 20c0-1 1-2 2-2s2 1 2 2' stroke='%2322c55e' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M12 52c0-1 0.5-2 1.5-2s1.5 1 1.5 2M35 52c0-1.5 1-3 2.5-3s2.5 1.5 2.5 3' stroke='%2316a34a' stroke-width='1' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-                  background-size: 100% 100%, 100% 100%, ${TILE_SIZE}px ${TILE_SIZE}px; 
+
+                /* =========================================================
+                 * Ground tiles -- deeper palette, layered textures.
+                 *
+                 * Goals vs the old CSS:
+                 *   - less neon / cartoony color (no raw #4ade80 grass)
+                 *   - multi-layer backgrounds so the eye sees micro-detail
+                 *     (dithered dots, grass blades, pebbles, scuff marks)
+                 *   - a subtle vignette on most ground tiles so the edges
+                 *     visually blend into neighbors instead of popping
+                 *   - explicit background-color as a safety net in case the
+                 *     SVG URL fails to load.
+                 * ========================================================= */
+                .tile-grass {
+                  /* Background-color is the primary fill. All overlay layers
+                   * are kept semi-transparent so biome-scoped color swaps
+                   * (.biome-forest .tile-grass etc.) stay visible. */
+                  background-color: #65a957;
+                  background-image:
+                    radial-gradient(ellipse 80% 60% at 50% 45%, rgba(255,255,255,0.06) 0%, transparent 65%),
+                    radial-gradient(circle at 15% 25%, rgba(255,255,255,0.05) 0%, transparent 15%),
+                    radial-gradient(circle at 82% 78%, rgba(0,0,0,0.10) 0%, transparent 18%),
+                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 50c0-3 1-6 3-6s3 3 3 6M30 52c0-4 2-8 5-8s5 4 5 8M50 50c0-3 1-6 3-6s3 3 3 6M22 22c0-2 1-3 2-3s2 1 2 3M44 20c0-2 1-3 2-3s2 1 2 3M14 30c0-1 0.5-2 1-2s1 1 1 2M54 34c0-1 0.5-2 1-2s1 1 1 2' stroke='%234a8c3f' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3Cpath d='M12 52c0-2 0.5-4 1.5-4s1.5 2 1.5 4M34 54c0-2 1-4 2.5-4s2.5 2 2.5 4M52 52c0-2 0.5-4 1.5-4s1.5 2 1.5 4M26 24c0-1 0.5-2 1-2s1 1 1 2' stroke='%23234f1c' stroke-width='1' fill='none' stroke-linecap='round' opacity='0.7'/%3E%3Ccircle cx='6' cy='12' r='0.5' fill='%23234f1c' opacity='0.4'/%3E%3Ccircle cx='38' cy='8' r='0.5' fill='%23234f1c' opacity='0.4'/%3E%3Ccircle cx='58' cy='44' r='0.5' fill='%23234f1c' opacity='0.4'/%3E%3C/svg%3E"),
+                    linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.12) 100%);
+                  background-size: 100% 100%, 100% 100%, 100% 100%, ${TILE_SIZE}px ${TILE_SIZE}px, 100% 100%;
+                  box-shadow: inset 0 0 14px rgba(34, 66, 26, 0.18);
                 }
-                .tile-stone { 
-                  background-color: #94a3b8; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='32' height='32' viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='28' height='28' x='2' y='2' rx='4' fill='%2364748b'/%3E%3Cpath d='M4 4h24v24H4z' stroke='%23475569' stroke-width='2' fill='none'/%3E%3Cpath d='M8 8l4 4M20 20l4 4' stroke='%2394a3b8' stroke-width='1' opacity='0.3'/%3E%3C/svg%3E");
-                  background-size: 32px 32px; 
+                .tile-stone {
+                  background-color: #8b93a0;
+                  background-image:
+                    radial-gradient(ellipse at 50% 50%, rgba(255,255,255,0.08) 0%, transparent 60%),
+                    url("data:image/svg+xml,%3Csvg width='32' height='32' viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='28' height='28' x='2' y='2' rx='3' fill='%2378818f'/%3E%3Crect width='28' height='28' x='2' y='2' rx='3' fill='none' stroke='%235a636f' stroke-width='1.5'/%3E%3Cpath d='M6 8l3 3M20 18l3 3M10 22l2 2M22 8l2 2' stroke='%23adb5bf' stroke-width='0.8' opacity='0.5'/%3E%3Ccircle cx='8' cy='20' r='0.8' fill='%235a636f'/%3E%3Ccircle cx='22' cy='10' r='0.6' fill='%235a636f'/%3E%3C/svg%3E");
+                  background-size: 100% 100%, 32px 32px;
+                  box-shadow: inset 0 0 10px rgba(0,0,0,0.15);
                 }
-                
-                .tile-cave-floor { 
-                  background-color: #44403c; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='32' cy='32' r='4' fill='%23292524'/%3E%3Ccircle cx='8' cy='8' r='2' fill='%23292524'/%3E%3Ccircle cx='56' cy='56' r='3' fill='%23292524'/%3E%3Cpath d='M0 0l64 64M64 0L0 64' stroke='%23292524' stroke-width='0.5' opacity='0.1'/%3E%3C/svg%3E");
-                  box-shadow: inset 0 0 30px rgba(0,0,0,0.6); 
-                }
-                
-                .tile-tall-grass { 
-                  position: relative; 
-                  background-color: #4ade80;
+
+                /* Tall grass: real clumped blades instead of the old
+                 * solid-green pyramid. Rendered as overlapping blade tufts
+                 * with a soft green base so the hit-zone still reads as
+                 * "tall grass". */
+                .tile-tall-grass {
+                  position: relative;
+                  background-color: #5f9f4f;
                   z-index: 1;
+                  box-shadow: inset 0 0 12px rgba(20, 50, 12, 0.25);
                 }
                 .tile-tall-grass::before {
                   content: '';
                   position: absolute;
-                  top: 4px; left: 1px; right: 1px; bottom: 0;
-                  background: linear-gradient(180deg, #166534 0%, #064e3b 100%);
-                  border-radius: 4px;
-                  box-shadow: 0 4px 6px rgba(0,0,0,0.4), inset 0 2px 4px rgba(255,255,255,0.1);
+                  inset: 0;
+                  background-image: radial-gradient(ellipse 60% 45% at 50% 70%, rgba(20,60,20,0.35) 0%, transparent 70%);
+                  pointer-events: none;
                 }
-                .tile-tall-grass::after { 
-                  content: ''; 
-                  position: absolute; 
-                  top: -12px; left: -2px; right: -2px; bottom: 0; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 40c0-15 4-30 10-30s10 15 10 30M28 40c0-12 4-24 8-24s8 12 8 24M4 40c0-10 3-20 6-20s6 10 6 20' stroke='%2386efac' stroke-width='2' fill='%23166534' stroke-linecap='round'/%3E%3C/svg%3E");
+                .tile-tall-grass::after {
+                  content: '';
+                  position: absolute;
+                  top: -14px; left: -2px; right: -2px; bottom: -2px;
+                  background-image: url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cg stroke-linecap='round' fill='none'%3E%3Cpath d='M8 58c0-14 1-26 4-28M14 58c0-12 2-22 5-22M22 58c0-16 3-30 6-30M32 58c0-14 2-26 5-26M42 58c0-18 3-32 6-32M52 58c0-12 2-22 5-22M60 58c0-14 1-26 3-26' stroke='%231f4a1a' stroke-width='3'/%3E%3Cpath d='M8 58c0-14 1-26 4-28M14 58c0-12 2-22 5-22M22 58c0-16 3-30 6-30M32 58c0-14 2-26 5-26M42 58c0-18 3-32 6-32M52 58c0-12 2-22 5-22M60 58c0-14 1-26 3-26' stroke='%235aa84a' stroke-width='1.4'/%3E%3Cpath d='M12 34q-2 -4 -4 -4M20 30q2 -4 4 -4M30 26q-2 -4 -4 -4M40 24q2 -4 4 -4M50 28q-2 -4 -4 -4' stroke='%237bc768' stroke-width='1.2'/%3E%3C/g%3E%3C/svg%3E");
                   background-size: 100% 100%;
                   pointer-events: none;
-                  filter: drop-shadow(0 2px 2px rgba(0,0,0,0.3));
+                  filter: drop-shadow(0 3px 2px rgba(0,0,0,0.35));
                 }
-                
-                .tile-path { 
-                  background-color: #e7e5e4; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='32' height='32' viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='4' cy='4' r='1' fill='%23d6d3d1'/%3E%3Ccircle cx='28' cy='28' r='1.5' fill='%23d6d3d1'/%3E%3Ccircle cx='16' cy='16' r='1' fill='%23d6d3d1'/%3E%3Cpath d='M0 0l32 32M32 0L0 32' stroke='%23d6d3d1' stroke-width='0.5' opacity='0.2'/%3E%3C/svg%3E");
-                  background-size: 32px 32px; 
-                  box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
+
+                /* ---- GRASS AURA TIERS ------------------------------------
+                 * Overlays rendered on top of .tile-tall-grass when a chunk's
+                 * per-tile hash promotes the patch. Each tier gets its own
+                 * palette + particle pattern so the player can read them at a
+                 * glance: green=rustle (common-rare), gold=alpha (strong),
+                 * violet=anomaly (mystery / legendary-tier). */
+                .tile-aura-rustling { box-shadow: inset 0 0 18px rgba(180, 255, 120, 0.55); }
+                .tile-aura-alpha    { box-shadow: inset 0 0 22px rgba(255, 200, 60, 0.65); }
+                .tile-aura-anomaly  { box-shadow: inset 0 0 26px rgba(220, 130, 255, 0.75); }
+
+                .aura-glow {
+                    position: absolute;
+                    inset: 0;
+                    pointer-events: none;
+                    z-index: 3;
+                    border-radius: 4px;
+                    mix-blend-mode: screen;
+                    animation: aura-pulse 2.2s ease-in-out infinite;
                 }
-                .tile-water { 
-                  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%); 
-                  background-image: url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 24c12-8 12 8 24 0s12-8 24 0' stroke='rgba(255,255,255,0.3)' stroke-width='3' fill='none'/%3E%3Cpath d='M0 12c12-8 12 8 24 0s12-8 24 0' stroke='rgba(255,255,255,0.15)' stroke-width='2' fill='none'/%3E%3C/svg%3E");
-                  animation: flow 1.5s infinite linear; 
-                  box-shadow: inset 0 0 15px rgba(0,0,0,0.1);
+                .aura-glow.aura-rustling {
+                    background: radial-gradient(ellipse 80% 55% at 50% 60%, rgba(180, 255, 120, 0.55) 0%, transparent 70%);
                 }
-                .tile-sand { 
-                  background-color: #fcd34d; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='32' height='32' viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='8' cy='8' r='1' fill='%23fbbf24'/%3E%3Ccircle cx='24' cy='24' r='1.5' fill='%23fbbf24'/%3E%3Cpath d='M4 28c4-2 8 2 12 0s8-2 12 0' stroke='%23fbbf24' stroke-width='0.5' fill='none'/%3E%3C/svg%3E");
-                  background-size: 32px 32px;
+                .aura-glow.aura-alpha {
+                    background: radial-gradient(ellipse 85% 60% at 50% 60%, rgba(255, 200, 60, 0.70) 0%, transparent 70%);
+                    animation-duration: 1.6s;
                 }
-                .tile-snow { 
-                  background-color: #f8fafc; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='32' cy='32' r='2' fill='%23e2e8f0'/%3E%3Ccircle cx='16' cy='16' r='1' fill='%23e2e8f0'/%3E%3Ccircle cx='48' cy='48' r='1.5' fill='%23e2e8f0'/%3E%3C/svg%3E");
-                  box-shadow: inset 0 0 20px white;
+                .aura-glow.aura-anomaly {
+                    background:
+                        radial-gradient(ellipse 90% 65% at 50% 55%, rgba(220, 130, 255, 0.85) 0%, transparent 68%),
+                        radial-gradient(ellipse 60% 40% at 50% 55%, rgba(180, 240, 255, 0.45) 0%, transparent 72%);
+                    animation-duration: 1.2s;
                 }
-                .tile-ice { 
-                  background-color: #bae6fd; 
-                  background-image: linear-gradient(135deg, rgba(255,255,255,0.6) 0%, transparent 50%, rgba(0,0,0,0.15) 100%);
-                  box-shadow: inset 0 0 15px rgba(255,255,255,0.9), 0 0 5px rgba(186,230,253,0.5); 
-                  border: 1px solid rgba(255,255,255,0.3);
+                @keyframes aura-pulse {
+                    0%, 100% { opacity: 0.55; transform: scale(1); }
+                    50%      { opacity: 1.0;  transform: scale(1.05); }
                 }
-                .tile-lava { 
-                  background: #dc2626; 
-                  background-image: radial-gradient(#991b1b 30%, transparent 31%), radial-gradient(rgba(251,191,36,0.4) 10%, transparent 11%); 
-                  background-size: 16px 16px, 32px 32px; 
-                  animation: pulse-lava 1.5s infinite alternate; 
-                  box-shadow: inset 0 0 20px #7f1d1d;
+
+                .aura-particles {
+                    position: absolute;
+                    inset: -6px -2px -2px -2px;
+                    pointer-events: none;
+                    z-index: 4;
+                    background-repeat: no-repeat;
                 }
-                .tile-rock { 
-                  background-color: #57534e; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 10l28 5-5 23-23-5z' fill='%2344403c'/%3E%3C/svg%3E");
-                  border-radius: 4px; 
-                  box-shadow: inset 0 0 10px rgba(0,0,0,0.5); 
-                  border: 2px solid #292524; 
-                  z-index: 5; 
+                /* Rustling: three little leaves fluttering upward. */
+                .aura-particles-rustling {
+                    background-image:
+                      radial-gradient(circle 2px at 18% 20%, rgba(200, 255, 140, 0.95), transparent 70%),
+                      radial-gradient(circle 2px at 52% 10%, rgba(200, 255, 140, 0.85), transparent 70%),
+                      radial-gradient(circle 2px at 82% 28%, rgba(200, 255, 140, 0.90), transparent 70%);
+                    animation: aura-float 2.4s linear infinite;
                 }
-                .tile-cave-floor { 
-                  background-color: #44403c; 
-                  background-image: radial-gradient(rgba(0,0,0,0.2) 10%, transparent 11%), radial-gradient(rgba(255,255,255,0.05) 5%, transparent 6%);
-                  background-size: 16px 16px, 32px 32px;
-                  box-shadow: inset 0 0 10px rgba(0,0,0,0.3);
+                /* Alpha: bright sparks. */
+                .aura-particles-alpha {
+                    background-image:
+                      radial-gradient(circle 3px at 22% 18%, rgba(255, 230, 140, 1), transparent 72%),
+                      radial-gradient(circle 2px at 60% 8%,  rgba(255, 255, 210, 1), transparent 72%),
+                      radial-gradient(circle 2.5px at 80% 30%, rgba(255, 200, 80, 1), transparent 72%),
+                      radial-gradient(circle 2px at 40% 35%, rgba(255, 220, 120, 1), transparent 72%);
+                    animation: aura-float 1.8s linear infinite;
+                    filter: drop-shadow(0 0 3px rgba(255, 200, 80, 0.9));
                 }
-                .tile-rock-wall { 
-                  background-color: #292524; 
-                  background-image: url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l48 48M48 0L0 48' stroke='rgba(0,0,0,0.2)' stroke-width='2'/%3E%3Cpath d='M24 0v48M0 24h48' stroke='rgba(0,0,0,0.1)' stroke-width='1'/%3E%3C/svg%3E");
-                  border: 2px solid #1c1917;
-                  box-shadow: inset 0 0 15px rgba(0,0,0,0.6), 0 4px 6px rgba(0,0,0,0.4);
+                /* Anomaly: prism shimmer. */
+                .aura-particles-anomaly {
+                    background-image:
+                      radial-gradient(circle 2.5px at 24% 14%, rgba(255, 150, 255, 1), transparent 72%),
+                      radial-gradient(circle 2px at 56% 6%,  rgba(180, 200, 255, 1), transparent 72%),
+                      radial-gradient(circle 3px at 78% 24%, rgba(220, 180, 255, 1), transparent 72%),
+                      radial-gradient(circle 2px at 42% 30%, rgba(255, 180, 240, 1), transparent 72%),
+                      radial-gradient(circle 2.5px at 14% 38%, rgba(140, 220, 255, 1), transparent 72%);
+                    animation: aura-float 1.4s linear infinite;
+                    filter: drop-shadow(0 0 4px rgba(220, 130, 255, 0.9));
+                }
+                @keyframes aura-float {
+                    0%   { transform: translateY(4px);  opacity: 0.4; }
+                    50%  { transform: translateY(-4px); opacity: 1.0; }
+                    100% { transform: translateY(4px);  opacity: 0.4; }
+                }
+
+                /* Path: warm trodden-earth dirt instead of the old stark
+                 * concrete grey. Dual-layer: base dirt gradient + SVG
+                 * pebble / scuff layer at 2x frequency so you never see a
+                 * perfect repeating tile. */
+                .tile-path {
+                  background-color: #b89770;
+                  background-image:
+                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='10' cy='14' r='1.5' fill='%23927049'/%3E%3Ccircle cx='48' cy='20' r='1' fill='%23927049'/%3E%3Ccircle cx='24' cy='38' r='1.8' fill='%23a88964'/%3E%3Ccircle cx='54' cy='50' r='1' fill='%23927049'/%3E%3Ccircle cx='18' cy='56' r='0.9' fill='%23927049'/%3E%3Ccircle cx='38' cy='10' r='0.9' fill='%23a88964'/%3E%3Ccircle cx='60' cy='32' r='0.7' fill='%23927049'/%3E%3Ccircle cx='6' cy='42' r='0.7' fill='%23a88964'/%3E%3Cpath d='M4 26c8-3 18 3 26 0s20 4 30 0' stroke='%239c7c54' stroke-width='0.8' fill='none' opacity='0.35'/%3E%3Cpath d='M2 50c10 2 18-4 30 0s18-3 30 0' stroke='%239c7c54' stroke-width='0.8' fill='none' opacity='0.3'/%3E%3C/svg%3E"),
+                    linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(0,0,0,0.12) 100%);
+                  background-size: ${TILE_SIZE}px ${TILE_SIZE}px, 100% 100%;
+                  box-shadow: inset 0 0 10px rgba(70,48,24,0.18);
+                }
+
+                /* Water: layered gradient for depth + two staggered wave
+                 * patterns at different scales, still animated via @flow. */
+                .tile-water {
+                  background-color: #1e5aa8;
+                  background-image:
+                    url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 24c12-8 12 8 24 0s12-8 24 0' stroke='rgba(255,255,255,0.38)' stroke-width='2.5' fill='none'/%3E%3Cpath d='M0 12c12-8 12 8 24 0s12-8 24 0' stroke='rgba(255,255,255,0.18)' stroke-width='1.8' fill='none'/%3E%3Cpath d='M0 36c12-6 12 6 24 0s12-6 24 0' stroke='rgba(255,255,255,0.10)' stroke-width='1.2' fill='none'/%3E%3C/svg%3E"),
+                    url("data:image/svg+xml,%3Csvg width='96' height='96' viewBox='0 0 96 96' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='20' cy='40' r='2' fill='rgba(255,255,255,0.06)'/%3E%3Ccircle cx='70' cy='70' r='3' fill='rgba(255,255,255,0.06)'/%3E%3Ccircle cx='80' cy='20' r='1.5' fill='rgba(255,255,255,0.05)'/%3E%3C/svg%3E"),
+                    radial-gradient(ellipse at 50% 40%, #4a8fd8 0%, #2a6ab8 55%, #13447e 100%);
+                  background-size: 48px 48px, 96px 96px, 100% 100%;
+                  background-repeat: repeat, repeat, no-repeat;
+                  animation: flow 2.4s infinite linear;
+                  box-shadow: inset 0 0 18px rgba(0,0,0,0.22), inset 0 3px 6px rgba(255,255,255,0.06);
+                }
+
+                /* Sand: warmer tan, softer base. Replaces the old neon
+                 * yellow. Adds wind-ripple scuffs. */
+                .tile-sand {
+                  background-color: #dcb477;
+                  background-image:
+                    radial-gradient(ellipse at 50% 50%, rgba(255,240,210,0.22) 0%, transparent 55%),
+                    url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='10' cy='12' r='0.9' fill='%23b69058'/%3E%3Ccircle cx='34' cy='36' r='1.1' fill='%23b69058'/%3E%3Ccircle cx='40' cy='8' r='0.6' fill='%23b69058'/%3E%3Ccircle cx='16' cy='42' r='0.7' fill='%23b69058'/%3E%3Cpath d='M2 22c8-3 16 2 24 0s14 2 22 0' stroke='%23b69058' stroke-width='0.6' fill='none' opacity='0.4'/%3E%3Cpath d='M4 38c6-2 12 2 20 0s14 1 20 0' stroke='%23b69058' stroke-width='0.5' fill='none' opacity='0.35'/%3E%3C/svg%3E"),
+                    linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.10) 100%);
+                  background-size: 100% 100%, 48px 48px, 100% 100%;
+                  box-shadow: inset 0 0 10px rgba(120, 80, 30, 0.15);
+                }
+
+                /* Snow: blue-tinted base with a cool shadow, sparkle SVG. */
+                .tile-snow {
+                  background-color: #ecf3fb;
+                  background-image:
+                    radial-gradient(ellipse at 50% 50%, rgba(255,255,255,0.9) 0%, rgba(220,232,246,0.5) 55%, rgba(195,215,236,0.3) 100%),
+                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='16' r='1.2' fill='%23c8d8ec'/%3E%3Ccircle cx='44' cy='22' r='0.9' fill='%23d4e2f1'/%3E%3Ccircle cx='56' cy='54' r='1.1' fill='%23c8d8ec'/%3E%3Ccircle cx='20' cy='50' r='0.8' fill='%23d4e2f1'/%3E%3Ccircle cx='34' cy='34' r='0.6' fill='%23ffffff'/%3E%3Ccircle cx='52' cy='10' r='0.5' fill='%23ffffff'/%3E%3Ccircle cx='8' cy='40' r='0.4' fill='%23ffffff'/%3E%3C/svg%3E");
+                  background-size: 100% 100%, 64px 64px;
+                  box-shadow: inset 0 0 18px rgba(180,200,226,0.6), inset 0 3px 5px rgba(255,255,255,0.9);
+                }
+                .tile-ice {
+                  background-color: #a8d8f0;
+                  background-image:
+                    linear-gradient(135deg, rgba(255,255,255,0.75) 0%, transparent 40%, rgba(0,0,0,0.12) 100%),
+                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 30 L18 22 L14 38 Z' fill='rgba(255,255,255,0.25)'/%3E%3Cpath d='M40 42 L52 36 L46 52 Z' fill='rgba(255,255,255,0.2)'/%3E%3Cpath d='M30 8 L38 14 L30 20 Z' fill='rgba(255,255,255,0.18)' opacity='0.6'/%3E%3C/svg%3E");
+                  background-size: 100% 100%, 64px 64px;
+                  box-shadow: inset 0 0 18px rgba(255,255,255,0.85), 0 0 6px rgba(186,230,253,0.4);
+                  border: 1px solid rgba(255,255,255,0.35);
+                }
+                .tile-lava {
+                  background: #c1351f;
+                  background-image:
+                    radial-gradient(circle at 30% 40%, rgba(251,191,36,0.6) 0%, transparent 25%),
+                    radial-gradient(circle at 70% 65%, rgba(251,146,60,0.5) 0%, transparent 22%),
+                    radial-gradient(#7a1812 30%, transparent 31%),
+                    radial-gradient(rgba(251,191,36,0.35) 8%, transparent 11%);
+                  background-size: 100% 100%, 100% 100%, 16px 16px, 32px 32px;
+                  animation: pulse-lava 1.8s infinite alternate;
+                  box-shadow: inset 0 0 22px #4a0a08, inset 0 0 6px rgba(255,200,80,0.3);
+                }
+                .tile-rock {
+                  background-color: #6e645b;
+                  background-image:
+                    radial-gradient(ellipse at 35% 30%, rgba(255,255,255,0.22) 0%, transparent 45%),
+                    url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 10l28 5-5 23-23-5z' fill='%23524840'/%3E%3Cpath d='M14 16l18 3-3 14-16-3z' fill='none' stroke='%23302a24' stroke-width='0.8' opacity='0.5'/%3E%3C/svg%3E");
+                  background-size: 100% 100%, 48px 48px;
+                  border-radius: 6px;
+                  box-shadow: inset 0 -6px 10px rgba(0,0,0,0.45), inset 0 3px 4px rgba(255,255,255,0.18), 0 3px 4px rgba(0,0,0,0.3);
+                  border: 2px solid #2a241e;
+                  z-index: 5;
+                }
+                .tile-cave-floor {
+                  background-color: #3d3934;
+                  background-image:
+                    radial-gradient(ellipse at 50% 50%, rgba(255,255,255,0.04) 0%, transparent 55%),
+                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='18' r='3' fill='%23262320'/%3E%3Ccircle cx='44' cy='30' r='2.4' fill='%23262320'/%3E%3Ccircle cx='28' cy='50' r='2.8' fill='%232b2824'/%3E%3Ccircle cx='56' cy='10' r='1.8' fill='%23262320'/%3E%3Ccircle cx='8' cy='52' r='1.4' fill='%232b2824'/%3E%3Ccircle cx='34' cy='14' r='0.8' fill='%23585049'/%3E%3Ccircle cx='50' cy='48' r='0.6' fill='%23585049'/%3E%3C/svg%3E");
+                  background-size: 100% 100%, 64px 64px;
+                  box-shadow: inset 0 0 28px rgba(0,0,0,0.65);
+                }
+                .tile-rock-wall {
+                  background-color: #332c28;
+                  background-image:
+                    linear-gradient(180deg, rgba(255,255,255,0.10) 0%, transparent 35%, rgba(0,0,0,0.35) 100%),
+                    url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cg stroke='%23181410' stroke-width='1.5' fill='none'%3E%3Cpath d='M0 16h64M0 32h64M0 48h64'/%3E%3Cpath d='M16 0v16M40 0v16M8 16v16M28 16v16M52 16v16M20 32v16M44 32v16M4 48v16M32 48v16M56 48v16'/%3E%3C/g%3E%3Cg fill='%234a403a' opacity='0.4'%3E%3Crect x='2' y='2' width='12' height='12'/%3E%3Crect x='18' y='2' width='20' height='12'/%3E%3Crect x='42' y='2' width='20' height='12'/%3E%3Crect x='10' y='18' width='16' height='12'/%3E%3Crect x='30' y='18' width='20' height='12'/%3E%3Crect x='54' y='18' width='8' height='12'/%3E%3Crect x='2' y='34' width='16' height='12'/%3E%3Crect x='22' y='34' width='20' height='12'/%3E%3Crect x='46' y='34' width='16' height='12'/%3E%3C/g%3E%3C/svg%3E");
+                  background-size: 100% 100%, 64px 64px;
+                  border: 2px solid #0f0c0a;
+                  box-shadow: inset 0 0 18px rgba(0,0,0,0.7), 0 4px 6px rgba(0,0,0,0.5);
                   z-index: 10;
                 }
                 
@@ -866,20 +1065,92 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 .tile-fence::after { content: ''; position: absolute; top: 10px; left: 0; right: 0; height: 6px; background: #78350f; z-index: 2; border-bottom: 2px solid #451a03; }
                 .tile-fence::before { content: ''; position: absolute; top: 22px; left: 0; right: 0; height: 6px; background: #78350f; z-index: 2; border-bottom: 2px solid #451a03; }
                 .tile-fence-post { position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); width: 8px; background: #92400e; z-index: 1; border: 1px solid #451a03; }
-                .tile-ledge { 
-                  background: #15803d; 
-                  background-image: linear-gradient(180deg, #4ade80 0%, #15803d 50%, #14532d 100%);
-                  border-bottom: 6px solid #052e16;
-                  box-shadow: 0 4px 6px rgba(0,0,0,0.4);
-                  border-radius: 0 0 4px 4px;
+                .tile-ledge {
+                  background-color: #3f7c37;
+                  background-image:
+                    linear-gradient(180deg, #65a957 0%, #4b8a41 40%, #2e5d28 80%, #1a3a17 100%),
+                    url("data:image/svg+xml,%3Csvg width='64' height='32' viewBox='0 0 64 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 24c8 4 12-4 20 0s12-3 20 0s12 4 24 0' stroke='%231a3a17' stroke-width='1.5' fill='none'/%3E%3Cpath d='M0 28c8 2 14-2 24 0s14-1 20 0s12 2 20 0' stroke='%23112910' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+                  background-size: 100% 100%, 64px 32px;
+                  background-repeat: no-repeat, repeat-x;
+                  background-position: 0 0, 0 bottom;
+                  border-bottom: 6px solid #0a1c09;
+                  box-shadow: 0 4px 8px rgba(0,0,0,0.5), inset 0 3px 3px rgba(255,255,255,0.18);
+                  border-radius: 0 0 3px 3px;
                 }
+                /* Tree: layered trunk + canopy. Trunk now uses a real bark
+                 * gradient, canopy is a radial gradient with highlight and
+                 * shadow separation and a drop-shadow that grounds the tree
+                 * on the tile below. Variants (v1-v3) still override the
+                 * canopy silhouette, this just polishes the base case. */
                 .tile-tree { position: relative; z-index: 5; }
-                .tile-tree::before { content: ''; position: absolute; bottom: 4px; left: 18px; width: 12px; height: 20px; background: linear-gradient(90deg, #5d4037, #3e2723); border-radius: 2px; z-index: 1; border: 1px solid #2d1b16; }
-                .tile-tree::after { content: ''; position: absolute; bottom: 16px; left: -4px; width: 56px; height: 56px; background: radial-gradient(circle at 30% 30%, #4ade80, #15803d 70%, #14532d); z-index: 2; border-radius: 50%; box-shadow: 0 6px 0 #052e16, 0 10px 15px rgba(0,0,0,0.3); border: 2px solid #052e16; }
-                .tile-tree-dark::before { content: ''; position: absolute; bottom: 4px; left: 18px; width: 12px; height: 20px; background: linear-gradient(90deg, #3e2723, #1a0f0d); border-radius: 2px; z-index: 1; border: 1px solid #000; }
-                .tile-tree-dark::after { content: ''; position: absolute; bottom: 16px; left: -4px; width: 56px; height: 56px; background: radial-gradient(circle at 30% 30%, #1e40af, #172554 70%, #0f172a); z-index: 2; border-radius: 50%; box-shadow: 0 6px 0 #020617, 0 10px 15px rgba(0,0,0,0.4); border: 2px solid #020617; }
-                .tile-wood { background: #78350f; background-image: linear-gradient(90deg, rgba(0,0,0,0.1) 0%, transparent 50%, rgba(255,255,255,0.05) 100%); box-shadow: inset 0 0 0 1px #451a03, inset 0 0 10px rgba(0,0,0,0.2); }
-                .tile-bridge { background: #92400e; border-top: 3px solid #451a03; border-bottom: 3px solid #451a03; background-image: repeating-linear-gradient(90deg, transparent, transparent 12px, rgba(0,0,0,0.3) 12px, rgba(0,0,0,0.3) 14px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+                .tile-tree::before {
+                    content: '';
+                    position: absolute;
+                    bottom: 2px; left: 26px;
+                    width: 12px; height: 22px;
+                    background:
+                      linear-gradient(90deg, rgba(0,0,0,0.25) 0%, transparent 30%, rgba(255,255,255,0.08) 55%, transparent 90%),
+                      linear-gradient(180deg, #6d4a33 0%, #3d2718 100%);
+                    border-radius: 3px 3px 2px 2px;
+                    z-index: 1;
+                    border: 1px solid #2a180d;
+                    box-shadow: 0 2px 0 #1a0f08, 0 4px 3px rgba(0,0,0,0.25);
+                }
+                .tile-tree::after {
+                    content: '';
+                    position: absolute;
+                    bottom: 18px; left: -4px;
+                    width: 72px; height: 58px;
+                    background:
+                      radial-gradient(circle at 28% 28%, rgba(255,255,255,0.22) 0%, transparent 35%),
+                      radial-gradient(circle at 30% 35%, #72c865 0%, #3f8035 55%, #1e4a1a 100%);
+                    z-index: 2;
+                    border-radius: 50% 52% 48% 54% / 55% 50% 52% 48%;
+                    box-shadow: 0 6px 0 #0f2e0d, 0 12px 18px rgba(0,0,0,0.38), inset 0 -6px 10px rgba(0,0,0,0.2);
+                    border: 2px solid #0f2e0d;
+                }
+                /* Dark (night) variant stays cool-toned. */
+                .tile-tree-dark::before {
+                    content: '';
+                    position: absolute;
+                    bottom: 2px; left: 26px;
+                    width: 12px; height: 22px;
+                    background: linear-gradient(180deg, #2a1b10 0%, #0a0505 100%);
+                    border-radius: 3px 3px 2px 2px;
+                    z-index: 1;
+                    border: 1px solid #000;
+                }
+                .tile-tree-dark::after {
+                    content: '';
+                    position: absolute;
+                    bottom: 18px; left: -4px;
+                    width: 72px; height: 58px;
+                    background:
+                      radial-gradient(circle at 28% 28%, rgba(255,255,255,0.08) 0%, transparent 40%),
+                      radial-gradient(circle at 30% 35%, #2c4f9f 0%, #15275a 60%, #05101e 100%);
+                    z-index: 2;
+                    border-radius: 50% 52% 48% 54% / 55% 50% 52% 48%;
+                    box-shadow: 0 6px 0 #020617, 0 12px 18px rgba(0,0,0,0.5), inset 0 -6px 10px rgba(0,0,0,0.35);
+                    border: 2px solid #020617;
+                }
+                .tile-wood {
+                    background-color: #7a4a22;
+                    background-image:
+                      linear-gradient(90deg, rgba(0,0,0,0.18) 0%, transparent 40%, rgba(255,255,255,0.08) 75%, transparent 100%),
+                      repeating-linear-gradient(90deg, transparent 0, transparent 14px, rgba(0,0,0,0.18) 14px, rgba(0,0,0,0.18) 16px),
+                      url("data:image/svg+xml,%3Csvg width='64' height='32' viewBox='0 0 64 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 8q16 -4 32 0t32 0M0 22q16 -4 32 0t32 0' stroke='%234e2c13' stroke-width='0.6' fill='none' opacity='0.5'/%3E%3Cellipse cx='14' cy='10' rx='4' ry='2' fill='none' stroke='%234e2c13' stroke-width='0.5' opacity='0.4'/%3E%3Cellipse cx='46' cy='22' rx='3' ry='1.5' fill='none' stroke='%234e2c13' stroke-width='0.5' opacity='0.4'/%3E%3C/svg%3E");
+                    box-shadow: inset 0 0 0 1px #3a200f, inset 0 -4px 8px rgba(0,0,0,0.28);
+                }
+                .tile-bridge {
+                    background-color: #8a5a2a;
+                    background-image:
+                      linear-gradient(180deg, rgba(255,255,255,0.10) 0%, transparent 25%, rgba(0,0,0,0.25) 100%),
+                      repeating-linear-gradient(90deg, transparent 0, transparent 10px, rgba(0,0,0,0.35) 10px, rgba(0,0,0,0.35) 12px),
+                      linear-gradient(180deg, #a26c35 0%, #6c4119 100%);
+                    border-top: 3px solid #3d200a;
+                    border-bottom: 3px solid #3d200a;
+                    box-shadow: 0 4px 10px rgba(0,0,0,0.45), inset 0 0 6px rgba(0,0,0,0.2);
+                }
                 
                 @keyframes wave {
                     0%, 100% { transform: skewX(-5deg); }
@@ -1272,11 +1543,61 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                  * existing maps render unchanged apart from the new polish.
                  * ========================================================= */
 
-                /* -- Grass tonal variation keyed by data-grass-tone ------ */
-                .tile-grass[data-grass-tone="0"] { background-color: #4ade80; }
-                .tile-grass[data-grass-tone="1"] { background-color: #5fd68e; filter: hue-rotate(-4deg); }
-                .tile-grass[data-grass-tone="2"] { background-color: #6be09a; filter: brightness(1.04); }
-                .tile-grass[data-grass-tone="3"] { background-color: #42c072; filter: brightness(0.94); }
+                /* -- Biome-aware ground tint -----------------------------
+                 * Each biome subtly recolors the grass/sand/snow base so the
+                 * same tile IDs feel distinct from zone to zone without us
+                 * having to duplicate SVGs. The tint is layered as a
+                 * background-color shift + a soft wash -- sprites on the
+                 * tile are never touched (they sit on higher z-index). */
+                .biome-forest .tile-grass { background-color: #5a9a4d; box-shadow: inset 0 0 18px rgba(20, 50, 16, 0.28); }
+                .biome-lake   .tile-grass { background-color: #69b46a; box-shadow: inset 0 0 14px rgba(24, 64, 40, 0.18); }
+                .biome-town   .tile-grass { background-color: #7cb76e; box-shadow: inset 0 0 10px rgba(60, 110, 50, 0.15); }
+                .biome-desert .tile-sand  { background-color: #d6a561; }
+                .biome-canyon .tile-sand  { background-color: #c68a4a; box-shadow: inset 0 0 14px rgba(100, 50, 18, 0.28); }
+                .biome-snow   .tile-snow  { box-shadow: inset 0 0 22px rgba(180,200,226,0.7), inset 0 3px 5px rgba(255,255,255,0.95); }
+                .biome-cave   .tile-cave-floor { box-shadow: inset 0 0 36px rgba(0,0,0,0.78); }
+                /* Path adapts to biome: pale stone in snow, redder dirt in
+                 * canyon, dusty in desert, deep-earth in forest. */
+                .biome-desert .tile-path { background-color: #c9a574; }
+                .biome-canyon .tile-path { background-color: #a77a4c; }
+                .biome-snow   .tile-path { background-color: #c8d0d8; }
+                .biome-cave   .tile-path { background-color: #6a5e52; }
+                .biome-forest .tile-path { background-color: #a3825d; }
+                /* Rift turns EVERY ground type into an ominous violet wash
+                 * so stepping into the ring reads as "you are not welcome
+                 * here". */
+                .biome-rift .tile-grass,
+                .biome-rift .tile-sand,
+                .biome-rift .tile-snow,
+                .biome-rift .tile-stone,
+                .biome-rift .tile-cave-floor {
+                    filter: hue-rotate(-40deg) saturate(1.1) brightness(0.85);
+                }
+
+                /* -- Grass tonal variation keyed by data-grass-tone ------
+                 * Previous implementation swapped background-color between 4
+                 * noticeably different greens and used a CSS filter, which
+                 * produced a visible checkerboard of dark and light squares
+                 * and also tinted trainer / NPC sprites standing on grass.
+                 *
+                 * New approach: every plain-grass tile keeps the same base
+                 * background; we layer a very gentle rgba wash via ::before
+                 * with minimal opacity so the variation only reads as subtle
+                 * organic mottling rather than distinct tiles. The overlay
+                 * is pointer-events none and sits below content (z-index 0)
+                 * so sprites are never affected. */
+                .tile-grass[data-grass-tone] { position: relative; }
+                .tile-grass[data-grass-tone]::before {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    pointer-events: none;
+                    z-index: 0;
+                }
+                .tile-grass[data-grass-tone="0"]::before { background: transparent; }
+                .tile-grass[data-grass-tone="1"]::before { background: rgba(255, 255, 255, 0.035); }
+                .tile-grass[data-grass-tone="2"]::before { background: rgba(134, 239, 172, 0.05); }
+                .tile-grass[data-grass-tone="3"]::before { background: rgba(16, 76, 38, 0.05); }
 
                 /* -- Tree variants (oak / pine / round / willow) --------- */
                 /* Variant 0 (oak) keeps the original look. Variants 1-3
@@ -1732,6 +2053,73 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     75%  { transform: translate(4px, -4px); }
                     100% { transform: translate(0, 0); }
                 }
+
+                /* -- Overworld Item Ball (pure CSS) ---------------------
+                 * Previously we loaded a sprite from Pokemon Showdown at a
+                 * URL that 404'd, leaving a broken-image icon on the
+                 * overworld. This pure-CSS version cannot fail, matches
+                 * the painterly tile style, and renders crisply at any
+                 * zoom level. */
+                .overworld-item-ball {
+                    position: relative;
+                    width: 38px;
+                    height: 38px;
+                    animation: item-ball-bob 1.4s ease-in-out infinite;
+                    filter: drop-shadow(0 4px 3px rgba(0,0,0,0.35));
+                }
+                .overworld-item-ball-glow {
+                    position: absolute;
+                    inset: -6px;
+                    border-radius: 50%;
+                    background: radial-gradient(circle, rgba(253, 224, 71, 0.55) 0%, rgba(253, 224, 71, 0.15) 45%, transparent 70%);
+                    animation: item-ball-glow 1.8s ease-in-out infinite;
+                    pointer-events: none;
+                }
+                .overworld-item-ball-core {
+                    position: absolute;
+                    inset: 0;
+                    border-radius: 50%;
+                    border: 2px solid #0f172a;
+                    overflow: hidden;
+                    box-shadow: inset -4px -5px 0 rgba(0,0,0,0.25), inset 4px 4px 0 rgba(255,255,255,0.22);
+                }
+                .overworld-item-ball-top {
+                    position: absolute;
+                    left: 0; right: 0; top: 0;
+                    height: 50%;
+                    background: linear-gradient(180deg, #f87171 0%, #dc2626 60%, #b91c1c 100%);
+                }
+                .overworld-item-ball-bot {
+                    position: absolute;
+                    left: 0; right: 0; bottom: 0;
+                    height: 50%;
+                    background: linear-gradient(180deg, #f9fafb 0%, #d1d5db 100%);
+                }
+                .overworld-item-ball-seam {
+                    position: absolute;
+                    left: 0; right: 0; top: 50%;
+                    height: 3px;
+                    background: #0f172a;
+                    transform: translateY(-50%);
+                }
+                .overworld-item-ball-btn {
+                    position: absolute;
+                    top: 50%; left: 50%;
+                    width: 10px; height: 10px;
+                    transform: translate(-50%, -50%);
+                    background: #f9fafb;
+                    border-radius: 50%;
+                    border: 2px solid #0f172a;
+                    box-shadow: inset -1px -1px 0 rgba(0,0,0,0.25), 0 0 0 2px #0f172a;
+                }
+                @keyframes item-ball-bob {
+                    0%, 100% { transform: translateY(0); }
+                    50%      { transform: translateY(-5px); }
+                }
+                @keyframes item-ball-glow {
+                    0%, 100% { opacity: 0.55; transform: scale(1); }
+                    50%      { opacity: 0.9;  transform: scale(1.08); }
+                }
             `}</style>
             
             {showInteractPrompt && interactPos && (
@@ -1753,11 +2141,10 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
             <div className="fixed inset-0 z-30 pointer-events-none transition-colors duration-[2000ms] mix-blend-multiply" style={{ backgroundColor: timeOfDay === 'day' ? 'rgba(255,255,255,0)' : timeOfDay === 'sunset' ? 'rgba(253,186,116,0.2)' : 'rgba(15,23,42,0.5)' }}></div>
 
-            <BiomeAmbient
-                biome={currentMap?.biome}
-                timeOfDay={timeOfDay}
-                enabled={!(mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart'))}
-            />
+            {/* Ambient biome particles (birds, fireflies, leaves, etc.) live
+                INSIDE the camera-translated world container below so they
+                stay anchored to the map instead of drifting with the viewport
+                as the player walks. */}
 
             {weather === 'rain' && (
                 <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
@@ -1789,6 +2176,14 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             <div ref={containerRef} className="absolute transition-transform duration-300 ease-out" style={{ transform: `translate(${cameraOffset.x}px, ${cameraOffset.y}px)` }}>
                 <div className="relative shadow-2xl bg-black flex flex-col" style={{ width: (layout && layout[0] ? layout[0].length : 0) * TILE_SIZE, height: (layout ? layout.length : 0) * TILE_SIZE }}>
                     {layout && layout.map((row, y) => <div key={y} className="flex">{row && row.map((tile, x) => renderTile(tile, x, y))}</div>)}
+                    {/* World-anchored ambient particle layer. Percentages
+                        resolve against this div's size (the whole map), so
+                        particles stay fixed to world coordinates. */}
+                    <BiomeAmbient
+                        biome={currentMap?.biome}
+                        timeOfDay={timeOfDay}
+                        enabled={!(mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart'))}
+                    />
                 </div>
 
                 {/* Remote Players (Other than P1/P2) */}

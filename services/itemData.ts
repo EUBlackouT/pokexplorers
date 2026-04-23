@@ -890,5 +890,58 @@ export const ITEMS: Record<string, Item> = {
         price: 3000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/adrenalineorb.png',
         category: 'battle'
+    },
+    // --- FUSION-THEMED HELD ITEMS ---------------------------------------
+    // These items interact with the Sync Gauge / Fusion system. They are
+    // intentionally powerful (bounty-tier rewards) but always conditional
+    // on the holder either landing a fusion or sharing types with an
+    // ally -- so they don't trivialize solo or off-theme parties.
+    'fusion-core': {
+        id: 'fusion-core',
+        name: 'Fusion Core',
+        description: 'A pulsing shard of rift-crystal. The holder charges the Sync Gauge 25% faster whenever it damages a foe.',
+        price: 12000,
+        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/electirizer.png',
+        category: 'battle'
+    },
+    'chrono-prism': {
+        id: 'chrono-prism',
+        name: 'Chrono Prism',
+        description: 'An ancient lens that refracts time. Fusion moves used by the holder deal 25% more damage.',
+        price: 15000,
+        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/griseousorb.png',
+        category: 'battle'
+    },
+    'dual-pendant': {
+        id: 'dual-pendant',
+        name: 'Dual Pendant',
+        description: 'A twin-locket amulet. On switch-in, if an ally shares a type with the holder, the Sync Gauge fills by 20 instantly.',
+        price: 11000,
+        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/soothebell.png',
+        category: 'battle'
+    },
+    'link-crystal': {
+        id: 'link-crystal',
+        name: 'Link Crystal',
+        description: 'A resonant crystal that syncs allied heartbeats. Once per battle, the holder\'s fusion move strikes with +1 priority.',
+        price: 14000,
+        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/rainbowwing.png',
+        category: 'battle'
+    },
+    'harmony-bell': {
+        id: 'harmony-bell',
+        name: 'Harmony Bell',
+        description: 'A chiming bell forged in unison. When the holder uses a fusion move, their ally is healed for 25% of max HP.',
+        price: 13000,
+        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/silverwing.png',
+        category: 'battle'
+    },
+    'rift-shard': {
+        id: 'rift-shard',
+        name: 'Rift Shard',
+        description: 'A jagged fragment from beyond. The holder\'s Sync Gauge starts each battle with +20 charge.',
+        price: 10000,
+        icon: 'https://play.pokemonshowdown.com/sprites/itemicons/oddincense.png',
+        category: 'battle'
     }
 };
