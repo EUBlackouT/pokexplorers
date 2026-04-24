@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Coordinate, Chunk } from '../types';
 import { MAPS, generateChunk, CHUNK_SIZE, getGrassAura, type GrassAura } from '../services/mapData';
 import { BiomeAmbient } from './ui/BiomeAmbient';
+import { OverworldTrainer, type TrainerFacing } from './ui/OverworldTrainer';
 
 interface Props {
     p1Pos: Coordinate;
@@ -22,59 +23,100 @@ interface Props {
     auraSight?: boolean;
 }
 
+/**
+ * PlayerCharacter
+ * -----------------------------------------------------------------
+ * Replaces the old static trainer-portrait-with-bounce with a proper
+ * 4-direction walking overworld sprite (`OverworldTrainer`). The
+ * outer container still uses CSS `transition-all` to lerp between
+ * tiles, so inputs feel like "step onto the next tile" rather than
+ * teleporting, and the sprite inside cycles a 2-frame walk cycle for
+ * the duration of that transition.
+ *
+ * `spriteUrl` is kept on the props for API compatibility (a few call
+ * sites still pass it) but is now used only as a hash-seed for a
+ * per-player hue shift, so multiple remote players are visually
+ * distinct without us needing a wardrobe system yet.
+ */
 const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, onClick }) => {
-    const [direction, setDirection] = useState<'left' | 'right'>('right');
+    const [facing, setFacing] = useState<TrainerFacing>('down');
     const [isMoving, setIsMoving] = useState(false);
+    const [frame, setFrame] = useState<0 | 1>(0);
     const prevPos = useRef(pos);
+    const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const TILE_SIZE = 64;
 
+    // Detect movement (position delta) and derive the facing direction.
+    // Y takes priority over X so that a diagonal same-tick move still
+    // reads sensibly -- in practice the input layer only allows one
+    // axis at a time, but this guards against network reorder.
     useEffect(() => {
-        if (prevPos.current.x !== pos.x || prevPos.current.y !== pos.y) {
-            if (pos.x < prevPos.current.x) setDirection('left');
-            if (pos.x > prevPos.current.x) setDirection('right');
-            setIsMoving(true);
-            const timer = setTimeout(() => setIsMoving(false), 300); 
-            prevPos.current = pos;
-            return () => clearTimeout(timer);
-        }
+        const dx = pos.x - prevPos.current.x;
+        const dy = pos.y - prevPos.current.y;
+        if (dx === 0 && dy === 0) return;
+
+        if (dy !== 0) setFacing(dy < 0 ? 'up' : 'down');
+        else if (dx !== 0) setFacing(dx < 0 ? 'left' : 'right');
+
+        setIsMoving(true);
+        if (moveTimer.current) clearTimeout(moveTimer.current);
+        moveTimer.current = setTimeout(() => setIsMoving(false), 280);
+        prevPos.current = pos;
+
+        return () => { if (moveTimer.current) { clearTimeout(moveTimer.current); moveTimer.current = null; } };
     }, [pos]);
 
-    // Use a more reliable sprite URL if the provided one looks like a PokeAPI raw link
-    const finalSpriteUrl = spriteUrl.includes('raw.githubusercontent.com') 
-        ? 'https://play.pokemonshowdown.com/sprites/trainers/red.png' 
-        : spriteUrl;
+    // Cycle the walk-cycle frame every ~140ms while the character is
+    // in motion. 140ms × 2 frames = 280ms cycle, aligning with the
+    // movement transition duration above so the foot-plant matches the
+    // arrival on the next tile.
+    useEffect(() => {
+        if (!isMoving) return;
+        const id = setInterval(() => setFrame(f => (f === 0 ? 1 : 0)), 140);
+        return () => clearInterval(id);
+    }, [isMoving]);
+
+    // Per-player hue tint so local=blue, remote players get shifted
+    // coats. Derived from `spriteUrl` + `label` so the same remote
+    // player stays the same color across reloads.
+    const hueSeed = React.useMemo(() => {
+        if (isLocal) return 0;
+        const s = `${label}|${spriteUrl}`;
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 16777619) >>> 0;
+        }
+        return (h % 300) + 30; // 30..329 deg -- skip the near-identity band
+    }, [isLocal, label, spriteUrl]);
 
     return (
-        <div 
-            className={`absolute top-0 left-0 transition-all duration-300 ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
-            style={{ 
+        <div
+            className={`absolute top-0 left-0 transition-all duration-[280ms] ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
+            style={{
                 transform: `translate(${pos.x * TILE_SIZE}px, ${pos.y * TILE_SIZE - 32}px)`,
                 width: TILE_SIZE,
-                height: TILE_SIZE + 32
+                height: TILE_SIZE + 32,
             }}
             onClick={onClick}
             data-player-label={label}
         >
-            <div className={`w-full h-full relative flex items-end justify-center pb-2`}>
-                <div className="absolute bottom-2 w-12 h-4 bg-black/40 rounded-[50%] blur-[2px]"></div>
+            <div className="w-full h-full relative flex items-end justify-center pb-1">
                 {isLocal && (
                     <div className="absolute -top-8 text-yellow-300 font-bold text-[10px] animate-bounce z-40 drop-shadow-md border-black font-mono">▼</div>
                 )}
                 {!isLocal && (
-                    <div className="absolute -top-12 whitespace-nowrap bg-black/60 text-white text-[8px] px-2 py-1 rounded border border-white/20 z-40">
+                    <div className="absolute -top-10 whitespace-nowrap bg-black/60 text-white text-[8px] px-2 py-1 rounded border border-white/20 z-40">
                         {label}
                     </div>
                 )}
-                <div className={`${direction === 'left' ? 'scale-x-[-1]' : ''} relative z-10`}>
-                    <img 
-                        src={finalSpriteUrl} 
-                        alt="Player"
-                        referrerPolicy="no-referrer"
-                        className={`w-16 h-20 object-contain ${isMoving ? 'animate-walk' : ''}`}
-                        style={{ imageRendering: 'pixelated' }}
-                        onError={(e) => {
-                            (e.target as HTMLImageElement).src = 'https://play.pokemonshowdown.com/sprites/trainers/blue.png';
-                        }}
+                <div className="relative z-10" style={{ width: 56, height: 78 }}>
+                    <OverworldTrainer
+                        facing={facing}
+                        isMoving={isMoving}
+                        frame={frame}
+                        hue={hueSeed}
+                        size={56}
                     />
                 </div>
             </div>
@@ -2120,6 +2162,98 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     0%, 100% { opacity: 0.55; transform: scale(1); }
                     50%      { opacity: 0.9;  transform: scale(1.08); }
                 }
+
+                /* =========================================================
+                 * Living ground: tile-level motion.
+                 *
+                 * We keep these changes on pseudo-elements (::before / ::after)
+                 * only so the base tile still composites cheaply. Each
+                 * animation is pure transform + opacity -> the compositor
+                 * doesn't re-layout when a blade sways.
+                 * ========================================================= */
+
+                /* Tall grass blades sway gently. The ::after element already
+                 * holds the blade SVG overlay; we anchor the sway at the
+                 * stems (bottom-center) and give it a prime period so
+                 * neighbouring clumps don't move in lockstep. */
+                .tile-tall-grass::after {
+                    transform-origin: 50% 92%;
+                    animation: grass-sway 4.3s ease-in-out infinite;
+                    will-change: transform;
+                }
+                @keyframes grass-sway {
+                    0%,100% { transform: rotate(-1.4deg) skewX(-1deg); }
+                    50%     { transform: rotate( 1.4deg) skewX( 1deg); }
+                }
+
+                /* Flower cluster bob + soft hue shift. Kept subtle so a
+                 * whole meadow doesn't shimmer unrealistically. */
+                .flower-cluster-pink,
+                .flower-daisy,
+                .flower-tulip-red,
+                .flower-bluebell,
+                .flower-sunflower {
+                    transform-origin: 50% 100%;
+                    animation: flower-bob 5.5s ease-in-out infinite;
+                    will-change: transform;
+                }
+                .flower-daisy      { animation-duration: 5.1s; animation-delay: -0.9s; }
+                .flower-tulip-red  { animation-duration: 5.8s; animation-delay: -1.7s; }
+                .flower-bluebell   { animation-duration: 5.3s; animation-delay: -2.4s; }
+                .flower-sunflower  { animation-duration: 6.2s; animation-delay: -3.1s; }
+                @keyframes flower-bob {
+                    0%,100% { transform: rotate(-2deg) translateY(0); }
+                    50%     { transform: rotate( 2deg) translateY(-1px); }
+                }
+
+                /* =========================================================
+                 * Map smoothness pass.
+                 *
+                 * Two things make a tile-grid look like "old squares":
+                 *   1. Uniform color fills that repeat at the same phase.
+                 *   2. Hard, axis-aligned seams between neighbouring tiles.
+                 *
+                 * .map-noise is a faint world-wide noise that fights
+                 * color banding without adding per-tile cost. .map-breeze
+                 * lays a slowly-drifting highlight on top so the world
+                 * reads as lit by a moving atmosphere rather than a
+                 * static screenshot. Both are mounted inside the camera
+                 * container so they translate with the world.
+                 * NOTE: we deliberately do NOT paint a per-tile vignette
+                 * here. In early iterations we did, but it stacks 4 dark
+                 * corners at every grid intersection and *emphasizes* the
+                 * tile grid -- exactly the opposite of "smoother map".
+                 * ========================================================= */
+
+                .map-noise {
+                    position: absolute;
+                    inset: -64px; /* bleed past the camera edge */
+                    pointer-events: none;
+                    z-index: 2;
+                    opacity: 0.08;
+                    mix-blend-mode: overlay;
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+                    background-size: 180px 180px;
+                }
+                /* Fine drifting highlight across the map -- very subtle,
+                 * reads as breeze / atmosphere and sells the "world is
+                 * alive" idea without a frame-rate cost. */
+                .map-breeze {
+                    position: absolute;
+                    inset: -64px;
+                    pointer-events: none;
+                    z-index: 2;
+                    background:
+                        radial-gradient(ellipse 40% 30% at 20% 30%, rgba(255,255,255,0.06), transparent 70%),
+                        radial-gradient(ellipse 50% 35% at 70% 65%, rgba(255,255,255,0.04), transparent 70%);
+                    mix-blend-mode: screen;
+                    animation: breeze-drift 18s ease-in-out infinite alternate;
+                }
+                @keyframes breeze-drift {
+                    0%   { transform: translate(-4%, -3%); opacity: 0.9; }
+                    50%  { transform: translate( 2%,  1%); opacity: 1; }
+                    100% { transform: translate( 5%,  3%); opacity: 0.85; }
+                }
             `}</style>
             
             {showInteractPrompt && interactPos && (
@@ -2176,6 +2310,20 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             <div ref={containerRef} className="absolute transition-transform duration-300 ease-out" style={{ transform: `translate(${cameraOffset.x}px, ${cameraOffset.y}px)` }}>
                 <div className="relative shadow-2xl bg-black flex flex-col" style={{ width: (layout && layout[0] ? layout[0].length : 0) * TILE_SIZE, height: (layout ? layout.length : 0) * TILE_SIZE }}>
                     {layout && layout.map((row, y) => <div key={y} className="flex">{row && row.map((tile, x) => renderTile(tile, x, y))}</div>)}
+                    {/* Map-wide noise + atmospheric breeze overlays.
+                        Tile-anchored (inside the camera container) so they
+                        appear to sit ON the world rather than float above
+                        the camera. See .map-noise / .map-breeze in the
+                        style block for their motion. Interior maps skip
+                        these -- indoor tiles already feel cozy without
+                        weather, and the breeze overlay can read as a
+                        draft where it shouldn't. */}
+                    {!(mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart')) && (
+                        <>
+                            <div className="map-noise" />
+                            <div className="map-breeze" />
+                        </>
+                    )}
                     {/* World-anchored ambient particle layer. Percentages
                         resolve against this div's size (the whole map), so
                         particles stay fixed to world coordinates. */}
