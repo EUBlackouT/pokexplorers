@@ -266,6 +266,15 @@ export default function App() {
   const dailyEventShown = useRef(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanCooldown, setScanCooldown] = useState(0);
+  // Shift-to-run: UI re-renders for the sprite sheet / tween swap.
+  const [isRunning, setIsRunning] = useState(false);
+  // Movement debounce. Keydown fires at the OS autorepeat rate (~30/s
+  // on most platforms), which is far too fast for the 180ms walk / 100ms
+  // run step cadence. We gate at the call site so both the client (which
+  // sends INPUT_MOVE over the wire) and the host (which runs handleMapMove
+  // locally) respect the cooldown, without each having to track it.
+  const lastMoveAtRef = useRef<number>(0);
+  const shiftHeldRef = useRef<boolean>(false);
   // Evolution cinematic queue. Each entry has a `before` snapshot, the
   // fully-built `after` Pokemon, and an `onDone` callback that commits the
   // evolution (or the cancellation) to player state. The scene renders the
@@ -8323,13 +8332,29 @@ export default function App() {
 
   // --- CONTROLS ---
   // Keyboard mapping (Pokemon-mainline-ish):
-  //   - Arrows / WASD: move
-  //   - Space / E: A-button (interact, advance dialogue)
-  //   - Enter: Start button (toggle pause menu)
-  //   - Esc: closes whichever modal is on top (handled by useEscapeKey)
+  //   - Arrows / WASD: move (OS auto-repeat drives continuous motion,
+  //                    gated by a step-cooldown to match the tile grid)
+  //   - Shift:        hold to run -- shorter cooldown + running sprite
+  //   - Space / E:    A-button (interact, advance dialogue)
+  //   - Enter:        Start button (toggle pause menu)
+  //   - Esc:          closes whichever modal is on top (useEscapeKey)
   useEffect(() => {
+    // Cadence in ms -- mirrors WALK_STEP_MS / RUN_STEP_MS in Overworld.tsx.
+    // Intentional mild duplication: App owns the gate, Overworld owns the
+    // tween, and both need to agree without a shared constant import.
+    const WALK_STEP_MS = 180;
+    const RUN_STEP_MS  = 100;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (phase !== GamePhase.OVERWORLD) return;
+
+      // Track Shift so the sprite sheet / tween / debounce all
+      // agree on cadence. `repeat` filter prevents stomping the
+      // state 30x/s while the key is held.
+      if ((e.key === 'Shift' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat) {
+          shiftHeldRef.current = true;
+          setIsRunning(true);
+      }
 
       // Enter toggles the pause menu globally in the overworld, regardless
       // of whether a dialogue is up. If a dialogue is open it still closes
@@ -8356,35 +8381,64 @@ export default function App() {
 
       if (isPaused) return;
 
-      if (networkRole === 'client') {
-          let dx = 0, dy = 0;
-          if (e.key === 'ArrowUp' || e.key === 'w') dy = -1;
-          if (e.key === 'ArrowDown' || e.key === 's') dy = 1;
-          if (e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
-          if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
-          if (dx !== 0 || dy !== 0) {
-              const newPos = { x: playerState.position.x + dx, y: playerState.position.y + dy };
-              console.log("[CONTROLS] Client sending INPUT_MOVE to", newPos);
-              multiplayer.send({ type: 'INPUT_MOVE', payload: newPos });
-          }
-          if (e.key === ' ' || e.key === 'e' || e.key === 'E') multiplayer.send({ type: 'INPUT_MENU', payload: { type: 'INTERACT' } });
-      } else {
-          // Host Logic
-          let dx = 0, dy = 0;
-          if (e.key === 'ArrowUp' || e.key === 'w') dy = -1;
-          if (e.key === 'ArrowDown' || e.key === 's') dy = 1;
-          if (e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
-          if (e.key === 'ArrowRight' || e.key === 'd') dx = 1;
+      let dx = 0, dy = 0;
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') dy = -1;
+      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') dy = 1;
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') dx = -1;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') dx = 1;
 
-          if (dx !== 0 || dy !== 0) {
+      if (dx !== 0 || dy !== 0) {
+          // One-step-per-tick debounce. Without this, a held arrow
+          // key would call handleMapMove/INPUT_MOVE ~30x per second,
+          // which floods the network, blows through chunk borders in
+          // a single frame, and makes the walk animation flip parity
+          // every 33ms instead of once per tile.
+          const now = Date.now();
+          const cooldown = shiftHeldRef.current ? RUN_STEP_MS : WALK_STEP_MS;
+          if (now - lastMoveAtRef.current < cooldown) return;
+          lastMoveAtRef.current = now;
+
+          if (networkRole === 'client') {
+              const newPos = { x: playerState.position.x + dx, y: playerState.position.y + dy };
+              multiplayer.send({ type: 'INPUT_MOVE', payload: newPos });
+          } else {
               const target = { x: playerState.position.x + dx, y: playerState.position.y + dy };
               handleMapMove(target, 1);
           }
-          if (e.key === ' ' || e.key === 'e' || e.key === 'E') handleInteraction(1);
+          return;
+      }
+
+      if (e.key === ' ' || e.key === 'e' || e.key === 'E') {
+          if (networkRole === 'client') multiplayer.send({ type: 'INPUT_MENU', payload: { type: 'INTERACT' } });
+          else handleInteraction(1);
       }
     };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+          shiftHeldRef.current = false;
+          setIsRunning(false);
+      }
+    };
+
+    // If the tab loses focus while Shift is held, the browser never
+    // delivers the keyup event -- so the player would come back to
+    // their desk mysteriously still running. Reset on blur.
+    const handleBlur = () => {
+      if (shiftHeldRef.current) {
+          shiftHeldRef.current = false;
+          setIsRunning(false);
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
   }, [phase, playerState, networkRole, isPaused, dialogue]);
 
   useEffect(() => { if (battleState.phase === 'execution' && (networkRole === 'none' || networkRole === 'host')) executeTurn(); }, [battleState.phase]);
@@ -8780,6 +8834,7 @@ export default function App() {
                     badges={playerState.badges} 
                     isScanning={isScanning}
                     auraSight={hasTalent(playerState.meta, 'aura_sight')}
+                    isRunning={isRunning}
                 />
                 <CatchComboBadge combo={playerState.catchCombo} />
                 {battleChallenge && (

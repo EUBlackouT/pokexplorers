@@ -32,10 +32,19 @@ import { BiomeAmbient } from './ui/BiomeAmbient';
 // availability risk at runtime.
 // ---------------------------------------------------------------
 const SPRITE_SHEETS = {
-    brendan: '/sprites/overworld/brendan_walking.png',
-    may:     '/sprites/overworld/may_walking.png',
+    brendan:    '/sprites/overworld/brendan_walking.png',
+    may:        '/sprites/overworld/may_walking.png',
+    brendanRun: '/sprites/overworld/brendan_running.png',
+    mayRun:     '/sprites/overworld/may_running.png',
 } as const;
 type TrainerFacing = 'up' | 'down' | 'left' | 'right';
+
+// Step cadence in milliseconds -- one step = one tile. These values
+// also drive the CSS transition and the "still moving" hold-over
+// timer so that parity alternation, transform tweening, and
+// animation-state all stay in sync.
+const WALK_STEP_MS = 180;
+const RUN_STEP_MS  = 100;
 
 interface Props {
     p1Pos: Coordinate;
@@ -53,6 +62,10 @@ interface Props {
     isScanning?: boolean;
     /** Aura Sight talent -- amplifies alpha/anomaly tile glow. */
     auraSight?: boolean;
+    /** Local player is holding Shift -- render the running sprite
+     *  and shorten the step tween. Remote players are purely
+     *  cosmetic today; their run state isn't synced. */
+    isRunning?: boolean;
 }
 
 /**
@@ -108,23 +121,18 @@ const FRAME_X = {
     leftWalkB:  128,
 } as const;
 
-function pickSheetFor(spriteUrl: string, isLocal: boolean): string {
+function pickSheetFor(spriteUrl: string, isLocal: boolean, running: boolean): string {
     const u = (spriteUrl || '').toLowerCase();
-    // Explicit new-style paths take precedence.
-    if (u.includes('may')) return SPRITE_SHEETS.may;
-    if (u.includes('brendan')) return SPRITE_SHEETS.brendan;
-    // Legacy routing so old Showdown portrait URLs and last-session
-    // Gen 2 paths still resolve to something sensible. Female-coded
-    // trainers / Kris-like ids route to May; everyone else -> Brendan.
-    if (u.includes('kris') || u.includes('leaf') || u.includes('lyra') || u.includes('rosa') || u.includes('hilda')) {
-        return SPRITE_SHEETS.may;
-    }
-    // Default split: local -> Brendan, remote -> May (so host/guest
-    // are instantly distinguishable at a glance).
-    return isLocal ? SPRITE_SHEETS.brendan : SPRITE_SHEETS.may;
+    const goMay =
+        u.includes('may') ||
+        u.includes('kris') || u.includes('leaf') ||
+        u.includes('lyra') || u.includes('rosa') || u.includes('hilda') ||
+        (!u.includes('brendan') && !isLocal);
+    if (goMay) return running ? SPRITE_SHEETS.mayRun : SPRITE_SHEETS.may;
+    return running ? SPRITE_SHEETS.brendanRun : SPRITE_SHEETS.brendan;
 }
 
-const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, onClick }) => {
+const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, isRunning?: boolean, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, isRunning = false, onClick }) => {
     const [facing, setFacing] = useState<TrainerFacing>('down');
     const [isMoving, setIsMoving] = useState(false);
     const stepParity = useRef<'A' | 'B'>('A');
@@ -139,6 +147,13 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
     const SPRITE_H = 128;
     const SHEET_W = 144 * 4; // 576 -- full sheet scaled
     const SHEET_H = 32 * 4;  // 128
+
+    // Pick cadence based on whether the player is sprinting. Keep a
+    // live ref too so the moveTimer below always reads the current
+    // tempo even if isRunning flips mid-stride.
+    const stepMs = isRunning ? RUN_STEP_MS : WALK_STEP_MS;
+    const stepMsRef = useRef(stepMs);
+    stepMsRef.current = stepMs;
 
     // Detect movement (position delta) and derive facing + parity.
     // Y takes priority so any diagonal same-tick network update
@@ -156,16 +171,22 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
         stepParity.current = stepParity.current === 'A' ? 'B' : 'A';
         setIsMoving(true);
         if (moveTimer.current) clearTimeout(moveTimer.current);
-        // Slightly longer than the fastest key-repeat interval so
-        // continuous movement stays in "walking" state without the
-        // one-frame "stand" blip between tiles.
-        moveTimer.current = setTimeout(() => setIsMoving(false), 380);
+        // Hold the "walking" state a hair past one full step so that
+        // continuous movement never blips to a stand frame between
+        // tiles, but we still settle to idle quickly after the last
+        // step. Uses the live ref so walk->run switches take effect
+        // immediately without a stale timeout.
+        moveTimer.current = setTimeout(() => setIsMoving(false), stepMsRef.current + 40);
         prevPos.current = pos;
 
         return () => { if (moveTimer.current) { clearTimeout(moveTimer.current); moveTimer.current = null; } };
     }, [pos]);
 
-    const sheet = pickSheetFor(spriteUrl, isLocal);
+    // Swap to the running sheet only while actually moving -- an idle
+    // Shift-hold should still show the walking-stand pose. This also
+    // makes the sprite "settle" cleanly after a sprint: feet land,
+    // character stands normally.
+    const sheet = pickSheetFor(spriteUrl, isLocal, isRunning && isMoving);
 
     // Resolve the correct cell for the current facing / walk phase
     // using the canonical Gen 3 rule set:
@@ -197,13 +218,18 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
 
     return (
         <div
-            className={`absolute top-0 left-0 transition-all duration-[260ms] ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
+            className={`absolute top-0 left-0 ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
             style={{
                 // Head at pos.y-1, feet at pos.y. Sprite occupies the
                 // current tile plus one tile above.
                 transform: `translate(${pos.x * TILE_SIZE}px, ${(pos.y - 1) * TILE_SIZE}px)`,
                 width: SPRITE_W,
                 height: SPRITE_H,
+                // Match the tween to the active step cadence so the
+                // sprite glides *exactly* tile-to-tile and the foot-
+                // plant lines up with the arrival frame. Prevents the
+                // old "retarget every 30ms, never settle" jitter.
+                transition: `transform ${stepMs}ms linear`,
             }}
             onClick={onClick}
             data-player-label={label}
@@ -250,7 +276,7 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
 };
 
 
-export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, customLayout, myPlayerId, networkRole = null, onInteract, onChallenge, remotePlayers = new Map(), storyFlags = [], badges = 0, isScanning = false, auraSight = false }) => {
+export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, customLayout, myPlayerId, networkRole = null, onInteract, onChallenge, remotePlayers = new Map(), storyFlags = [], badges = 0, isScanning = false, auraSight = false, isRunning = false }) => {
     const [timeOfDay, setTimeOfDay] = useState<'day' | 'sunset' | 'night'>('day');
     const [weather, setWeather] = useState<'none' | 'rain' | 'snow' | 'sandstorm'>('none');
     const containerRef = useRef<HTMLDivElement>(null);
@@ -2490,6 +2516,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             isLocal={isMe}
                             label={isMe ? "Me" : "Host"}
                             spriteUrl={SPRITE_SHEETS.brendan}
+                            isRunning={isMe && isRunning}
                             onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
                         />
                     );
@@ -2505,6 +2532,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             isLocal={isMe}
                             label={isMe ? "Me" : "Friend"}
                             spriteUrl={SPRITE_SHEETS.may}
+                            isRunning={isMe && isRunning}
                             onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
                         />
                     );
