@@ -3,7 +3,32 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Coordinate, Chunk } from '../types';
 import { MAPS, generateChunk, CHUNK_SIZE, getGrassAura, type GrassAura } from '../services/mapData';
 import { BiomeAmbient } from './ui/BiomeAmbient';
-import { OverworldTrainer, type TrainerFacing } from './ui/OverworldTrainer';
+
+// ---------------------------------------------------------------
+// Overworld sprite sheets.
+//
+// These are actual 16x96 Gen 2 overworld walking sprite sheets
+// from the pokecrystal decomp (pret/pokecrystal). Layout is a
+// vertical strip of 6 frames (16x16 each), in this order:
+//
+//     y=0   DOWN  standing
+//     y=16  DOWN  stepping
+//     y=32  UP    standing
+//     y=48  UP    stepping
+//     y=64  LEFT  standing
+//     y=80  LEFT  stepping
+//
+// Right-facing is rendered by horizontally flipping the LEFT
+// frames (classic Gen 2 trick -- they never ship a dedicated
+// right-facing sprite). Served as static files from /public so
+// there is no CORS or CDN availability risk at runtime.
+// ---------------------------------------------------------------
+const SPRITE_SHEETS = {
+    red:   '/sprites/overworld/red.png',
+    chris: '/sprites/overworld/chris.png',
+    kris:  '/sprites/overworld/kris.png',
+} as const;
+type TrainerFacing = 'up' | 'down' | 'left' | 'right';
 
 interface Props {
     p1Pos: Coordinate;
@@ -26,18 +51,41 @@ interface Props {
 /**
  * PlayerCharacter
  * -----------------------------------------------------------------
- * Replaces the old static trainer-portrait-with-bounce with a proper
- * 4-direction walking overworld sprite (`OverworldTrainer`). The
- * outer container still uses CSS `transition-all` to lerp between
- * tiles, so inputs feel like "step onto the next tile" rather than
- * teleporting, and the sprite inside cycles a 2-frame walk cycle for
- * the duration of that transition.
+ * Renders the player as a proper Gen-2-style overworld walking
+ * sprite (the pret/pokecrystal `chris.png` / `kris.png` / `red.png`
+ * sheets, bundled as static assets under /sprites/overworld/).
  *
- * `spriteUrl` is kept on the props for API compatibility (a few call
- * sites still pass it) but is now used only as a hash-seed for a
- * per-player hue shift, so multiple remote players are visually
- * distinct without us needing a wardrobe system yet.
+ * The sheet is a 16x96 vertical strip (6 frames of 16x16), and we
+ * pick the right cell by moving the `background-position`. We scale
+ * the whole thing 4x for a 64x64 display that matches the tile
+ * size. The two-frame walk cycle toggles between the "standing" row
+ * and the "stepping" row every 140ms while moving.
+ *
+ * `spriteUrl` is retained for API compatibility with existing
+ * call-sites. It's used to route to one of our bundled sheets via
+ * `pickSheetFor()` -- if the caller sends a Pokemon Showdown
+ * trainer portrait URL we map it to the closest matching Gen 2
+ * overworld sheet (host/red -> red, leaf -> kris, anything else ->
+ * chris as a neutral fallback).
  */
+
+/** Classic Gen 2 frame layout (y-offset in native pixels, 16x16). */
+const FRAME_Y = {
+    down:  { stand: 0,   step: 16 },
+    up:    { stand: 32,  step: 48 },
+    left:  { stand: 64,  step: 80 },
+} as const;
+
+function pickSheetFor(spriteUrl: string, isLocal: boolean): string {
+    const u = spriteUrl.toLowerCase();
+    if (u.includes('red')) return SPRITE_SHEETS.red;
+    if (u.includes('leaf') || u.includes('kris') || u.includes('blue')) return SPRITE_SHEETS.kris;
+    if (u.includes('chris') || u.includes('ethan') || u.includes('gold')) return SPRITE_SHEETS.chris;
+    // Sensible default: local player -> red, remote -> chris, so
+    // two players in the same room are visually distinct.
+    return isLocal ? SPRITE_SHEETS.red : SPRITE_SHEETS.chris;
+}
+
 const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, onClick }) => {
     const [facing, setFacing] = useState<TrainerFacing>('down');
     const [isMoving, setIsMoving] = useState(false);
@@ -47,9 +95,9 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
     const TILE_SIZE = 64;
 
     // Detect movement (position delta) and derive the facing direction.
-    // Y takes priority over X so that a diagonal same-tick move still
-    // reads sensibly -- in practice the input layer only allows one
-    // axis at a time, but this guards against network reorder.
+    // Y takes priority over X so a diagonal same-tick network update
+    // still reads sensibly -- the input layer only allows one axis
+    // per keystroke but this guards against reorder.
     useEffect(() => {
         const dx = pos.x - prevPos.current.x;
         const dy = pos.y - prevPos.current.y;
@@ -66,59 +114,74 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
         return () => { if (moveTimer.current) { clearTimeout(moveTimer.current); moveTimer.current = null; } };
     }, [pos]);
 
-    // Cycle the walk-cycle frame every ~140ms while the character is
-    // in motion. 140ms × 2 frames = 280ms cycle, aligning with the
-    // movement transition duration above so the foot-plant matches the
-    // arrival on the next tile.
+    // 140ms × 2 frames = 280ms cycle, aligning with the movement
+    // transition so each foot-plant coincides with arriving on the
+    // next tile.
     useEffect(() => {
-        if (!isMoving) return;
+        if (!isMoving) { setFrame(0); return; }
         const id = setInterval(() => setFrame(f => (f === 0 ? 1 : 0)), 140);
         return () => clearInterval(id);
     }, [isMoving]);
 
-    // Per-player hue tint so local=blue, remote players get shifted
-    // coats. Derived from `spriteUrl` + `label` so the same remote
-    // player stays the same color across reloads.
-    const hueSeed = React.useMemo(() => {
-        if (isLocal) return 0;
-        const s = `${label}|${spriteUrl}`;
-        let h = 2166136261 >>> 0;
-        for (let i = 0; i < s.length; i++) {
-            h ^= s.charCodeAt(i);
-            h = Math.imul(h, 16777619) >>> 0;
-        }
-        return (h % 300) + 30; // 30..329 deg -- skip the near-identity band
-    }, [isLocal, label, spriteUrl]);
+    const sheet = pickSheetFor(spriteUrl, isLocal);
+
+    // Figure out which cell of the sheet to show for the current
+    // facing + walk frame. Right uses the LEFT cells with a CSS
+    // horizontal flip applied on the sprite element.
+    const facingForSheet: 'down' | 'up' | 'left' = facing === 'right' ? 'left' : facing;
+    const yNative = FRAME_Y[facingForSheet][isMoving && frame === 1 ? 'step' : 'stand'];
+    // 4x scale: native 16x96 -> display 64x384. Show the 64x64
+    // window that corresponds to `yNative` (scaled).
+    const bgPosY = -yNative * 4;
+    const flipX = facing === 'right';
 
     return (
         <div
             className={`absolute top-0 left-0 transition-all duration-[280ms] ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
             style={{
-                transform: `translate(${pos.x * TILE_SIZE}px, ${pos.y * TILE_SIZE - 32}px)`,
+                transform: `translate(${pos.x * TILE_SIZE}px, ${pos.y * TILE_SIZE - TILE_SIZE / 4}px)`,
                 width: TILE_SIZE,
-                height: TILE_SIZE + 32,
+                height: TILE_SIZE + TILE_SIZE / 4,
             }}
             onClick={onClick}
             data-player-label={label}
         >
-            <div className="w-full h-full relative flex items-end justify-center pb-1">
+            <div className="w-full h-full relative flex items-end justify-center">
+                {/* Soft ground shadow so the sprite reads as grounded
+                    rather than floating. Stays still while the sprite
+                    cycles frames. */}
+                <div
+                    className="absolute left-1/2 -translate-x-1/2"
+                    style={{
+                        bottom: 2,
+                        width: 36,
+                        height: 8,
+                        background: 'radial-gradient(ellipse, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 70%)',
+                        pointerEvents: 'none',
+                    }}
+                />
                 {isLocal && (
-                    <div className="absolute -top-8 text-yellow-300 font-bold text-[10px] animate-bounce z-40 drop-shadow-md border-black font-mono">▼</div>
+                    <div className="absolute -top-4 text-yellow-300 font-bold text-[10px] animate-bounce z-40 drop-shadow-md border-black font-mono">▼</div>
                 )}
                 {!isLocal && (
-                    <div className="absolute -top-10 whitespace-nowrap bg-black/60 text-white text-[8px] px-2 py-1 rounded border border-white/20 z-40">
+                    <div className="absolute -top-8 whitespace-nowrap bg-black/60 text-white text-[8px] px-2 py-1 rounded border border-white/20 z-40">
                         {label}
                     </div>
                 )}
-                <div className="relative z-10" style={{ width: 56, height: 78 }}>
-                    <OverworldTrainer
-                        facing={facing}
-                        isMoving={isMoving}
-                        frame={frame}
-                        hue={hueSeed}
-                        size={56}
-                    />
-                </div>
+                <div
+                    className="relative z-10"
+                    style={{
+                        width: 64,
+                        height: 64,
+                        backgroundImage: `url(${sheet})`,
+                        backgroundSize: '64px 384px',
+                        backgroundPosition: `0px ${bgPosY}px`,
+                        backgroundRepeat: 'no-repeat',
+                        imageRendering: 'pixelated',
+                        transform: flipX ? 'scaleX(-1)' : undefined,
+                        transformOrigin: 'center',
+                    }}
+                />
             </div>
         </div>
     );
@@ -2346,7 +2409,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             pos={player.position} 
                             isLocal={false} 
                             label={player.name || "Trainer"}
-                            spriteUrl={player.spriteUrl || "https://play.pokemonshowdown.com/sprites/trainers/blue.png"}
+                            spriteUrl={player.spriteUrl || SPRITE_SHEETS.chris}
                             onClick={() => onChallenge?.(id, player)}
                         />
                     );
@@ -2364,7 +2427,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             pos={p1Pos}
                             isLocal={isMe}
                             label={isMe ? "Me" : "Host"}
-                            spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/red.png"
+                            spriteUrl={SPRITE_SHEETS.red}
                             onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
                         />
                     );
@@ -2379,7 +2442,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             pos={p2Pos}
                             isLocal={isMe}
                             label={isMe ? "Me" : "Friend"}
-                            spriteUrl="https://play.pokemonshowdown.com/sprites/trainers/leaf.png"
+                            spriteUrl={SPRITE_SHEETS.kris}
                             onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
                         />
                     );

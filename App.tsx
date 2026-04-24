@@ -8216,7 +8216,7 @@ export default function App() {
                     position: playerState.position,
                     mapId: playerState.mapId,
                     team: playerState.team.map(p => ({ id: p.id, name: p.name, level: p.level, currentHp: p.currentHp, maxHp: p.maxHp })),
-                    spriteUrl: networkRole === 'host' ? 'https://play.pokemonshowdown.com/sprites/trainers/red.png' : 'https://play.pokemonshowdown.com/sprites/trainers/leaf.png',
+                    spriteUrl: networkRole === 'host' ? '/sprites/overworld/red.png' : '/sprites/overworld/kris.png',
                     isHost: networkRole === 'host'
                 }
             });
