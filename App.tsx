@@ -8216,7 +8216,7 @@ export default function App() {
                     position: playerState.position,
                     mapId: playerState.mapId,
                     team: playerState.team.map(p => ({ id: p.id, name: p.name, level: p.level, currentHp: p.currentHp, maxHp: p.maxHp })),
-                    spriteUrl: networkRole === 'host' ? '/sprites/overworld/red.png' : '/sprites/overworld/kris.png',
+                    spriteUrl: networkRole === 'host' ? '/sprites/overworld/brendan_walking.png' : '/sprites/overworld/may_walking.png',
                     isHost: networkRole === 'host'
                 }
             });

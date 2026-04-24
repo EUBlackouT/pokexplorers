@@ -7,26 +7,33 @@ import { BiomeAmbient } from './ui/BiomeAmbient';
 // ---------------------------------------------------------------
 // Overworld sprite sheets.
 //
-// These are actual 16x96 Gen 2 overworld walking sprite sheets
-// from the pokecrystal decomp (pret/pokecrystal). Layout is a
-// vertical strip of 6 frames (16x16 each), in this order:
+// These are the pret/pokeemerald Gen 3 `walking.png` strips for
+// Brendan and May, bundled from /public/sprites/overworld/. The
+// Gen 3 Hoenn style is the modern "proper walking" look the user
+// asked for -- full palette, visible arms/legs, two-step bob.
 //
-//     y=0   DOWN  standing
-//     y=16  DOWN  stepping
-//     y=32  UP    standing
-//     y=48  UP    stepping
-//     y=64  LEFT  standing
-//     y=80  LEFT  stepping
+// Each sheet is 144x32 -- nine 16x32 frames laid out horizontally:
+//
+//     x=0    DOWN-stand
+//     x=16   UP-stand
+//     x=32   LEFT-stand
+//     x=48   DOWN-walkA
+//     x=64   UP-walkA
+//     x=80   LEFT-walkA
+//     x=96   DOWN-walkB
+//     x=112  UP-walkB
+//     x=128  LEFT-walkB
 //
 // Right-facing is rendered by horizontally flipping the LEFT
-// frames (classic Gen 2 trick -- they never ship a dedicated
-// right-facing sprite). Served as static files from /public so
-// there is no CORS or CDN availability risk at runtime.
+// cells (Game Freak never ships a dedicated right-facing sprite --
+// they flip the left frames at draw time, same as we do).
+//
+// Served as static files from /public so there is no CORS or CDN
+// availability risk at runtime.
 // ---------------------------------------------------------------
 const SPRITE_SHEETS = {
-    red:   '/sprites/overworld/red.png',
-    chris: '/sprites/overworld/chris.png',
-    kris:  '/sprites/overworld/kris.png',
+    brendan: '/sprites/overworld/brendan_walking.png',
+    may:     '/sprites/overworld/may_walking.png',
 } as const;
 type TrainerFacing = 'up' | 'down' | 'left' | 'right';
 
@@ -51,53 +58,93 @@ interface Props {
 /**
  * PlayerCharacter
  * -----------------------------------------------------------------
- * Renders the player as a proper Gen-2-style overworld walking
- * sprite (the pret/pokecrystal `chris.png` / `kris.png` / `red.png`
- * sheets, bundled as static assets under /sprites/overworld/).
+ * Renders the player as a Gen 3 Hoenn-style overworld walking
+ * sprite (Brendan / May from pret/pokeemerald). The sheet is a
+ * 144x32 horizontal strip of nine 16x32 cells -- three facings
+ * (down/up/left) x three phases (stand / walkA / walkB).
  *
- * The sheet is a 16x96 vertical strip (6 frames of 16x16), and we
- * pick the right cell by moving the `background-position`. We scale
- * the whole thing 4x for a 64x64 display that matches the tile
- * size. The two-frame walk cycle toggles between the "standing" row
- * and the "stepping" row every 140ms while moving.
+ * Right-facing reuses the LEFT cells with `scaleX(-1)`. While
+ * moving we alternate walkA <-> walkB per tile-step (stepParity)
+ * to produce the classic two-foot bob. Idle shows `stand`.
  *
- * `spriteUrl` is retained for API compatibility with existing
- * call-sites. It's used to route to one of our bundled sheets via
- * `pickSheetFor()` -- if the caller sends a Pokemon Showdown
- * trainer portrait URL we map it to the closest matching Gen 2
- * overworld sheet (host/red -> red, leaf -> kris, anything else ->
- * chris as a neutral fallback).
+ * The native 16x32 cell is scaled 4x to 64x128 so that the
+ * character's feet align with the bottom of its tile (y =
+ * pos.y + 1) and the head extends up into the tile above
+ * (standard Gen 3 rendering).
+ *
+ * `spriteUrl` is kept for call-site compatibility: we route the
+ * local player to Brendan, the remote player to May so two
+ * players in the same room are visually distinct. Legacy
+ * Showdown URLs (kris / leaf -> may, anything else -> brendan)
+ * are also handled.
  */
 
-/** Classic Gen 2 frame layout (y-offset in native pixels, 16x16). */
-const FRAME_Y = {
-    down:  { stand: 0,   step: 16 },
-    up:    { stand: 32,  step: 48 },
-    left:  { stand: 64,  step: 80 },
+/**
+ * Canonical Gen 3 player walk frame table, taken directly from
+ * pret/pokeemerald's `object_event_anims.h` sAnim_Go{South,North,
+ * West} tables used by `sAnimTable_Standard` (the Brendan / May
+ * normal walking anim). Every direction has its own dedicated
+ * walk A/B frames -- there is NO h-flip between steps. Only
+ * East is rendered as West mirrored.
+ *
+ *   sAnim_GoSouth: FRAME 3, FRAME 0, FRAME 4, FRAME 0   => 3,4 = down-walk A/B
+ *   sAnim_GoNorth: FRAME 5, FRAME 1, FRAME 6, FRAME 1   => 5,6 = up-walk A/B
+ *   sAnim_GoWest:  FRAME 7, FRAME 2, FRAME 8, FRAME 2   => 7,8 = left-walk A/B
+ *
+ * Frame indices (each 16 wide on a 144x32 strip):
+ *   0 down-stand    3 down-walkA    6 up-walkB
+ *   1 up-stand      4 down-walkB    7 left-walkA
+ *   2 left-stand    5 up-walkA      8 left-walkB
+ */
+const FRAME_X = {
+    downStand:  0,
+    upStand:    16,
+    leftStand:  32,
+    downWalkA:  48,
+    downWalkB:  64,
+    upWalkA:    80,
+    upWalkB:    96,
+    leftWalkA:  112,
+    leftWalkB:  128,
 } as const;
 
 function pickSheetFor(spriteUrl: string, isLocal: boolean): string {
-    const u = spriteUrl.toLowerCase();
-    if (u.includes('red')) return SPRITE_SHEETS.red;
-    if (u.includes('leaf') || u.includes('kris') || u.includes('blue')) return SPRITE_SHEETS.kris;
-    if (u.includes('chris') || u.includes('ethan') || u.includes('gold')) return SPRITE_SHEETS.chris;
-    // Sensible default: local player -> red, remote -> chris, so
-    // two players in the same room are visually distinct.
-    return isLocal ? SPRITE_SHEETS.red : SPRITE_SHEETS.chris;
+    const u = (spriteUrl || '').toLowerCase();
+    // Explicit new-style paths take precedence.
+    if (u.includes('may')) return SPRITE_SHEETS.may;
+    if (u.includes('brendan')) return SPRITE_SHEETS.brendan;
+    // Legacy routing so old Showdown portrait URLs and last-session
+    // Gen 2 paths still resolve to something sensible. Female-coded
+    // trainers / Kris-like ids route to May; everyone else -> Brendan.
+    if (u.includes('kris') || u.includes('leaf') || u.includes('lyra') || u.includes('rosa') || u.includes('hilda')) {
+        return SPRITE_SHEETS.may;
+    }
+    // Default split: local -> Brendan, remote -> May (so host/guest
+    // are instantly distinguishable at a glance).
+    return isLocal ? SPRITE_SHEETS.brendan : SPRITE_SHEETS.may;
 }
 
 const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, onClick }) => {
     const [facing, setFacing] = useState<TrainerFacing>('down');
     const [isMoving, setIsMoving] = useState(false);
-    const [frame, setFrame] = useState<0 | 1>(0);
+    const stepParity = useRef<'A' | 'B'>('A');
     const prevPos = useRef(pos);
     const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const TILE_SIZE = 64;
 
-    // Detect movement (position delta) and derive the facing direction.
-    // Y takes priority over X so a diagonal same-tick network update
-    // still reads sensibly -- the input layer only allows one axis
-    // per keystroke but this guards against reorder.
+    // Display size: native cell 16x32 at 4x = 64x128. Characters are
+    // one tile wide and two tiles tall -- feet sit in the current
+    // tile, head pokes into the tile above (vanilla Gen 3 behaviour).
+    const SPRITE_W = 64;
+    const SPRITE_H = 128;
+    const SHEET_W = 144 * 4; // 576 -- full sheet scaled
+    const SHEET_H = 32 * 4;  // 128
+
+    // Detect movement (position delta) and derive facing + parity.
+    // Y takes priority so any diagonal same-tick network update
+    // still reads cleanly. stepParity flips each step so the next
+    // stride uses the opposite foot -- this is what gives the walk
+    // cycle its "bob".
     useEffect(() => {
         const dx = pos.x - prevPos.current.x;
         const dy = pos.y - prevPos.current.y;
@@ -106,76 +153,91 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
         if (dy !== 0) setFacing(dy < 0 ? 'up' : 'down');
         else if (dx !== 0) setFacing(dx < 0 ? 'left' : 'right');
 
+        stepParity.current = stepParity.current === 'A' ? 'B' : 'A';
         setIsMoving(true);
         if (moveTimer.current) clearTimeout(moveTimer.current);
-        moveTimer.current = setTimeout(() => setIsMoving(false), 280);
+        // Slightly longer than the fastest key-repeat interval so
+        // continuous movement stays in "walking" state without the
+        // one-frame "stand" blip between tiles.
+        moveTimer.current = setTimeout(() => setIsMoving(false), 380);
         prevPos.current = pos;
 
         return () => { if (moveTimer.current) { clearTimeout(moveTimer.current); moveTimer.current = null; } };
     }, [pos]);
 
-    // 140ms × 2 frames = 280ms cycle, aligning with the movement
-    // transition so each foot-plant coincides with arriving on the
-    // next tile.
-    useEffect(() => {
-        if (!isMoving) { setFrame(0); return; }
-        const id = setInterval(() => setFrame(f => (f === 0 ? 1 : 0)), 140);
-        return () => clearInterval(id);
-    }, [isMoving]);
-
     const sheet = pickSheetFor(spriteUrl, isLocal);
 
-    // Figure out which cell of the sheet to show for the current
-    // facing + walk frame. Right uses the LEFT cells with a CSS
-    // horizontal flip applied on the sprite element.
-    const facingForSheet: 'down' | 'up' | 'left' = facing === 'right' ? 'left' : facing;
-    const yNative = FRAME_Y[facingForSheet][isMoving && frame === 1 ? 'step' : 'stand'];
-    // 4x scale: native 16x96 -> display 64x384. Show the 64x64
-    // window that corresponds to `yNative` (scaled).
-    const bgPosY = -yNative * 4;
+    // Resolve the correct cell for the current facing / walk phase
+    // using the canonical Gen 3 rule set:
+    //
+    //   Each direction has its own dedicated stand + walk A/B
+    //   frames (9 frames total). East is the only direction that
+    //   borrows from another -- it mirrors West with scaleX(-1).
+    //
+    // This matches Game Freak's shipping animation data
+    // (`sAnimTable_Standard` in pret/pokeemerald) and fixes the
+    // earlier bug where walking LEFT/RIGHT showed the UP-walk
+    // frame (old code mapped leftWalk to frames 5/6, but those
+    // are the UP-walk cells on this sheet).
+    const parityA = stepParity.current === 'A';
+    let xNative: number;
     const flipX = facing === 'right';
+    if (!isMoving) {
+        if (facing === 'down')      xNative = FRAME_X.downStand;
+        else if (facing === 'up')   xNative = FRAME_X.upStand;
+        else                         xNative = FRAME_X.leftStand; // right mirrors this
+    } else if (facing === 'down') {
+        xNative = parityA ? FRAME_X.downWalkA : FRAME_X.downWalkB;
+    } else if (facing === 'up') {
+        xNative = parityA ? FRAME_X.upWalkA : FRAME_X.upWalkB;
+    } else {
+        xNative = parityA ? FRAME_X.leftWalkA : FRAME_X.leftWalkB; // right mirrors
+    }
+    const bgPosX = -xNative * 4;
 
     return (
         <div
-            className={`absolute top-0 left-0 transition-all duration-[280ms] ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
+            className={`absolute top-0 left-0 transition-all duration-[260ms] ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
             style={{
-                transform: `translate(${pos.x * TILE_SIZE}px, ${pos.y * TILE_SIZE - TILE_SIZE / 4}px)`,
-                width: TILE_SIZE,
-                height: TILE_SIZE + TILE_SIZE / 4,
+                // Head at pos.y-1, feet at pos.y. Sprite occupies the
+                // current tile plus one tile above.
+                transform: `translate(${pos.x * TILE_SIZE}px, ${(pos.y - 1) * TILE_SIZE}px)`,
+                width: SPRITE_W,
+                height: SPRITE_H,
             }}
             onClick={onClick}
             data-player-label={label}
         >
             <div className="w-full h-full relative flex items-end justify-center">
-                {/* Soft ground shadow so the sprite reads as grounded
-                    rather than floating. Stays still while the sprite
-                    cycles frames. */}
+                {/* Soft ground shadow sits under the sprite's feet so
+                    the character reads as grounded rather than floating. */}
                 <div
                     className="absolute left-1/2 -translate-x-1/2"
                     style={{
                         bottom: 2,
-                        width: 36,
-                        height: 8,
-                        background: 'radial-gradient(ellipse, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 70%)',
+                        width: 40,
+                        height: 10,
+                        background: 'radial-gradient(ellipse, rgba(0,0,0,0.50) 0%, rgba(0,0,0,0) 70%)',
                         pointerEvents: 'none',
+                        zIndex: 1,
                     }}
                 />
                 {isLocal && (
-                    <div className="absolute -top-4 text-yellow-300 font-bold text-[10px] animate-bounce z-40 drop-shadow-md border-black font-mono">▼</div>
+                    <div className="absolute -top-4 text-yellow-300 font-bold text-[10px] animate-bounce z-40 drop-shadow-md font-mono">▼</div>
                 )}
                 {!isLocal && (
-                    <div className="absolute -top-8 whitespace-nowrap bg-black/60 text-white text-[8px] px-2 py-1 rounded border border-white/20 z-40">
+                    <div className="absolute -top-6 whitespace-nowrap bg-black/60 text-white text-[8px] px-2 py-1 rounded border border-white/20 z-40">
                         {label}
                     </div>
                 )}
                 <div
                     className="relative z-10"
                     style={{
-                        width: 64,
-                        height: 64,
+                        width: SPRITE_W,
+                        height: SPRITE_H,
                         backgroundImage: `url(${sheet})`,
-                        backgroundSize: '64px 384px',
-                        backgroundPosition: `0px ${bgPosY}px`,
+                        backgroundSize: `${SHEET_W}px ${SHEET_H}px`,
+                        backgroundPosition: `${bgPosX}px 0px`,
                         backgroundRepeat: 'no-repeat',
                         imageRendering: 'pixelated',
                         transform: flipX ? 'scaleX(-1)' : undefined,
@@ -2409,7 +2471,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             pos={player.position} 
                             isLocal={false} 
                             label={player.name || "Trainer"}
-                            spriteUrl={player.spriteUrl || SPRITE_SHEETS.chris}
+                            spriteUrl={player.spriteUrl || SPRITE_SHEETS.may}
                             onClick={() => onChallenge?.(id, player)}
                         />
                     );
@@ -2427,7 +2489,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             pos={p1Pos}
                             isLocal={isMe}
                             label={isMe ? "Me" : "Host"}
-                            spriteUrl={SPRITE_SHEETS.red}
+                            spriteUrl={SPRITE_SHEETS.brendan}
                             onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
                         />
                     );
@@ -2442,7 +2504,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                             pos={p2Pos}
                             isLocal={isMe}
                             label={isMe ? "Me" : "Friend"}
-                            spriteUrl={SPRITE_SHEETS.kris}
+                            spriteUrl={SPRITE_SHEETS.may}
                             onClick={!isMe && partner && onChallenge ? () => onChallenge(partner[0], partner[1]) : undefined}
                         />
                     );
