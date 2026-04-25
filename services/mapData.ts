@@ -1,6 +1,7 @@
 
 import { MapZone, TrainerData, NPCData, InteractableData, Chunk } from '../types';
 import { getGymTeam } from '../data/gymTeams';
+import { interiorPortal, gymPortal } from './interiors';
 
 // --- TILE ID LEGEND ---
 // 0: Grass (Green)
@@ -824,7 +825,16 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
     if (cx === 0 && cy === 0) {
         return {
             x: 0, y: 0, id: 'chunk_0_0', name: 'Pallet Town', layout: PALLET_LAYOUT,
-            portals: { "3,3": "house_player,9,8", "10,9": "lab,9,8", "14,3": "house_player,9,8" },
+            // Starter town: fix the long-standing portal mislabels. The
+            // visible Mart roof's door at (10,9) now actually opens the
+            // Mart interior, not Oak's Lab. The right-hand red-roofed
+            // building at (13,3) becomes Oak's Lab (static); the left
+            // red-roofed building at (3,3) remains the player's bedroom.
+            portals: {
+                "3,3": "house_player,9,8",                      // player's bedroom
+                "13,3": "lab,9,8",                              // Oak's Lab
+                "10,9": interiorPortal('mart', 0, 0, 10, 9),    // Pallet Mart
+            },
             wildLevelRange: [2, 5], biome: 'town',
             trainers: {},
             npcs: {
@@ -1015,7 +1025,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         // palette). Same tile IDs the random-gym branch uses below.
         const roofTile = gymBadge % 2 === 0 ? 30 : 40;
         const wTile   = gymBadge % 2 === 0 ? 33 : 43;
-        const sTile   = gymBadge % 2 === 0 ? 35 : 45;
+        const sTile   = gymBadge % 2 === 0 ? 45 : 35;
 
         layout[hy][hx] = roofTile; layout[hy][hx + 1] = roofTile + 1; layout[hy][hx + 2] = roofTile + 2;
         layout[hy + 1][hx] = wTile; layout[hy + 1][hx + 1] = 50; layout[hy + 1][hx + 2] = sTile;
@@ -1028,36 +1038,17 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
             }
         }
 
-        const gymLoadout = getGymTeam(gymBadge);
-        const fallbackThemes = [
-            [263, 263], [278, 270, 60], [81, 100, 309], [43, 273, 69],
-            [109, 88, 41], [63, 280, 177], [58, 77, 218], [111, 74, 50],
-        ];
-        const fallbackNames = [
-            'Brock "The Rock & Roller"', 'Misty "The Deep Diver"',
-            'Lt. Surge "The Tech Commando"', 'Erika "The Zen Botanist"',
-            'Koga "The Shadow Ninja"', 'Sabrina "The Cosmic Oracle"',
-            'Blaine "The Spicy Chef"', 'Giovanni "The Shadow CEO"',
-        ];
-        const team = gymLoadout ? gymLoadout.loadout.map((l) => l.id) : fallbackThemes[gymBadge - 1];
-        const level = gymLoadout ? gymLoadout.level : (15 + gymBadge * 10);
-        const leaderName = gymLoadout
-            ? `${gymLoadout.name} "${gymLoadout.title}"`
-            : fallbackNames[gymBadge - 1];
-
-        trainers[`${hx + 1},${hy + 2}`] = {
-            id: `gym_${cx}_${cy}`,
-            name: leaderName,
-            sprite: [TRAINER_SPRITES.leader1, TRAINER_SPRITES.leader2, TRAINER_SPRITES.leader3, TRAINER_SPRITES.leader4][(gymBadge - 1) % 4],
-            team,
-            level,
-            reward: gymBadge * 2000,
-            dialogue: "Another challenger reaches my hall. Show me your strength!",
-            winDialogue: "Impressive. Take this badge.",
-            isGymLeader: true,
-            badgeId: gymBadge,
-            loadout: gymLoadout ? gymLoadout.loadout : undefined,
-        };
+        // ---- New: route the gym door to a unique INTERIOR. ----
+        // The leader and themed mooks now live inside `buildGym(badge)` in
+        // services/interiors.ts. The portal is keyed by badge id so all
+        // copies of "Pewter Gym" in the world share one canonical interior
+        // (matters because gym progress is global, not per-instance).
+        portals[`${hx + 1},${hy + 1}`] = gymPortal(gymBadge);
+        // The interior's exit (door mat at "10,17") returns to the tile
+        // *south* of the door so the player isn't immediately re-portalled.
+        // App.tsx interior portal resolver handles the PREV_POS bookkeeping
+        // automatically because we stash an `__interior_entry__` flag on
+        // entry; the interior's `portals` field uses that as `returnTo`.
         poiPlaced = true;
     }
 
@@ -1261,38 +1252,46 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
                     layout[y][x] = propId;
                 }
             };
-            if (houseType < 0.3) {
+            // Door tile is at (hx+1, hy+1); entry portal key is
+            // `"${hx+1},${hy+1}"`. We also use the door coords as the
+            // interior seed so each instance is stable *and* unique --
+            // re-entering the same Center keeps the same NPCs / rug / flavor
+            // rather than regenerating every time.
+            const doorX = hx + 1, doorY = hy + 1;
+            // Players exit the door mat one tile south of the door so they
+            // don't get bounced right back onto the portal. We clamp in
+            // case the door sat near the chunk edge.
+            const exitY = Math.min(CHUNK_SIZE - 1, doorY + 1);
+            if (houseType < 0.25) {
+                // POKEMON CENTER -- 25% of POI buildings. Rarer than before
+                // so finding one feels worthwhile after a long trek.
                 layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
                 layout[hy+1][hx] = 33; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 35;
-                portals[`${hx+1},${hy+1}`] = "center,9,8";
-                // Light the entrance and put a mailbox on the path. These make
-                // the Pokemon Center feel like a real destination rather than
-                // three stacked red tiles.
-                decorate(hx - 1, hy + 1, 97);   // lamppost left of building
-                decorate(hx + 3, hy + 1, 97);   // lamppost right of building
-                decorate(hx + 3, hy + 2, 99);   // mailbox at path
-            } else if (houseType < 0.6) {
+                portals[`${doorX},${doorY}`] = interiorPortal('center', cx, cy, doorX, doorY);
+                decorate(hx - 1, hy + 1, 97);
+                decorate(hx + 3, hy + 1, 97);
+                decorate(hx + 3, hy + 2, 99);
+            } else if (houseType < 0.45) {
+                // POKE MART -- 20% of POI buildings.
                 layout[hy][hx] = 40; layout[hy][hx+1] = 41; layout[hy][hx+2] = 42;
                 layout[hy+1][hx] = 43; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 45;
-                portals[`${hx+1},${hy+1}`] = "mart,9,8";
-                // Mart gets bench + lamppost for shoppers.
+                portals[`${doorX},${doorY}`] = interiorPortal('mart', cx, cy, doorX, doorY);
                 decorate(hx - 1, hy + 2, 98);
                 decorate(hx + 3, hy + 1, 97);
-            } else if (houseType < 0.8) {
-                // Trade NPC
+            } else if (houseType < 0.85) {
+                // RANDOM HOUSE -- 40% of POI buildings. The interior is
+                // seeded by the door coords so each house has consistent
+                // identity (trader / tutor / gift-giver / quest / trainer
+                // / lore NPC). This is the new variety layer that replaces
+                // the boring "clone of my bedroom" interior.
                 layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
                 layout[hy+1][hx] = 33; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 35;
-                npcs[`${hx+2},${hy+2}`] = {
-                    id: `trader_${cx}_${cy}`,
-                    name: "Trader",
-                    sprite: TRAINER_SPRITES.beauty,
-                    dialogue: ["I'm looking for a rare specimen.", "Would you trade your lead Pokemon for something special?"],
-                    challenge: {
-                        type: 'collect',
-                        target: 'Rare Monster',
-                        reward: { id: 151, name: 'Mew', level: 30, stats: {} as any, baseStats: {} as any, types: ['psychic'], moves: [], sprites: { front_default: '' }, currentHp: 100, maxHp: 100, ivs: {} as any, evs: {} as any, nature: { name: 'Timid' }, ability: { name: 'Synchronize' }, xp: 0, maxXp: 1000 } as any
-                    }
-                };
+                portals[`${doorX},${doorY}`] = interiorPortal('house', cx, cy, doorX, doorY);
+                // Small decoration so different houses look visually
+                // distinct on the overworld too. Pick a prop from the
+                // door coords so it's deterministic.
+                const decorProp = [97, 98, 99][(doorX + doorY) % 3];
+                decorate(hx - 1, hy + 2, decorProp);
             } else {
                 // Veteran Trainer Outpost (replaces the legacy RNG gym slot).
                 // We used to spawn a random extra gym here, but those diluted

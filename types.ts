@@ -471,7 +471,60 @@ export enum GamePhase {
   SHOP = 'SHOP',
   NETWORK_MENU = 'NETWORK_MENU',
   PERK_SELECT = 'PERK_SELECT',
-  BOUNTY_BOARD = 'BOUNTY_BOARD'
+  BOUNTY_BOARD = 'BOUNTY_BOARD',
+  /** Pokemon Storage System (PC) -- box management UI launched from any
+   *  PC terminal inside a Pokemon Center, or via the Pause Menu Items tab.
+   *  Players can deposit, withdraw, swap, release and rename boxes. */
+  POKEMON_STORAGE = 'POKEMON_STORAGE',
+}
+
+// ---------------------------------------------------------------------------
+// Structured dialogue with branching choices.
+//
+// Background: dialogue used to be `string[] | null` -- a flat sequence of
+// lines, dismissed by Enter. That worked for one-shot NPC chatter but gave
+// us no way to ask the player questions ("trade lead Pokemon? Yes/No"),
+// open menus from inside a conversation, or chain multi-step flows like a
+// quest acceptance.
+//
+// New shape:
+//   - `lines` is still the body text the player sees (sequential paragraphs
+//     in one box, just like before).
+//   - `speaker` / `portrait` are optional UI flair ("Nurse Joy", a sprite).
+//   - `choices` are buttons rendered at the bottom; arrow keys + Enter, or
+//     mouse, select one. If absent, the box is dismissable with Enter and
+//     resolves with `null`.
+//   - `resolve` is an internal callback the renderer invokes when the box
+//     closes. App.tsx exposes a Promise-based `askDialogue` helper so call
+//     sites can `await` a choice cleanly.
+//
+// Backward compatibility: callers may still call `setDialogue(string[])`.
+// The setter normalizes to a `DialoguePayload` with `lines` set and no
+// choices.
+// ---------------------------------------------------------------------------
+export interface DialogueChoice {
+  /** Stable id returned to the awaiter when this choice is picked. */
+  id: string;
+  /** Visible label on the button. */
+  label: string;
+  /** Optional secondary line shown under the label (e.g. price tag). */
+  hint?: string;
+  /** If true, the button is rendered greyed-out and not selectable. */
+  disabled?: boolean;
+}
+
+export interface DialoguePayload {
+  lines: string[];
+  speaker?: string;
+  /** Sprite URL or known sprite key for a small portrait. */
+  portrait?: string;
+  /** When present, the dialogue box renders selectable buttons instead of
+   *  the "Press Enter" footer. Picking one resolves with that choice id. */
+  choices?: DialogueChoice[];
+  /** Internal resolver. Set by `askDialogue` so a Promise can settle when
+   *  the player advances or selects. Direct `setDialogue` callers can omit
+   *  this; the renderer simply clears state on dismiss. */
+  resolve?: (id: string | null) => void;
 }
 
 export interface Coordinate {
@@ -619,6 +672,33 @@ export interface PlayerGlobalState {
     discoveryPoints: number; // For exploration rewards
     meta: MetaState;
     run: RunConstraints;
+    /**
+     * Pokemon Storage System -- the "PC" boxes accessible at any Center.
+     * Each box has a player-renamable label and a fixed-size slot list.
+     * Slots are nullable so withdrawals leave gaps the player can drop
+     * into, mirroring the classic game UX.
+     *
+     * Default initialization (in App.tsx) gives 8 boxes of 30 slots each
+     * (240 storage capacity), well above what a normal run needs but
+     * cheap enough memory-wise. Auto-deposit on a full party catch lands
+     * the new mon in the first empty slot of the first non-full box.
+     */
+    boxes?: Array<{
+        name: string;
+        slots: Array<Pokemon | null>;
+    }>;
+    /**
+     * Daycare deposits -- a separate single-slot system used by the
+     * Daycare house archetype. Independent of the PC boxes so a player
+     * can leave a Pokemon training while keeping their PC organized.
+     * Deposits earn passive XP based on real-world ms elapsed.
+     */
+    daycare?: {
+        slot: Pokemon | null;
+        depositedAt: number;       // Date.now() when deposited
+        depositChunkX: number;     // for "find your way back" hints
+        depositChunkY: number;
+    };
     /** Cumulative stats used for the Explorer Score leaderboard. Persists across runs. */
     lifetime?: {
         shiniesCaught: number;
@@ -699,7 +779,11 @@ export interface InteractableData {
     // App.tsx -- its `text` is ignored and instead freshly computed from the
     // player's current badge count + position so the sign always points to
     // the next unearned gym.
-    type: 'sign' | 'object' | 'gym_compass';
+    // 'pc' opens the Pokemon Storage System (boxes / party management).
+    // App.tsx interaction dispatcher recognises this type and switches
+    // GamePhase to POKEMON_STORAGE; the `text` field is shown as an
+    // optional bootup message.
+    type: 'sign' | 'object' | 'gym_compass' | 'pc';
     text: string[];
 }
 

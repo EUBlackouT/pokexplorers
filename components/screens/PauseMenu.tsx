@@ -82,7 +82,12 @@ export const PauseMenu: React.FC<{
     onImportSave?: (payload: string) => boolean;
     onDeleteSave?: () => void;
     lastSavedAt?: number | null;
-}> = ({ onClose, state, onSwap, onGiveItem, onSyncToCap, onApplyRelearn, onOpenLeaderboard, onSave, onExportSave, onImportSave, onDeleteSave, lastSavedAt }) => {
+    /** Optional: opens the PC / Pokemon Storage screen. When provided, the
+     *  Bag tab shows a "PC" shortcut tile so players can manage box
+     *  Pokemon without finding a Center. Useful in the field but it's
+     *  optional so callers that don't pass it just hide the button. */
+    onOpenStorage?: () => void;
+}> = ({ onClose, state, onSwap, onGiveItem, onSyncToCap, onApplyRelearn, onOpenLeaderboard, onSave, onExportSave, onImportSave, onDeleteSave, lastSavedAt, onOpenStorage }) => {
     const [selectedMon, setSelectedMon] = useState<Pokemon | null>(null);
     const [activeTab, setActiveTab] = useState<TabId>('party');
     const [showRelearner, setShowRelearner] = useState(false);
@@ -410,6 +415,29 @@ export const PauseMenu: React.FC<{
 
                             {activeTab === 'items' && (
                                 <div className="space-y-4">
+                                    {/* PC shortcut: lets players manage box Pokemon */}
+                                    {/* without travelling to a Pokemon Center. */}
+                                    {onOpenStorage && (
+                                        <button
+                                            onClick={() => { onOpenStorage(); onClose(); }}
+                                            className="w-full bg-gradient-to-r from-blue-700/70 to-purple-700/70 border border-blue-300/40 hover:border-blue-200 rounded-xl p-3 flex items-center gap-3 transition-colors text-left"
+                                        >
+                                            <div className="w-12 h-12 flex-none rounded-lg bg-blue-950/80 border border-blue-300/40 flex items-center justify-center text-2xl">
+                                                💾
+                                            </div>
+                                            <div className="flex-1">
+                                                <div className="text-[10px] uppercase font-black tracking-wider text-blue-100">Pokemon Storage</div>
+                                                <div className="text-[8px] text-blue-300/80 mt-0.5">
+                                                    {(() => {
+                                                        const stored = (state.boxes ?? []).reduce((sum: number, b: any) => sum + (b.slots?.filter((s: any) => !!s).length ?? 0), 0);
+                                                        return `${stored} stored · Open the PC`;
+                                                    })()}
+                                                </div>
+                                            </div>
+                                            <div className="text-[8px] text-blue-200 uppercase tracking-widest">Open</div>
+                                        </button>
+                                    )}
+
                                     {/* Quick resources block */}
                                     <div className="grid grid-cols-2 gap-2">
                                         <ResourceTile label="Capture Permits" value={state.run.capturePermits} accent="#f59e0b" />

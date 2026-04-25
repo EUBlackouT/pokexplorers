@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName } from './types';
+import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName, DialoguePayload, DialogueChoice } from './types';
 import { NEW_ABILITIES } from './data/abilities';
 import { NEW_MOVES } from './data/moves';
 import { getFusionMove } from './data/fusionChart';
@@ -24,6 +24,7 @@ import {
 } from './services/pokeService';
 import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx } from './services/soundService';
 import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE, WORLD_MAX_DIST, getNextGymTarget, compassDirectionName, getGrassAura, getChunkOutbreak } from './services/mapData';
+import { resolveInterior, InteriorKind } from './services/interiors';
 import { applyBountyEvent, rollBounties } from './data/bounties';
 import { ITEMS } from './services/itemData';
 import { generateBattleBackground, MENU_BACKGROUND_URL, getStaticBackground } from './services/imageService';
@@ -40,6 +41,8 @@ import { ActionButton } from './components/ui/ActionButton';
 import { MoveButton } from './components/ui/MoveButton';
 import { MoveVFX } from './components/ui/MoveVFX';
 import { BattleFxOverlay } from './components/ui/BattleFxOverlay';
+import { BattleFieldHud } from './components/ui/BattleFieldHud';
+import { BattleLog } from './components/ui/BattleLog';
 import { EmoteOverlay } from './components/ui/EmoteOverlay';
 import { SyncGauge } from './components/ui/SyncGauge';
 import { AudioWidget } from './components/ui/AudioWidget';
@@ -47,6 +50,8 @@ import { QuestLog } from './components/screens/QuestLog';
 import { PerkSelect } from './components/screens/PerkSelect';
 import { OnlineMenu } from './components/screens/OnlineMenu';
 import { ShopMenu } from './components/screens/ShopMenu';
+import { DialogueBox } from './components/ui/DialogueBox';
+import { PokemonStorage, makeEmptyBoxes, DEFAULT_BOX_COUNT } from './components/screens/PokemonStorage';
 import { MetaMenu } from './components/screens/MetaMenu';
 import { PokemonSummary } from './components/screens/PokemonSummary';
 import { PauseMenu } from './components/screens/PauseMenu';
@@ -251,7 +256,63 @@ export default function App() {
   const [networkRole, setNetworkRole] = useState<'none' | 'host' | 'client'>('none');
   const [currentEmote, setCurrentEmote] = useState<string | null>(null);
   const [comboVfx, setComboVfx] = useState<boolean>(false);
-  const [dialogue, setDialogue] = useState<string[] | null>(null);
+  // Initial tab the ShopMenu opens to. Set by the shopkeeper-NPC choice
+  // dialog so picking "Sell" lands the player on the sell tab. Reset to
+  // 'buy' on shop close so legacy entry points (stepping on tile 10) still
+  // open the buy tab by default.
+  const [shopMode, setShopMode] = useState<'buy' | 'sell'>('buy');
+
+  // Dialogue state: structured payload that supports speaker, portrait,
+  // and branching choices. Legacy callers that did `setDialogue(["line1",
+  // "line2"])` still work via the wrapper below -- the wrapper normalizes
+  // string[] inputs into a DialoguePayload with no choices.
+  const [dialogueRaw, setDialogueRaw] = useState<DialoguePayload | null>(null);
+  const setDialogue = useCallback((next: string[] | DialoguePayload | null) => {
+      if (next === null) { setDialogueRaw(null); return; }
+      if (Array.isArray(next)) { setDialogueRaw({ lines: next }); return; }
+      setDialogueRaw(next);
+  }, []);
+  // Back-compat alias so the rest of the file's many `dialogue && ...`
+  // null-checks keep reading naturally.
+  const dialogue = dialogueRaw;
+  /**
+   * Promise-style dialogue prompt. Awaiters receive the chosen id, or
+   * `null` if the player advanced past a choiceless prompt. Use this for
+   * Yes/No confirms, multi-option menus (Buy / Sell / Just looking),
+   * and quest-acceptance flows.
+   *
+   * Example:
+   *   const pick = await askDialogue({
+   *     lines: ["Pay $5000 to learn Ice Punch?"],
+   *     choices: [{id:'yes',label:'Yes'},{id:'no',label:'No'}],
+   *   });
+   *   if (pick === 'yes') { ... }
+   */
+  const askDialogue = useCallback((payload: Omit<DialoguePayload, 'resolve'>): Promise<string | null> => {
+      return new Promise<string | null>(resolve => {
+          setDialogueRaw({ ...payload, resolve });
+      });
+  }, []);
+  /**
+   * Yes/No shortcut. Returns true when the player picks 'yes', false on
+   * 'no' or any other dismissal. Use this whenever the existing
+   * setDialogue flow would have benefited from a confirmation step.
+   */
+  const askYesNo = useCallback(async (
+      lines: string[],
+      opts?: { yesLabel?: string; noLabel?: string; speaker?: string; portrait?: string; yesHint?: string; noHint?: string; },
+  ): Promise<boolean> => {
+      const id = await askDialogue({
+          lines,
+          speaker: opts?.speaker,
+          portrait: opts?.portrait,
+          choices: [
+              { id: 'yes', label: opts?.yesLabel ?? 'Yes', hint: opts?.yesHint },
+              { id: 'no',  label: opts?.noLabel  ?? 'No',  hint: opts?.noHint },
+          ],
+      });
+      return id === 'yes';
+  }, [askDialogue]);
   // Rift Transform (Tera / Mega / Z) picker modal state. Null while
   // closed; when set, the in-battle overlay shows the option chooser
   // for the currently active player mon.
@@ -275,6 +336,10 @@ export default function App() {
   // locally) respect the cooldown, without each having to track it.
   const lastMoveAtRef = useRef<number>(0);
   const shiftHeldRef = useRef<boolean>(false);
+  // Set when a teleport pad warps the player so the next move attempt skips
+  // the teleport on arrival (otherwise the player would pingpong forever
+  // between the two paired pads). Cleared on the first non-teleport move.
+  const justTeleportedToRef = useRef<{ mapId: string; x: number; y: number } | null>(null);
   // Evolution cinematic queue. Each entry has a `before` snapshot, the
   // fully-built `after` Pokemon, and an `onDone` callback that commits the
   // evolution (or the cancellation) to player state. The scene renders the
@@ -308,6 +373,30 @@ export default function App() {
       }
   }, [playerState, refreshSaveMeta, showToast]);
 
+  /**
+   * Legacy gym-leader id migration. Pre-overhaul saves recorded gym leader
+   * defeats as `gym_${cx}_${cy}` (the chunk position of the building);
+   * the gym-interior overhaul replaced that with stable `gym_leader_${badge}`
+   * ids. Without this back-fill, a returning player with N badges would
+   * walk into a "cleared" gym (the badge counter wouldn't move) but the
+   * leader sprite would still be standing at the throne. This helper
+   * derives the implied set of defeated leaders from `badges` and merges
+   * it into `defeatedTrainers` so the experience reads as expected.
+   *
+   * Mart and other trainer ids are unaffected -- only gym leaders had the
+   * id format change. Idempotent: re-running adds no duplicates.
+   */
+  const backfillLegacyGymIds = (state: PlayerGlobalState): PlayerGlobalState => {
+      const have = new Set(state.defeatedTrainers ?? []);
+      let added = false;
+      for (let badge = 1; badge <= state.badges; badge++) {
+          const id = `gym_leader_${badge}`;
+          if (!have.has(id)) { have.add(id); added = true; }
+      }
+      if (!added) return state;
+      return { ...state, defeatedTrainers: Array.from(have) };
+  };
+
   const handleLoadGame = useCallback(() => {
       const file = loadSave();
       if (!file) {
@@ -316,7 +405,10 @@ export default function App() {
       }
       // v1 -> v2 meta migration: folds legacy `upgrades.*` into keystones
       // and seeds talents/vaultUnlocks/riftTokens defaults. Idempotent.
-      const migrated: PlayerGlobalState = { ...file.player, meta: migrateMeta(file.player.meta) };
+      const migrated: PlayerGlobalState = backfillLegacyGymIds({
+          ...file.player,
+          meta: migrateMeta(file.player.meta),
+      });
       setPlayerState(migrated);
       setPhase(GamePhase.OVERWORLD);
       setMusicStarted(true);
@@ -340,7 +432,10 @@ export default function App() {
   const handleImportSave = useCallback((payload: string): boolean => {
       const file = importSaveFromString(payload);
       if (!file) return false;
-      const migrated: PlayerGlobalState = { ...file.player, meta: migrateMeta(file.player.meta) };
+      const migrated: PlayerGlobalState = backfillLegacyGymIds({
+          ...file.player,
+          meta: migrateMeta(file.player.meta),
+      });
       setPlayerState(migrated);
       refreshSaveMeta();
       showToast('Save imported.', 'reward', { kicker: 'IMPORT' });
@@ -1256,7 +1351,7 @@ export default function App() {
 
 
 
-  function handleInteraction(playerNum: 1 | 2) {
+  async function handleInteraction(playerNum: 1 | 2) {
       if (networkRole === 'client' && playerNum === 1) return; 
       const pos = playerNum === 1 ? playerState.position : playerState.p2Position;
       
@@ -1439,6 +1534,360 @@ export default function App() {
                   return;
               }
 
+              // --- Pokemon Center: Nurse ---------------------------------
+              // Branching menu: heal team, open PC (storage), or leave.
+              if (npc.id === 'nurse') {
+                  const anyHurt = playerState.team.some(p => p.currentHp < p.maxHp || p.isFainted || (p as any).status);
+                  const choice = await askDialogue({
+                      lines: [
+                          "Welcome to the Pokemon Center!",
+                          anyHurt
+                            ? "Your Pokemon look like they could use some rest."
+                            : "Your Pokemon are already in perfect health.",
+                          "How can I help you today?",
+                      ],
+                      speaker: 'Nurse Joy',
+                      portrait: npc.sprite,
+                      choices: [
+                          { id: 'heal', label: 'Heal team',  hint: anyHurt ? 'Restore HP, status, faint' : 'No injuries to treat', disabled: !anyHurt },
+                          { id: 'pc',   label: 'Use the PC', hint: 'Manage stored Pokemon' },
+                          { id: 'leave', label: 'Leave' },
+                      ],
+                  });
+                  if (choice === 'heal') {
+                      setPlayerState(prev => ({
+                          ...prev,
+                          team: prev.team.map(p => ({
+                              ...p,
+                              currentHp: p.maxHp,
+                              isFainted: false,
+                              status: undefined,
+                          })),
+                      }));
+                      try { playLevelUpSfx(); } catch {}
+                      setDialogue({
+                          speaker: 'Nurse Joy', portrait: npc.sprite,
+                          lines: [
+                              "Thank you for waiting.",
+                              "Your Pokemon are fully restored.",
+                              "We hope to see you again!"
+                          ],
+                      });
+                  } else if (choice === 'pc') {
+                      setPhase(GamePhase.POKEMON_STORAGE);
+                  }
+                  return;
+              }
+
+              // --- Poke Mart: Shopkeeper ---------------------------------
+              // Choice menu: Buy, Sell, Just looking. ShopMenu owns both
+              // the buy and sell tabs internally; we just point it at the
+              // right starting tab via shopMode state.
+              if (npc.id === 'shopkeeper') {
+                  const pick = await askDialogue({
+                      lines: [
+                          "Welcome to the Poke Mart!",
+                          "What can I do for you?",
+                      ],
+                      speaker: 'Shopkeeper',
+                      portrait: npc.sprite,
+                      choices: [
+                          { id: 'buy',  label: 'Buy',  hint: 'Browse our wares' },
+                          { id: 'sell', label: 'Sell', hint: 'Trade items for cash' },
+                          { id: 'look', label: 'Just looking, thanks' },
+                      ],
+                  });
+                  if (pick === 'buy')  { setShopMode('buy');  setPhase(GamePhase.SHOP); }
+                  if (pick === 'sell') { setShopMode('sell'); setPhase(GamePhase.SHOP); }
+                  return;
+              }
+
+              // --- PC terminal (interactable inside Pokemon Centers) -----
+              // Walking up to a PC tile with an interactable id of 'pc'
+              // opens the storage screen directly.
+              if (npc.id === 'pc_terminal') {
+                  setPhase(GamePhase.POKEMON_STORAGE);
+                  return;
+              }
+
+              // --- One-time item gift house -------------------------------
+              if (npc.id.startsWith('gift_house_')) {
+                  const claimedFlag = `gift_claimed_${npc.id}`;
+                  if (playerState.storyFlags.includes(claimedFlag)) {
+                      setDialogue({
+                          speaker: npc.name, portrait: npc.sprite,
+                          lines: ["I already gave you my spare.", "Hope it's treating you well!"],
+                      });
+                      return;
+                  }
+                  const giftLine = npc.dialogue.find(l => l.startsWith('__GIFT__'));
+                  if (!giftLine) { setDialogue(npc.dialogue); return; }
+                  const itemId = giftLine.slice('__GIFT__'.length);
+                  // Two-step convo: greeting first, then accept the item.
+                  // We use a Yes/No so refusing leaves the gift available
+                  // for later (the flag is only set on 'yes').
+                  const accepted = await askYesNo(
+                      npc.dialogue.filter(l => !l.startsWith('__')).concat([
+                          `Will you take ${itemId.replace(/-/g, ' ')}?`
+                      ]),
+                      { speaker: npc.name, portrait: npc.sprite, yesLabel: 'Take it', noLabel: 'Maybe later' }
+                  );
+                  if (!accepted) return;
+                  setPlayerState(prev => {
+                      const inv = { ...prev.inventory };
+                      if (itemId === 'potion' || itemId === 'super-potion') inv.potions = (inv.potions || 0) + (itemId === 'super-potion' ? 2 : 1);
+                      else if (itemId === 'revive') inv.revives = (inv.revives || 0) + 1;
+                      else if (itemId === 'rare-candy') inv.rare_candy = (inv.rare_candy || 0) + 1;
+                      else inv.items = [...(inv.items || []), itemId];
+                      return {
+                          ...prev,
+                          inventory: inv,
+                          storyFlags: [...prev.storyFlags, claimedFlag],
+                      };
+                  });
+                  setDialogue({
+                      speaker: npc.name, portrait: npc.sprite,
+                      lines: [`You received ${itemId.replace(/-/g, ' ')}!`],
+                  });
+                  return;
+              }
+
+              // --- Move Tutor ---------------------------------------------
+              if (npc.id.startsWith('tutor_')) {
+                  const tutorLine = npc.dialogue.find(l => l.startsWith('__TUTOR__'));
+                  if (!tutorLine) { setDialogue(npc.dialogue); return; }
+                  const [, , moveId, priceStr] = tutorLine.split('__');
+                  const price = parseInt(priceStr, 10);
+                  const doneFlag = `tutor_done_${npc.id}`;
+                  const moveLabel = moveId.replace(/-/g, ' ').toUpperCase();
+                  if (playerState.storyFlags.includes(doneFlag)) {
+                      setDialogue({ speaker: 'Move Tutor', portrait: npc.sprite, lines: [
+                          "Your lead already learned all I could teach.",
+                          "Try another tutor, perhaps in a distant town.",
+                      ] });
+                      return;
+                  }
+                  const lead = playerState.team[0];
+                  if (!lead) {
+                      setDialogue({ speaker: 'Move Tutor', portrait: npc.sprite, lines: ["You don't have a Pokemon with you!"] });
+                      return;
+                  }
+                  const canAfford = playerState.money >= price;
+                  const movesFull = (lead.moves?.length ?? 0) >= 4;
+                  const accepted = await askYesNo(
+                      [
+                          `I can teach your ${lead.name} ${moveLabel}.`,
+                          `It will cost $${price}.`,
+                          movesFull ? `(Your last move slot will be replaced.)` : `(Slot ${(lead.moves?.length ?? 0) + 1} is empty.)`,
+                      ],
+                      {
+                          speaker: 'Move Tutor', portrait: npc.sprite,
+                          yesLabel: canAfford ? `Pay $${price}` : `Can't afford`,
+                          noLabel: 'Decline',
+                          yesHint: canAfford ? undefined : `Need $${price - playerState.money} more`,
+                      }
+                  );
+                  if (!accepted) {
+                      setDialogue({ speaker: 'Move Tutor', portrait: npc.sprite, lines: ["Come back when you change your mind."] });
+                      return;
+                  }
+                  if (!canAfford) {
+                      setDialogue({ speaker: 'Move Tutor', portrait: npc.sprite, lines: [
+                          `You don't have $${price}.`,
+                          "Hunt some bounties and come back.",
+                      ] });
+                      return;
+                  }
+                  const moveDef = (NEW_MOVES as any)[moveId] ?? null;
+                  const newMove = moveDef
+                    ? { ...moveDef, name: moveDef.name, pp: moveDef.pp, maxPp: moveDef.pp } as any
+                    : { id: moveId, name: moveId.replace(/-/g, ' '), type: 'normal', category: 'physical', power: 80, accuracy: 100, pp: 15, maxPp: 15, priority: 0 } as any;
+                  setPlayerState(prev => {
+                      const newTeam = [...prev.team];
+                      const leadCopy = { ...newTeam[0] };
+                      const moves = [...(leadCopy.moves || [])];
+                      if (moves.length < 4) moves.push(newMove);
+                      else moves[moves.length - 1] = newMove;
+                      leadCopy.moves = moves;
+                      newTeam[0] = leadCopy;
+                      return {
+                          ...prev,
+                          team: newTeam,
+                          money: prev.money - price,
+                          storyFlags: [...prev.storyFlags, doneFlag],
+                      };
+                  });
+                  try { playLevelUpSfx(); } catch {}
+                  setDialogue({
+                      speaker: 'Move Tutor', portrait: npc.sprite,
+                      lines: [
+                          `Your ${lead.name} concentrated...`,
+                          `${lead.name} learned ${moveLabel}!`,
+                          `You paid $${price}.`
+                      ],
+                  });
+                  return;
+              }
+
+              // --- Apartment Quest (fetch-quest) --------------------------
+              if (npc.id.startsWith('quest_')) {
+                  const questLine = npc.dialogue.find(l => l.startsWith('__QUEST__'));
+                  if (!questLine) { setDialogue(npc.dialogue); return; }
+                  const [, , itemId, countStr, cashStr] = questLine.split('__');
+                  const count = parseInt(countStr, 10);
+                  const cash = parseInt(cashStr, 10);
+                  const doneFlag = `quest_done_${npc.id}`;
+                  const acceptFlag = `quest_accept_${npc.id}`;
+                  const niceItem = itemId.replace(/-/g, ' ');
+                  if (playerState.storyFlags.includes(doneFlag)) {
+                      setDialogue({ speaker: npc.name, portrait: npc.sprite, lines: [
+                          "You already saved me a lot of trouble!",
+                          "Thank you again.",
+                      ] });
+                      return;
+                  }
+                  const inv = playerState.inventory;
+                  let have = 0;
+                  if (itemId === 'potion')          have = inv.potions || 0;
+                  else if (itemId === 'revive')     have = inv.revives || 0;
+                  else if (itemId === 'rare-candy') have = inv.rare_candy || 0;
+                  else if (itemId === 'poke-ball')  have = playerState.run.capturePermits || 0;
+                  else                              have = (inv.items || []).filter(i => i === itemId).length;
+                  // Acceptance step (only first time): offer the quest.
+                  if (!playerState.storyFlags.includes(acceptFlag)) {
+                      const accepted = await askYesNo(
+                          [
+                              `I need ${count} ${niceItem}.`,
+                              `Reward: $${cash}.`,
+                              `Take the job?`,
+                          ],
+                          { speaker: npc.name, portrait: npc.sprite, yesLabel: 'Accept', noLabel: 'Not now' }
+                      );
+                      if (!accepted) return;
+                      setPlayerState(prev => ({ ...prev, storyFlags: [...prev.storyFlags, acceptFlag] }));
+                  }
+                  // Completion step: hand over if they have enough.
+                  if (have < count) {
+                      setDialogue({ speaker: npc.name, portrait: npc.sprite, lines: [
+                          `You have ${have} of ${count} ${niceItem}.`,
+                          `Come back when you've got the rest. Reward: $${cash}.`,
+                      ] });
+                      return;
+                  }
+                  const turnIn = await askYesNo(
+                      [
+                          `You have all ${count} ${niceItem}.`,
+                          `Hand them over for $${cash}?`,
+                      ],
+                      { speaker: npc.name, portrait: npc.sprite, yesLabel: 'Hand over', noLabel: 'Keep them' }
+                  );
+                  if (!turnIn) return;
+                  setPlayerState(prev => {
+                      const next = { ...prev };
+                      const ninv = { ...next.inventory };
+                      if (itemId === 'potion')          ninv.potions = (ninv.potions || 0) - count;
+                      else if (itemId === 'revive')     ninv.revives = (ninv.revives || 0) - count;
+                      else if (itemId === 'rare-candy') ninv.rare_candy = (ninv.rare_candy || 0) - count;
+                      else if (itemId === 'poke-ball')  next.run = { ...next.run, capturePermits: (next.run.capturePermits || 0) - count };
+                      else {
+                          const items = [...(ninv.items || [])];
+                          for (let i = 0; i < count; i++) {
+                              const idx = items.indexOf(itemId);
+                              if (idx >= 0) items.splice(idx, 1);
+                          }
+                          ninv.items = items;
+                      }
+                      next.inventory = ninv;
+                      next.money = (next.money || 0) + cash;
+                      next.storyFlags = [...next.storyFlags, doneFlag];
+                      return next;
+                  });
+                  setDialogue({ speaker: npc.name, portrait: npc.sprite, lines: [
+                      `You handed over ${count} ${niceItem}.`,
+                      `${npc.name} looks relieved.`,
+                      `You received $${cash}!`
+                  ] });
+                  return;
+              }
+
+              // --- Daycare Lady (house archetype) -------------------------
+              // npc.id starts with 'daycare_'. Offers a deposit/withdraw
+              // menu. While deposited, the Pokemon gains XP equal to ~1
+              // level per real-world minute (capped by player's level cap).
+              if (npc.id.startsWith('daycare_')) {
+                  const slot = playerState.daycare?.slot ?? null;
+                  if (!slot) {
+                      // No deposit -> ask which Pokemon to deposit (or back out).
+                      const teamChoices: DialogueChoice[] = playerState.team.map((p, i) => ({
+                          id: `dep_${i}`, label: `${p.name} (Lv ${p.level})`,
+                          hint: i === 0 ? 'Lead' : undefined,
+                          disabled: playerState.team.length <= 1, // never let them deposit their last mon
+                      }));
+                      const pick = await askDialogue({
+                          speaker: 'Daycare Lady', portrait: npc.sprite,
+                          lines: [
+                              "I take care of Pokemon while you're away.",
+                              "They'll grow stronger over time. Who would you like to leave?",
+                              playerState.team.length <= 1 ? "(You can't leave your last Pokemon.)" : "",
+                          ].filter(Boolean),
+                          choices: [...teamChoices, { id: 'cancel', label: 'Never mind' }],
+                      });
+                      if (!pick || pick === 'cancel') return;
+                      const idx = parseInt(pick.split('_')[1], 10);
+                      const dep = playerState.team[idx];
+                      if (!dep) return;
+                      setPlayerState(prev => {
+                          const newTeam = [...prev.team];
+                          newTeam.splice(idx, 1);
+                          return {
+                              ...prev,
+                              team: newTeam,
+                              daycare: {
+                                  slot: dep,
+                                  depositedAt: Date.now(),
+                                  depositChunkX: prev.chunkPos.x,
+                                  depositChunkY: prev.chunkPos.y,
+                              },
+                          };
+                      });
+                      setDialogue({ speaker: 'Daycare Lady', portrait: npc.sprite, lines: [
+                          `I'll take good care of ${dep.name}.`,
+                          `Come back later -- they'll be stronger.`,
+                      ] });
+                      return;
+                  }
+                  // Existing deposit -> show progress and offer pickup.
+                  const minutes = Math.max(0, Math.floor((Date.now() - (playerState.daycare?.depositedAt ?? 0)) / 60_000));
+                  const cap = getPlayerLevelCap(playerState.badges);
+                  const newLevel = Math.min(cap, slot.level + minutes);
+                  const fee = Math.max(100, (newLevel - slot.level) * 100);
+                  const pick = await askDialogue({
+                      speaker: 'Daycare Lady', portrait: npc.sprite,
+                      lines: [
+                          `Your ${slot.name} is doing great.`,
+                          `It went from Lv ${slot.level} to Lv ${newLevel} (${minutes} minutes).`,
+                          `Pickup costs $${fee}.`,
+                      ],
+                      choices: [
+                          { id: 'pickup', label: 'Pick up', hint: `$${fee}`, disabled: playerState.money < fee || playerState.team.length >= 6 },
+                          { id: 'leave',  label: 'Leave them' },
+                      ],
+                  });
+                  if (pick !== 'pickup') return;
+                  const grown: Pokemon = { ...slot, level: newLevel, currentHp: slot.maxHp, isFainted: false };
+                  setPlayerState(prev => ({
+                      ...prev,
+                      money: prev.money - fee,
+                      team: [...prev.team, grown],
+                      daycare: { slot: null, depositedAt: 0, depositChunkX: 0, depositChunkY: 0 },
+                  }));
+                  setDialogue({ speaker: 'Daycare Lady', portrait: npc.sprite, lines: [
+                      `Welcome back, ${grown.name}!`,
+                      `You paid $${fee}.`,
+                  ] });
+                  return;
+              }
+
               if (npc.challenge) {
                   const challengeKey = `challenge_${npc.id}`;
                   if (playerState.storyFlags.includes(challengeKey)) {
@@ -1491,12 +1940,28 @@ export default function App() {
                           }
                       } else if (npc.challenge.type === 'collect') {
                           if (npc.name === 'Trader') {
-                              // Trade lead pokemon for reward
                               const lead = playerState.team[0];
-                              setDialogue([`You traded your ${lead.name}!`, `You received ${npc.challenge.reward.name}!`]);
+                              if (!lead) { setDialogue(["You don't have a Pokemon to trade!"]); return; }
+                              const reward = npc.challenge.reward;
+                              const ok = await askYesNo(
+                                  [
+                                      `Will you trade your ${lead.name} (Lv ${lead.level})...`,
+                                      `...for my ${reward.name}?`,
+                                      "(This trade is permanent.)",
+                                  ],
+                                  { speaker: 'Trader', portrait: npc.sprite, yesLabel: 'Trade', noLabel: 'Decline' }
+                              );
+                              if (!ok) {
+                                  setDialogue({ speaker: 'Trader', portrait: npc.sprite, lines: ["Maybe another time, then."] });
+                                  return;
+                              }
+                              setDialogue({ speaker: 'Trader', portrait: npc.sprite, lines: [
+                                  `You traded your ${lead.name}!`,
+                                  `You received ${reward.name}!`,
+                              ]});
                               setPlayerState(prev => ({
                                   ...prev,
-                                  team: [npc.challenge!.reward, ...prev.team.slice(1)],
+                                  team: [reward, ...prev.team.slice(1)],
                                   storyFlags: [...prev.storyFlags, challengeKey]
                               }));
                               return;
@@ -1527,6 +1992,14 @@ export default function App() {
           }
           if (currentMap.interactables?.[key]) { 
               const interactable = currentMap.interactables[key];
+
+              // PC terminal: opens the Pokemon Storage System.
+              // Used inside Pokemon Centers (tile 201) so the PC reads as
+              // a real, usable terminal rather than a flavor sign.
+              if (interactable.type === 'pc') {
+                  setPhase(GamePhase.POKEMON_STORAGE);
+                  return;
+              }
 
               // Gym compass signpost: dynamically compute direction to the
               // player's next unearned gym so the same sign stays useful
@@ -1899,15 +2372,127 @@ export default function App() {
       }
 
       if (!layout || newPos.y < 0 || newPos.y >= layout.length || !layout[newPos.y] || newPos.x < 0 || newPos.x >= layout[newPos.y].length) return;
-      
-      // Handle Portals
+
+      // Handle Portals (consolidated resolver).
+      //
+      // Portal destination grammar recognized here:
+      //   "PREV_POS"                     -- return to the stored overworld
+      //                                     entry tile (set when entering
+      //                                     an interior). Falls back to
+      //                                     chunk_{cx}_{cy}@(10,11) for
+      //                                     legacy content without a
+      //                                     saved entry.
+      //   "interior:<kind>:<seed>,X,Y"   -- dynamic interior. Lazy-
+      //                                     materialized via
+      //                                     resolveInterior() the first
+      //                                     time it's entered; cached in
+      //                                     loadedChunks afterwards.
+      //   "chunk_CX_CY,X,Y"              -- another overworld chunk.
+      //                                     Generated on demand.
+      //   "puzzle_<type>_<seed>,X,Y"     -- one-shot puzzle instance.
+      //   "<static_id>,X,Y"              -- entry in STATIC_MAPS / MAPS
+      //                                     (house_player, lab, rift, ...)
+      //
+      // Previously this block did a naive `split(',')` and returned early
+      // for *every* portal including "PREV_POS", which left the player on
+      // a non-existent "PREV_POS" map with NaN coords. That bug is fixed
+      // here, and the later portal block (now removed below) used to be
+      // the only path that handled "PREV_POS" correctly -- but it was
+      // unreachable because this block returned first.
       if (currentMap.portals && currentMap.portals[`${newPos.x},${newPos.y}`]) {
-          const [targetMap, tx, ty] = currentMap.portals[`${newPos.x},${newPos.y}`].split(',');
+          const portalDest: string = currentMap.portals[`${newPos.x},${newPos.y}`];
+
+          // --- PREV_POS ---------------------------------------------------
+          if (portalDest === "PREV_POS") {
+              // Prefer the stashed interior-entry tile so the player emerges
+              // exactly where they entered. Fall back to the legacy (10, 11)
+              // if storyFlags somehow lack the marker.
+              const entryFlag = playerState.storyFlags.find(f => f.startsWith('__interior_entry__'));
+              let exitChunkId = `chunk_${playerState.chunkPos.x}_${playerState.chunkPos.y}`;
+              let exitPos = { x: 10, y: 11 };
+              if (entryFlag) {
+                  const [, , cxStr, cyStr, xStr, yStr] = entryFlag.split('__');
+                  exitChunkId = `chunk_${cxStr}_${cyStr}`;
+                  exitPos = { x: parseInt(xStr, 10), y: parseInt(yStr, 10) };
+              }
+              setPlayerState(prev => ({
+                  ...prev,
+                  mapId: exitChunkId,
+                  chunkPos: { x: parseInt(exitChunkId.split('_')[1], 10), y: parseInt(exitChunkId.split('_')[2], 10) },
+                  position: exitPos,
+                  p2Position: { x: exitPos.x + 1, y: exitPos.y },
+                  // Clear the entry marker so re-entering produces a fresh one.
+                  storyFlags: prev.storyFlags.filter(f => !f.startsWith('__interior_entry__')),
+              }));
+              return;
+          }
+
+          // --- interior:<kind>:<seed>,X,Y ---------------------------------
+          if (portalDest.startsWith('interior:')) {
+              const commaIdx = portalDest.indexOf(',');
+              const mapPart = portalDest.slice(0, commaIdx);
+              const [txStr, tyStr] = portalDest.slice(commaIdx + 1).split(',');
+              const [, kindStr, seed] = mapPart.split(':');
+              const kind = kindStr as InteriorKind;
+              const interiorId = `interior:${kind}:${seed}`;
+
+              // Lazy materialize + cache in loadedChunks. EXCEPTION: gyms
+              // are always rebuilt because their trainer roster depends on
+              // the current `defeatedTrainers` list (cleared mooks vanish,
+              // and a beaten leader gets replaced by a Steward NPC). The
+              // build cost is trivial vs the UX win of "the gym now feels
+              // different after I cleared it."
+              const exitY = Math.min(CHUNK_SIZE - 1, newPos.y + 1);
+              const returnTo = `chunk_${playerState.chunkPos.x}_${playerState.chunkPos.y},${newPos.x},${exitY}`;
+              if (kind === 'gym' || !loadedChunks[interiorId]) {
+                  const interior = resolveInterior(kind, seed, returnTo, playerState.defeatedTrainers);
+                  setLoadedChunks(prev => ({ ...prev, [interiorId]: interior }));
+              }
+
+              // Stash the entry tile so PREV_POS / door mat exits land on it.
+              const entryMarker = `__interior_entry__${playerState.chunkPos.x}__${playerState.chunkPos.y}__${newPos.x}__${Math.min(CHUNK_SIZE - 1, newPos.y + 1)}`;
+              setPlayerState(prev => ({
+                  ...prev,
+                  mapId: interiorId,
+                  position: { x: parseInt(txStr, 10), y: parseInt(tyStr, 10) },
+                  p2Position: { x: parseInt(txStr, 10) + 1, y: parseInt(tyStr, 10) },
+                  storyFlags: [...prev.storyFlags.filter(f => !f.startsWith('__interior_entry__')), entryMarker],
+              }));
+              return;
+          }
+
+          // --- chunk_CX_CY,X,Y / puzzle_*/ static -------------------------
+          // This is the only branch that needs to potentially generate a
+          // chunk or puzzle. Static maps just need mapId + position.
+          const firstComma = portalDest.indexOf(',');
+          const targetMap = portalDest.slice(0, firstComma);
+          const [txStr, tyStr] = portalDest.slice(firstComma + 1).split(',');
+
+          let nextChunkPos = playerState.chunkPos;
+          if (targetMap.startsWith('chunk_')) {
+              const parts = targetMap.split('_');
+              nextChunkPos = { x: parseInt(parts[1], 10), y: parseInt(parts[2], 10) };
+              if (!loadedChunks[targetMap]) {
+                  const nextChunk = generateChunk(nextChunkPos.x, nextChunkPos.y, getKeystoneLevel(playerState.meta, 'rift_stability'));
+                  setLoadedChunks(prev => ({ ...prev, [targetMap]: nextChunk }));
+              }
+              setCurrentWeather('none');
+          } else if (targetMap === 'rift') {
+              setRiftLayout(generateRiftMap());
+          } else if (targetMap.startsWith('puzzle_')) {
+              const [, type, seed] = targetMap.split('_');
+              if (!loadedChunks[targetMap]) {
+                  const puzzleMap = generatePuzzleMap(type as any, parseInt(seed));
+                  setLoadedChunks(prev => ({ ...prev, [targetMap]: puzzleMap }));
+              }
+          }
+
           setPlayerState(prev => ({
               ...prev,
               mapId: targetMap,
-              position: { x: parseInt(tx), y: parseInt(ty) },
-              p2Position: { x: parseInt(tx), y: parseInt(ty) }
+              chunkPos: nextChunkPos,
+              position: { x: parseInt(txStr, 10), y: parseInt(tyStr, 10) },
+              p2Position: { x: parseInt(txStr, 10) + 1, y: parseInt(tyStr, 10) },
           }));
           return;
       }
@@ -1999,7 +2584,18 @@ export default function App() {
       }
 
       // Solid tiles
-      const walls = [1, 3, 11, 23, 24, 30, 31, 32, 33, 34, 35, 40, 41, 42, 43, 44, 45, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 80, 81, 82, 83, 85];
+      const walls = [1, 3, 11, 23, 24, 30, 31, 32, 33, 34, 35, 40, 41, 42, 43, 44, 45, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 80, 81, 82, 83, 85,
+          // Interior-only tiles (200..212 from services/interiors.ts). These
+          // are furniture / counters / shelves / bookcases / windows / etc
+          // that the player must NOT walk through. 209/210 (rugs) and 211
+          // (potted plant is also decor-walkable-ish; we keep it walkable
+          // for convenience) are walkable floor decor so they're excluded.
+          200, 201, 202, 203, 204, 205, 206, 207, 208, 212,
+          // Gym puzzle barriers in their ACTIVE state. These are walls until
+          // a matching switch (213 toggles 214, 218 toggles 219) flips them
+          // to their walkable form (215 / 220). See switch logic below.
+          214, 219,
+      ];
       
       // Boulder Logic
       if (tileType === 71) { // Boulder
@@ -2019,10 +2615,11 @@ export default function App() {
               }
               newLayout[newPos.y][newPos.x] = 0;
               
-              if (playerState.mapId.startsWith('chunk_')) {
+              if (playerState.mapId.startsWith('chunk_') || playerState.mapId.startsWith('interior:') || playerState.mapId.startsWith('puzzle_')) {
+                  // Persist boulder pushes to whichever map the player is on:
+                  // chunks for outdoor traversal, interiors for in-gym boulder
+                  // puzzles (e.g. Pewter Gym), puzzles for cave/rift overlays.
                   setLoadedChunks(prev => ({ ...prev, [playerState.mapId]: { ...prev[playerState.mapId], layout: newLayout } }));
-              } else {
-                  // Handle static maps if needed
               }
               // Don't move player yet, just push
               return;
@@ -2049,6 +2646,82 @@ export default function App() {
           newPos = slidePos;
       }
 
+      // -- Gym puzzle: switches & teleport pads ----------------------------
+      // newPos is now the player's settle tile. We resolve switch presses
+      // and teleport pads against the current map's layout, persisting any
+      // mutations via setLoadedChunks so the puzzle state survives e.g.
+      // an extra step in the same gym session. Both behaviours intentionally
+      // skip outside of interior maps -- there's no reason an outdoor chunk
+      // ever sees these tile ids.
+      const settleTile = layout[newPos.y]?.[newPos.x];
+      const isInsideSpecial = playerState.mapId.startsWith('interior:') || playerState.mapId.startsWith('puzzle_');
+
+      // -- Switch press -----------------------------------------------------
+      // 213 toggles 214<->215 in the same map, 218 toggles 219<->220.
+      // We toggle every matching tile on press so a single switch can lower
+      // multiple barriers simultaneously (designer can place an entire row
+      // of barriers behind a single plate). The plate itself stays put so
+      // the player can step off and back on for repeated toggling -- this
+      // is a deliberate "puzzle" feature for some gyms.
+      if (isInsideSpecial && (settleTile === 213 || settleTile === 218)) {
+          const onTile = settleTile === 213 ? 214 : 219;
+          const offTile = settleTile === 213 ? 215 : 220;
+          let mutated = false;
+          const newLayout = layout.map(r => [...r]);
+          for (let yy = 0; yy < newLayout.length; yy++) {
+              for (let xx = 0; xx < (newLayout[yy]?.length ?? 0); xx++) {
+                  if (newLayout[yy][xx] === onTile)  { newLayout[yy][xx] = offTile; mutated = true; }
+                  else if (newLayout[yy][xx] === offTile) { newLayout[yy][xx] = onTile; mutated = true; }
+              }
+          }
+          if (mutated) {
+              setLoadedChunks(prev => ({ ...prev, [playerState.mapId]: { ...prev[playerState.mapId], layout: newLayout } }));
+              // Tiny audio cue so the player gets feedback even off-screen
+              // from the barrier they affected. The "click" SFX exists in
+              // the existing sound pool; if missing the soundService is a
+              // no-op so this is safe.
+              try { (window as any).__sfx?.play?.('click'); } catch { /* noop */ }
+          }
+      }
+
+      // -- Teleport pad ----------------------------------------------------
+      // Pads come in two colors (216 blue, 217 purple). Each color appears
+      // exactly twice in a gym layout; stepping on one warps the player to
+      // the other coordinate. justTeleportedToRef prevents an immediate
+      // bounce-back when the destination tile is itself a pad of the same
+      // color (otherwise any pair would create an infinite loop).
+      if (isInsideSpecial && (settleTile === 216 || settleTile === 217)) {
+          const arrivedAfterTeleport =
+              justTeleportedToRef.current &&
+              justTeleportedToRef.current.mapId === playerState.mapId &&
+              justTeleportedToRef.current.x === newPos.x &&
+              justTeleportedToRef.current.y === newPos.y;
+          if (!arrivedAfterTeleport) {
+              // Find the OTHER pad of the same color.
+              let dest: { x: number; y: number } | null = null;
+              outer: for (let yy = 0; yy < layout.length; yy++) {
+                  for (let xx = 0; xx < (layout[yy]?.length ?? 0); xx++) {
+                      if (layout[yy][xx] === settleTile && (xx !== newPos.x || yy !== newPos.y)) {
+                          dest = { x: xx, y: yy };
+                          break outer;
+                      }
+                  }
+              }
+              if (dest) {
+                  newPos = dest;
+                  justTeleportedToRef.current = { mapId: playerState.mapId, x: dest.x, y: dest.y };
+              }
+          } else {
+              // Player landed on a pad as the destination of a teleport --
+              // clear the lock so future re-entries to this same pad warp
+              // again (they have to step OFF and back ON).
+              justTeleportedToRef.current = null;
+          }
+      } else if (justTeleportedToRef.current && justTeleportedToRef.current.mapId === playerState.mapId) {
+          // Stepped off the destination pad -- clear lock.
+          justTeleportedToRef.current = null;
+      }
+
       // Ledge logic (One-way South)
       if (tileType === 14) {
           if (newPos.y <= pos.y) return; // Can't walk up or sideways into a ledge
@@ -2061,44 +2734,10 @@ export default function App() {
           }
       }
 
-      const portalKey = `${newPos.x},${newPos.y}`;
-      if (currentMap.portals[portalKey]) {
-          const portalDest = currentMap.portals[portalKey];
-          if (portalDest === "PREV_POS") {
-              // Simple back logic
-              setPlayerState(prev => ({ ...prev, mapId: `chunk_${prev.chunkPos.x}_${prev.chunkPos.y}`, position: { x: 10, y: 11 } }));
-              return;
-          }
-          const [targetMapId, targetX, targetY] = portalDest.split(',');
-          if (targetMapId === 'rift') setRiftLayout(generateRiftMap());
-          if (targetMapId.startsWith('puzzle_')) {
-              const [, type, seed] = targetMapId.split('_');
-              if (!loadedChunks[targetMapId]) {
-                  const puzzleMap = generatePuzzleMap(type as any, parseInt(seed));
-                  setLoadedChunks(prev => ({ ...prev, [targetMapId]: puzzleMap }));
-              }
-          }
-          
-          let nextChunkPos = playerState.chunkPos;
-          if (targetMapId.startsWith('chunk_')) {
-              const [,cx,cy] = targetMapId.split('_');
-              nextChunkPos = { x: parseInt(cx), y: parseInt(cy) };
-              setCurrentWeather('none'); // Reset weather on chunk change
-              if (!loadedChunks[targetMapId]) {
-                  const nextChunk = generateChunk(nextChunkPos.x, nextChunkPos.y, getKeystoneLevel(playerState.meta, 'rift_stability'));
-                  setLoadedChunks(prev => ({ ...prev, [targetMapId]: nextChunk }));
-              }
-          }
-
-          setPlayerState(prev => ({ 
-              ...prev, 
-              mapId: targetMapId, 
-              chunkPos: nextChunkPos,
-              position: { x: parseInt(targetX), y: parseInt(targetY) }, 
-              p2Position: { x: parseInt(targetX) + 1, y: parseInt(targetY) } 
-          }));
-          return;
-      }
+      // NOTE: the legacy duplicate portal-handler that used to live here
+      // has been removed. All portal resolution is now handled by the
+      // consolidated block earlier in this function which supports
+      // PREV_POS, interior:*, chunk_*, puzzle_*, rift, and static maps.
 
       const trainerKey = `${newPos.x},${newPos.y}`;
       const trainerData = currentMap.trainers?.[trainerKey];
@@ -3744,6 +4383,37 @@ export default function App() {
                                     bounties: nextBountyState,
                                 };
                             }
+                            // -- Party full: auto-deposit to PC. ----------
+                            // Find the first non-full box and drop the new
+                            // mon in the first empty slot. If every box is
+                            // somehow full (would take >240 captures), we
+                            // fall through and the mon is lost -- the
+                            // tradeoff is acceptable because player has
+                            // hours of warning to release something. We
+                            // queue a delayed dialogue so the catch banner
+                            // and the deposit confirmation don't fight.
+                            const scaledNew = autoScaleTeamToFloor([newMon], prev.badges, prev.run.maxDistanceReached)[0];
+                            const startBoxes = prev.boxes ?? makeEmptyBoxes(DEFAULT_BOX_COUNT);
+                            const newBoxes = startBoxes.map(b => ({ ...b, slots: [...b.slots] }));
+                            let depositedTo: { box: number; slot: number } | null = null;
+                            for (let bi = 0; bi < newBoxes.length && !depositedTo; bi++) {
+                                for (let si = 0; si < newBoxes[bi].slots.length; si++) {
+                                    if (!newBoxes[bi].slots[si]) {
+                                        newBoxes[bi].slots[si] = scaledNew;
+                                        depositedTo = { box: bi, slot: si };
+                                        break;
+                                    }
+                                }
+                            }
+                            if (depositedTo) {
+                                // Surface a dialogue once the battle resolves.
+                                setTimeout(() => {
+                                    setDialogue([
+                                        `Your party is full!`,
+                                        `${scaledNew.name} was sent to ${newBoxes[depositedTo!.box].name}.`,
+                                    ]);
+                                }, 600);
+                            }
                             return {
                                 ...prev,
                                 catchCombo: nextCombo,
@@ -3752,6 +4422,7 @@ export default function App() {
                                 meta: mergedMeta,
                                 run: { ...prev.run, capturePermits: refundedPermits },
                                 bounties: nextBountyState,
+                                boxes: depositedTo ? newBoxes : prev.boxes,
                             };
                         });
 
@@ -7751,6 +8422,49 @@ export default function App() {
             playLevelUpSfx();
         }
     };
+    /**
+     * Sell `qty` of `itemId` for `unitPrice` each. Mirrors `handleBuy`'s
+     * inventory mapping: numeric slots (potions/revives/rare-candy/poke-
+     * ball-as-permits) and the generic `items[]` bag. Sell prices are
+     * decided by ShopMenu (currently 50% of buy price).
+     *
+     * Defensive: clamps qty to actual stock so a stale UI can't overflow
+     * the inventory negative or print money.
+     */
+    function handleSell(itemId: string, unitPrice: number, qty: number) {
+        if (qty <= 0) return;
+        setPlayerState(prev => {
+            const inv = { ...prev.inventory };
+            let permits = prev.run.capturePermits;
+            let stock = 0;
+            if (itemId === 'poke-ball')        stock = permits;
+            else if (itemId === 'potion')      stock = inv.potions;
+            else if (itemId === 'revive')      stock = inv.revives;
+            else if (itemId === 'rare-candy')  stock = inv.rare_candy;
+            else                               stock = (inv.items || []).filter(i => i === itemId).length;
+            const real = Math.min(qty, stock);
+            if (real <= 0) return prev;
+            if (itemId === 'poke-ball')        permits -= real;
+            else if (itemId === 'potion')      inv.potions -= real;
+            else if (itemId === 'revive')      inv.revives -= real;
+            else if (itemId === 'rare-candy')  inv.rare_candy -= real;
+            else {
+                const items = [...(inv.items || [])];
+                for (let i = 0; i < real; i++) {
+                    const idx = items.indexOf(itemId);
+                    if (idx >= 0) items.splice(idx, 1);
+                }
+                inv.items = items;
+            }
+            return {
+                ...prev,
+                inventory: inv,
+                money: prev.money + unitPrice * real,
+                run: { ...prev.run, capturePermits: permits },
+            };
+        });
+        try { playLevelUpSfx(); } catch {}
+    };
   function triggerEmote(e: string) { setCurrentEmote(e); setTimeout(()=>setCurrentEmote(null), 2000); };
   function handleStarterSelect(team: Pokemon[]) { 
       if (team[0]) playCry(team[0].id, team[0].name);
@@ -8076,7 +8790,26 @@ export default function App() {
     } else if (data.type === 'SYNC_STATE') {
         setRemotePlayers(prev => {
             const newMap = new Map(prev);
-            newMap.set(data.payload.id, data.payload);
+            // Preserve any previously-synced boxes payload across heartbeat
+            // updates -- SYNC_STATE doesn't carry box contents (BOX_SYNC
+            // does, lazily) and we don't want a fresh heartbeat to clear
+            // the peer's last known box state.
+            const existing = prev.get(data.payload.id);
+            const merged = existing && existing.boxes
+                ? { ...data.payload, boxes: existing.boxes }
+                : data.payload;
+            newMap.set(data.payload.id, merged);
+            return newMap;
+        });
+    } else if (data.type === 'BOX_SYNC') {
+        // A peer just told us their full box state changed (debounced
+        // upstream). Merge into the existing remotePlayer entry so any UI
+        // that reads `remotePlayers.get(id).boxes` sees the latest. We
+        // don't gate on isHost -- box state is symmetric between peers.
+        setRemotePlayers(prev => {
+            const newMap = new Map(prev);
+            const existing = prev.get(data.payload.id) ?? { id: data.payload.id };
+            newMap.set(data.payload.id, { ...existing, boxes: data.payload.boxes });
             return newMap;
         });
     } else if (data.type === 'MAP_DATA_SYNC') {
@@ -8213,6 +8946,44 @@ export default function App() {
     }
   }, [riftLayout, caveLayouts]);
 
+  // -- Box sync (multiplayer) ------------------------------------------------
+  // The PC boxes are the foundation for any future PC-to-PC trade feature.
+  // We broadcast the full box payload ONCE per change (with a 600ms debounce
+  // so a flurry of deposits / swaps coalesces into a single network send),
+  // not on the 1s SYNC_STATE heartbeat. This keeps the per-second payload
+  // cheap while letting any peer build a "see your friend's storage" UI on
+  // top of the existing remotePlayers map. Receive side stores it on the
+  // peer's remotePlayer entry under `.boxes`. See data handler.
+  useEffect(() => {
+    if (!(phase === GamePhase.OVERWORLD && multiplayer.roomId)) return;
+    if (!playerState.boxes) return;
+    const handle = window.setTimeout(() => {
+        try {
+            multiplayer.send({
+                type: 'BOX_SYNC',
+                payload: {
+                    id: auth.currentUser?.uid,
+                    // Strip down to fields that matter for display / trade.
+                    // Nothing Pokemon-internal that breaks across versions.
+                    boxes: playerState.boxes!.map(b => ({
+                        name: b.name,
+                        slots: b.slots.map(s => s ? {
+                            id: s.id,
+                            name: s.name,
+                            level: s.level,
+                            sprites: { front_default: s.sprites?.front_default ?? '' },
+                            types: s.types,
+                            currentHp: s.currentHp,
+                            maxHp: s.maxHp,
+                        } : null),
+                    })),
+                },
+            });
+        } catch { /* multiplayer down -- ignored */ }
+    }, 600);
+    return () => window.clearTimeout(handle);
+  }, [phase, playerState.boxes, multiplayer.roomId]);
+
   // Sync player state to others
   useEffect(() => {
     if (phase === GamePhase.OVERWORLD && multiplayer.roomId) {
@@ -8226,7 +8997,16 @@ export default function App() {
                     mapId: playerState.mapId,
                     team: playerState.team.map(p => ({ id: p.id, name: p.name, level: p.level, currentHp: p.currentHp, maxHp: p.maxHp })),
                     spriteUrl: networkRole === 'host' ? '/sprites/overworld/brendan_walking.png' : '/sprites/overworld/may_walking.png',
-                    isHost: networkRole === 'host'
+                    isHost: networkRole === 'host',
+                    // Cheap aggregate so the UI can display "X stored" next
+                    // to a friend without paying for a full box payload on
+                    // the 1s heartbeat. Full box contents go out via the
+                    // BOX_SYNC event below, which only fires on actual box
+                    // mutations (deposit / withdraw / release / rename).
+                    boxesCount: (playerState.boxes ?? []).reduce(
+                        (sum, b) => sum + (b.slots?.filter(s => !!s).length ?? 0),
+                        0,
+                    ),
                 }
             });
         }, 1000);
@@ -8375,7 +9155,14 @@ export default function App() {
       }
 
       if (dialogue && (e.key === 'Enter' || e.key === 'e' || e.key === 'E' || e.key === ' ')) {
-          setDialogue(null);
+          // When a choice prompt is open the DialogueBox component owns
+          // the keyboard (it captures Enter/Space to confirm the highlighted
+          // choice). Bail here so we don't double-dismiss and lose the
+          // resolver before the choice handler fires.
+          if (dialogue.choices && dialogue.choices.length > 0) return;
+          const r = dialogue.resolve;
+          setDialogueRaw(null);
+          r?.(null);
           return;
       }
 
@@ -8691,7 +9478,20 @@ export default function App() {
                 />
             ); 
         }
-        if (phase === GamePhase.SHOP) return <ShopMenu onClose={()=>setPhase(GamePhase.OVERWORLD)} money={playerState.money} inventory={playerState.inventory} onBuy={handleBuy} discount={scavenger_shopDiscount(playerState.meta)} />;
+        if (phase === GamePhase.SHOP) return <ShopMenu
+            onClose={()=>{ setShopMode('buy'); setPhase(GamePhase.OVERWORLD); }}
+            money={playerState.money}
+            inventory={playerState.inventory}
+            onBuy={handleBuy}
+            onSell={handleSell}
+            initialMode={shopMode}
+            discount={scavenger_shopDiscount(playerState.meta)}
+        />;
+        if (phase === GamePhase.POKEMON_STORAGE) return <PokemonStorage
+            player={playerState}
+            onUpdate={(patch) => setPlayerState(prev => ({ ...prev, ...patch }))}
+            onClose={() => setPhase(GamePhase.OVERWORLD)}
+        />;
 
         if (phase === GamePhase.BOUNTY_BOARD) {
             const active = playerState.bounties?.active ?? [];
@@ -8740,6 +9540,7 @@ export default function App() {
                         onImportSave={handleImportSave}
                         onDeleteSave={handleDeleteSave}
                         lastSavedAt={lastSavedAt}
+                        onOpenStorage={() => { setIsPaused(false); setPhase(GamePhase.POKEMON_STORAGE); }}
                    />}
                    {showLeaderboard && (
                        <LeaderboardScreen
@@ -8757,7 +9558,19 @@ export default function App() {
                            onClose={() => setShowLeaderboard(false)}
                        />
                    )}
-                   {dialogue && <div className="absolute bottom-6 left-6 right-6 bg-blue-900/95 border-4 border-white p-6 rounded-2xl z-[60] text-white shadow-2xl"><div className="text-base leading-relaxed">{dialogue.map((l,i)=><p key={i}>{l}</p>)}</div><div className="text-xs text-yellow-400 mt-3 font-bold animate-pulse">Press Enter</div></div>}
+                   <DialogueBox
+                       dialogue={dialogue}
+                       onAdvance={() => {
+                           const r = dialogue?.resolve;
+                           setDialogueRaw(null);
+                           r?.(null);
+                       }}
+                       onChoice={(id) => {
+                           const r = dialogue?.resolve;
+                           setDialogueRaw(null);
+                           r?.(id);
+                       }}
+                   />
                    <div className="absolute top-6 left-6 z-40 flex gap-3">{playerState.team.slice(0,3).map((p,i)=><div key={i} className="scale-90 origin-top-left"><HealthBar current={p.currentHp} max={p.maxHp} label={p.name} level={p.level} status={p.status} /></div>)}</div>
                    <div className="absolute top-6 right-6 z-40 flex flex-col gap-3 items-end">
                         <div className="bg-gradient-to-br from-amber-500/90 to-amber-700/90 px-4 py-2 border-2 border-amber-300/80 text-white text-sm font-bold rounded-lg shadow-lg flex items-center gap-2">
@@ -9012,13 +9825,34 @@ export default function App() {
                     return { x: [-8, 8, -5, 3, 0] };
                 })()}
                 transition={{ duration: battleState.screenShake === 'heavy' ? 0.36 : 0.22, ease: 'easeInOut' }}
-                className="flex-1 relative z-10 p-4 flex flex-col justify-between min-h-0 overflow-hidden"
+                // Arena is a plain positioning context, NOT a flex column.
+                // We used to rely on `flex flex-col justify-between` to push
+                // enemies to the top and the player team to the bottom, but
+                // `justify-between` silently collapses into top-packing once
+                // the combined child height exceeds the arena (which happens
+                // on any <720px-tall viewport because each team is ~250-310px
+                // tall). The overflowing player sprite then gets eaten by
+                // `overflow-hidden` and the user sees HP bars but no
+                // Pokemon. Absolute-positioning the teams guarantees each
+                // one lands in its corner regardless of height; if the
+                // viewport is truly tiny the two sides may visually overlap
+                // in the middle, which matches traditional Pokemon
+                // forced-perspective battles anyway.
+                className="flex-1 relative z-10 p-4 min-h-0 overflow-hidden"
              >
                   {/* Battle-field-wide VFX overlay (type flash, vignette,
                    * shockwave, screen sparks). Mounted once at the battle
                    * container level so it scales to the whole fight, not a
                    * single Pokemon's sprite box. */}
                   <BattleFxOverlay vfx={battleState.vfx} />
+                  {/* Persistent field state -- weather, terrain, screens,
+                   * tailwind, hazards, etc. Renders BOTH the chip readout
+                   * (top center + side strips) AND the ambient overlays
+                   * (Trick Room grid, Tailwind streaks, Aurora Veil
+                   * shimmer, Gravity vignette). Keeping it in one
+                   * component means a single source of truth for "what's
+                   * currently happening on the battlefield". */}
+                  <BattleFieldHud bs={battleState} />
                   {battleState.battleStreak > 1 && (
                       <div className="absolute top-4 right-4 z-50">
                           <motion.div 
@@ -9121,16 +9955,25 @@ export default function App() {
                           </motion.button>
                       </div>
                   )}
-                  <div className="flex flex-col items-end gap-1 z-10 -mt-4 pr-12">
+                  {/* Enemy team anchored to top-right of the arena.
+                   *  Absolute positioning means this never fights the
+                   *  player team for space -- both can coexist in a
+                   *  short viewport without either being clipped. */}
+                  <div className="absolute top-2 right-4 md:right-12 flex flex-col items-end gap-1 z-10">
                         <SyncGauge value={battleState.enemyComboMeter} label="Team Sync" color="red" />
                       <div className="flex justify-end gap-12">
                           {battleState.enemyTeam.slice(0, 2).map((mon, i) => !mon.isFainted && (
                           <div key={i} className="flex flex-col-reverse items-center gap-2 relative">
                               <div className="relative">
                                   <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 w-48 h-12 rounded-[100%] border-2 blur-[1px] shadow-lg
-                                      ${battleState.weather === 'sand' ? 'bg-amber-700/60 border-amber-500/80' : 
-                                        battleState.weather === 'hail' ? 'bg-blue-200/60 border-blue-100/80' :
-                                        'bg-green-600/60 border-green-400/80'}`} 
+                                      ${battleState.weather === 'sand' ? 'bg-amber-700/60 border-amber-500/80' :
+                                        battleState.weather === 'hail' || battleState.weather === 'snow' ? 'bg-blue-200/60 border-blue-100/80' :
+                                        battleState.weather === 'rain' ? 'bg-sky-700/60 border-sky-400/80' :
+                                        battleState.weather === 'sun' ? 'bg-amber-400/50 border-amber-200/80' :
+                                        battleState.weather === 'electric' ? 'bg-yellow-500/50 border-yellow-200/80' :
+                                        battleState.weather === 'ashstorm' ? 'bg-stone-800/70 border-stone-500/80' :
+                                        battleState.weather === 'grass' ? 'bg-emerald-500/60 border-lime-300/80' :
+                                        'bg-green-600/60 border-green-400/80'}`}
                                   />
                                   <PokemonSprite pokemon={mon} isTargetable={isTargeting} onSelect={() => handleTargetSelect(i)} />
                                   <BattlePopupLayer side="enemy" slot={i as 0 | 1} />
@@ -9154,17 +9997,49 @@ export default function App() {
                   </div>
                   </div>
                   
-                  <div className="flex flex-col items-start gap-1 z-10 pl-12 pb-96">
+                  {/* Player team anchored to bottom-left of the arena.
+                   *  The `bottom-*` value is what keeps the sprite and
+                   *  HP bar clear of the action panel. Because the HP
+                   *  bar sits ABOVE the sprite (flex-col-reverse) and
+                   *  the sprite is the bottom element of this stack,
+                   *  a small bottom offset is all that's needed on
+                   *  short screens. On taller displays we push the
+                   *  player further up to recreate the classic "float
+                   *  in the middle of the battlefield" feel. */}
+                  <div className="absolute bottom-2 left-4 md:left-12 [@media(min-height:720px)]:bottom-8 [@media(min-height:900px)]:bottom-24 flex flex-col items-start gap-1 z-10">
                         <SyncGauge value={battleState.comboMeter} label="Team Sync" color="yellow" />
                        <div className="flex justify-start gap-12">
                             {battleState.playerTeam.slice(0, 2).map((mon, i) => !mon.isFainted && (
                           <div key={i} className="flex flex-col-reverse items-center gap-2 relative">
                               <div className="relative">
                                   <div className={`absolute -bottom-4 left-1/2 -translate-x-1/2 w-64 h-16 rounded-[100%] border-2 blur-[1px] shadow-xl
-                                      ${battleState.weather === 'sand' ? 'bg-amber-700/60 border-amber-500/80' : 
-                                        battleState.weather === 'hail' ? 'bg-blue-200/60 border-blue-100/80' :
-                                        'bg-green-600/60 border-green-400/80'}`} 
+                                      ${battleState.weather === 'sand' ? 'bg-amber-700/60 border-amber-500/80' :
+                                        battleState.weather === 'hail' || battleState.weather === 'snow' ? 'bg-blue-200/60 border-blue-100/80' :
+                                        battleState.weather === 'rain' ? 'bg-sky-700/60 border-sky-400/80' :
+                                        battleState.weather === 'sun' ? 'bg-amber-400/50 border-amber-200/80' :
+                                        battleState.weather === 'electric' ? 'bg-yellow-500/50 border-yellow-200/80' :
+                                        battleState.weather === 'ashstorm' ? 'bg-stone-800/70 border-stone-500/80' :
+                                        battleState.weather === 'grass' ? 'bg-emerald-500/60 border-lime-300/80' :
+                                        'bg-green-600/60 border-green-400/80'}`}
                                   />
+                                  {/* Active-Pokemon glow ring -- only visible
+                                   * during the player's input phase so it doesn't
+                                   * compete with VFX during execution. The slot
+                                   * that is currently choosing a move pulses
+                                   * yellow; the standby slot stays dim. */}
+                                  {battleState.phase === 'player_input' && i === battleState.activePlayerIndex && (
+                                      <motion.div
+                                          aria-hidden
+                                          className="absolute inset-0 pointer-events-none"
+                                          initial={{ opacity: 0.3 }}
+                                          animate={{ opacity: [0.35, 0.85, 0.35] }}
+                                          transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                                          style={{
+                                              boxShadow: '0 0 36px 8px rgba(253,224,71,0.55), inset 0 0 20px rgba(253,224,71,0.35)',
+                                              borderRadius: '50%',
+                                          }}
+                                      />
+                                  )}
                                   <PokemonSprite pokemon={mon} isBack />
                                   <BattlePopupLayer side="player" slot={i as 0 | 1} />
                                   <AnimatePresence>
@@ -9190,9 +10065,13 @@ export default function App() {
               </div>
               </motion.div>
              
-             <div className="bg-gray-800 border-t-4 border-gray-600 p-2 md:p-4 h-auto min-h-[16rem] z-20 relative flex-none">
+             {/* Action panel min-height is height-responsive so short
+              *  secondary monitors don't cede ~50% of the viewport to
+              *  the UI chrome (which was blocking the player's
+              *  Pokemon on <600px tall displays). */}
+             <div className="bg-gray-800 border-t-4 border-gray-600 p-2 md:p-4 h-auto min-h-[12rem] [@media(min-height:720px)]:min-h-[14rem] [@media(min-height:900px)]:min-h-[16rem] z-20 relative flex-none">
                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-4 h-full">
-                     <div className="bg-white/5 backdrop-blur-sm p-3 text-[10px] md:text-xs text-gray-300 overflow-y-auto max-h-32 md:max-h-none border-r border-white/10">{battleState.logs.map((l,i)=><div key={i} className="mb-1">{l}</div>)}</div>
+                     <BattleLog logs={battleState.logs} />
                      <div className="col-span-2 bg-gray-700 p-2 md:p-4 rounded-lg overflow-y-auto">
                           {battleState.phase === 'player_input' && activePlayer && !isTargeting && !isBagMode && !isSwitchMode && (
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 md:gap-4">

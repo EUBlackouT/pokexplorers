@@ -116,9 +116,15 @@ export const PokemonSprite: React.FC<Props> = ({ pokemon, isBack, isTargetable, 
   }
 
   const isBattle = variant === 'battle';
-  // Default size if not provided - Adjusted for better visibility and layout
+  // Default size if not provided - Adjusted for better visibility and layout.
+  // Width-based md: breakpoint alone caused 320px player sprites to render
+  // on short (<720px tall) ultrawide secondary displays, pushing HP bars
+  // behind the action panel. Height-based arbitrary variants below force a
+  // compact size on short screens even when the width qualifies as "md".
   const containerClass = className || (isBattle 
-    ? (isBack ? "w-48 h-48 md:w-80 md:h-80" : "w-32 h-32 md:w-56 md:h-56") 
+    ? (isBack 
+        ? "w-40 h-40 md:w-56 md:h-56 [@media(min-height:720px)]:md:w-72 [@media(min-height:720px)]:md:h-72 [@media(min-height:900px)]:md:w-80 [@media(min-height:900px)]:md:h-80" 
+        : "w-28 h-28 md:w-44 md:h-44 [@media(min-height:720px)]:md:w-52 [@media(min-height:720px)]:md:h-52 [@media(min-height:900px)]:md:w-56 [@media(min-height:900px)]:md:h-56") 
     : "w-32 h-32 md:w-48 md:h-48");
 
   if (pokemon.isFainted) {

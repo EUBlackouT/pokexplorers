@@ -80,10 +80,11 @@ interface Props {
  * moving we alternate walkA <-> walkB per tile-step (stepParity)
  * to produce the classic two-foot bob. Idle shows `stand`.
  *
- * The native 16x32 cell is scaled 4x to 64x128 so that the
- * character's feet align with the bottom of its tile (y =
- * pos.y + 1) and the head extends up into the tile above
- * (standard Gen 3 rendering).
+ * The native 16x32 cell is scaled 3x to 48x96 so that the
+ * character's feet align with the bottom of its tile, the
+ * sprite is centered within the 64px tile width (8px padding
+ * each side), and the head extends ~half a tile above. See
+ * SCALE in PlayerCharacter for the single source of truth.
  *
  * `spriteUrl` is kept for call-site compatibility: we route the
  * local player to Brendan, the remote player to May so two
@@ -140,13 +141,28 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
     const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const TILE_SIZE = 64;
 
-    // Display size: native cell 16x32 at 4x = 64x128. Characters are
-    // one tile wide and two tiles tall -- feet sit in the current
-    // tile, head pokes into the tile above (vanilla Gen 3 behaviour).
-    const SPRITE_W = 64;
-    const SPRITE_H = 128;
-    const SHEET_W = 144 * 4; // 576 -- full sheet scaled
-    const SHEET_H = 32 * 4;  // 128
+    // Display scale of the native 16x32 cell. 3x reads as
+    // "appropriately small for a 64px tile" -- the older 4x scale
+    // (64x128) felt oversized next to other characters and the
+    // tilework. The character is still one tile WIDE (centered)
+    // and 1.5 tiles tall so the head only pokes half a tile up,
+    // which is a closer match to most modern Pokemon games.
+    //
+    // SCALE drives every derived display dimension so the sheet
+    // math stays in sync if we ever need to bump it again. Use
+    // an integer to keep pixel art crisp.
+    const SCALE = 3;
+    const NATIVE_W = 16;
+    const NATIVE_H = 32;
+    const SPRITE_W = NATIVE_W * SCALE;       // 48
+    const SPRITE_H = NATIVE_H * SCALE;       // 96
+    const SHEET_W  = 144 * SCALE;            // 432 -- full sheet scaled
+    const SHEET_H  = NATIVE_H * SCALE;       // 96
+    // Center horizontally inside the tile and align feet to the
+    // bottom of the tile vertically. Computed once because both
+    // are constant for a given SCALE.
+    const OFFSET_X = (TILE_SIZE - SPRITE_W) / 2;
+    const OFFSET_Y = TILE_SIZE - SPRITE_H;   // negative = sprite extends above
 
     // Pick cadence based on whether the player is sprinting. Keep a
     // live ref too so the moveTimer below always reads the current
@@ -214,15 +230,17 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
     } else {
         xNative = parityA ? FRAME_X.leftWalkA : FRAME_X.leftWalkB; // right mirrors
     }
-    const bgPosX = -xNative * 4;
+    const bgPosX = -xNative * SCALE;
 
     return (
         <div
             className={`absolute top-0 left-0 ease-linear z-30 will-change-transform ${onClick ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
             style={{
-                // Head at pos.y-1, feet at pos.y. Sprite occupies the
-                // current tile plus one tile above.
-                transform: `translate(${pos.x * TILE_SIZE}px, ${(pos.y - 1) * TILE_SIZE}px)`,
+                // Feet centered + bottom-aligned to the pos.y tile; the
+                // upper portion (head) extends OFFSET_Y above. With a 3x
+                // scale that's half a tile, so taller environment props
+                // can still read on top of the character.
+                transform: `translate(${pos.x * TILE_SIZE + OFFSET_X}px, ${pos.y * TILE_SIZE + OFFSET_Y}px)`,
                 width: SPRITE_W,
                 height: SPRITE_H,
                 // Match the tween to the active step cadence so the
@@ -236,13 +254,15 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
         >
             <div className="w-full h-full relative flex items-end justify-center">
                 {/* Soft ground shadow sits under the sprite's feet so
-                    the character reads as grounded rather than floating. */}
+                    the character reads as grounded rather than floating.
+                    Sized proportional to SPRITE_W (~62%) so it scales
+                    cleanly if SCALE changes. */}
                 <div
                     className="absolute left-1/2 -translate-x-1/2"
                     style={{
                         bottom: 2,
-                        width: 40,
-                        height: 10,
+                        width: Math.round(SPRITE_W * 0.62),
+                        height: 8,
                         background: 'radial-gradient(ellipse, rgba(0,0,0,0.50) 0%, rgba(0,0,0,0) 70%)',
                         pointerEvents: 'none',
                         zIndex: 1,
@@ -741,6 +761,252 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             case 62: className += "tile-wood"; content = <div className="deco-bed"></div>; break;
             case 63: className += "tile-wood"; content = <div className="deco-bookshelf"></div>; break;
             case 64: className += "tile-wood"; content = <div className="deco-plant"></div>; break;
+            // -----------------------------------------------------------
+            // Interior-only tiles (200..212). Introduced by the building
+            // overhaul to give Pokemon Centers, Poke Marts, cottages,
+            // workshops and apartments visually distinct interiors instead
+            // of the legacy "clone of my bedroom" look.
+            // -----------------------------------------------------------
+            case 200: // PokeCenter healing counter
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 flex items-end justify-center">
+                        <div className="w-full h-3/4 bg-gradient-to-b from-pink-400 to-pink-600 border-t-4 border-pink-200 border-x-2 border-b-2 border-pink-800 shadow-inner flex items-center justify-center">
+                            <div className="w-5 h-5 rounded-full bg-white border-2 border-pink-800 relative">
+                                <div className="absolute inset-x-0 top-1/2 h-0.5 bg-pink-800"></div>
+                                <div className="absolute left-1/2 inset-y-0 w-0.5 bg-pink-800"></div>
+                            </div>
+                        </div>
+                    </div>
+                );
+                break;
+            case 201: // PokeCenter PC terminal
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 flex items-end justify-center">
+                        <div className="w-3/4 h-3/4 bg-slate-700 border-2 border-slate-900 rounded-t-md shadow-md flex flex-col items-center justify-start p-0.5">
+                            <div className="w-full h-3/5 bg-cyan-400/80 border border-slate-900 rounded-sm flex items-center justify-center">
+                                <div className="w-2 h-2 bg-pink-300 rounded-full animate-pulse" />
+                            </div>
+                            <div className="w-full h-2 bg-slate-500 mt-auto" />
+                        </div>
+                    </div>
+                );
+                break;
+            case 202: // PokeCenter waiting bench
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-x-1 bottom-2 top-4 bg-amber-800 border-2 border-amber-950 rounded-sm shadow">
+                        <div className="absolute -top-1 inset-x-0 h-1 bg-amber-600 rounded-t-sm" />
+                    </div>
+                );
+                break;
+            case 203: // PokeMart shelves
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 flex flex-col justify-around p-0.5">
+                        <div className="w-full h-1 bg-slate-500" />
+                        <div className="flex justify-around">
+                            <div className="w-2 h-2 rounded-sm bg-red-500 border border-red-700" />
+                            <div className="w-2 h-2 rounded-sm bg-blue-500 border border-blue-700" />
+                            <div className="w-2 h-2 rounded-sm bg-yellow-400 border border-yellow-700" />
+                        </div>
+                        <div className="w-full h-1 bg-slate-500" />
+                        <div className="flex justify-around">
+                            <div className="w-2 h-2 rounded-sm bg-emerald-500 border border-emerald-700" />
+                            <div className="w-2 h-2 rounded-sm bg-purple-500 border border-purple-700" />
+                            <div className="w-2 h-2 rounded-sm bg-pink-400 border border-pink-700" />
+                        </div>
+                        <div className="w-full h-1 bg-slate-500" />
+                    </div>
+                );
+                break;
+            case 204: // PokeMart counter
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 flex items-end justify-center">
+                        <div className="w-full h-3/4 bg-gradient-to-b from-blue-400 to-blue-700 border-t-4 border-blue-200 border-x-2 border-b-2 border-blue-900 shadow-inner flex items-center justify-center">
+                            <div className="text-white text-[10px] font-black">$</div>
+                        </div>
+                    </div>
+                );
+                break;
+            case 205: // Fireplace / warm glow
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-1 bg-stone-800 border-2 border-stone-900 rounded-md shadow-inner flex items-end justify-center overflow-hidden">
+                        <div className="w-3/4 h-2/3 bg-gradient-to-t from-red-600 via-orange-400 to-yellow-300 rounded-t-full blur-[1px] animate-pulse" />
+                        <div className="absolute bottom-0 inset-x-0 h-1 bg-stone-900" />
+                    </div>
+                );
+                break;
+            case 206: // Kitchen counter
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-x-0 bottom-0 top-2 bg-slate-300 border-2 border-slate-500 shadow-inner flex items-center justify-center">
+                        <div className="w-3 h-3 rounded-full bg-slate-600 border border-slate-900" />
+                    </div>
+                );
+                break;
+            case 207: // Workshop bench
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-x-0 bottom-0 top-2 bg-amber-900 border-2 border-amber-950 shadow-inner flex items-center justify-around p-0.5">
+                        <div className="w-1 h-2 bg-slate-400 rounded-sm" />
+                        <div className="w-2 h-2 bg-red-500 border border-red-900 rounded-sm" />
+                        <div className="w-1 h-2 bg-slate-400 rounded-sm" />
+                    </div>
+                );
+                break;
+            case 208: // Bookshelf (tall)
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 bg-amber-800 border-2 border-amber-950 flex flex-col justify-around p-0.5">
+                        <div className="flex gap-0.5">
+                            <div className="flex-1 h-2 bg-red-700" />
+                            <div className="flex-1 h-2 bg-blue-700" />
+                            <div className="flex-1 h-2 bg-green-700" />
+                        </div>
+                        <div className="flex gap-0.5">
+                            <div className="flex-1 h-2 bg-purple-700" />
+                            <div className="flex-1 h-2 bg-yellow-700" />
+                            <div className="flex-1 h-2 bg-pink-700" />
+                        </div>
+                        <div className="flex gap-0.5">
+                            <div className="flex-1 h-2 bg-slate-600" />
+                            <div className="flex-1 h-2 bg-emerald-700" />
+                            <div className="flex-1 h-2 bg-orange-700" />
+                        </div>
+                    </div>
+                );
+                break;
+            case 209: // Red rug (walkable decor)
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-1 bg-gradient-to-br from-red-600 to-red-800 border-2 border-red-900 rounded-sm shadow-inner opacity-90" />
+                );
+                break;
+            case 210: // Blue rug (walkable decor)
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-1 bg-gradient-to-br from-blue-600 to-blue-800 border-2 border-blue-900 rounded-sm shadow-inner opacity-90" />
+                );
+                break;
+            case 211: // Potted plant (decor)
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 flex items-end justify-center">
+                        <div className="w-3 h-2 bg-amber-700 border border-amber-900 rounded-sm" />
+                        <div className="absolute bottom-2 w-4 h-3 bg-green-600 rounded-full shadow-sm" />
+                    </div>
+                );
+                break;
+            case 212: // Interior window
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-0 bg-sky-800 border-t-4 border-amber-900 flex items-center justify-center">
+                        <div className="w-3/4 h-3/4 bg-gradient-to-b from-sky-300 to-sky-500 border-2 border-sky-900 relative">
+                            <div className="absolute inset-x-0 top-1/2 h-0.5 bg-amber-900" />
+                            <div className="absolute inset-y-0 left-1/2 w-0.5 bg-amber-900" />
+                        </div>
+                    </div>
+                );
+                break;
+            // -- Gym puzzle tiles ------------------------------------------
+            // 213 Switch A (yellow). Stepping on it toggles 214<->215 in the
+            //     same map. Visually a yellow pressure plate with a cross of
+            //     dim metal on top so the player reads "I should stand here".
+            case 213:
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-1 bg-gradient-to-br from-yellow-300 to-yellow-600 border-2 border-yellow-800 rounded-md shadow-inner flex items-center justify-center">
+                        <div className="w-1/2 h-1/2 border-2 border-yellow-900 rounded-sm bg-yellow-200/40" />
+                    </div>
+                );
+                break;
+            // 214 Barrier A active (electric fence -- wall, blocks movement).
+            //     Animated bolts running between two posts so it screams
+            //     "danger, energised, do not touch".
+            case 214:
+                className += "tile-stone";
+                content = (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-full h-full bg-gradient-to-b from-yellow-200/30 via-yellow-400/50 to-yellow-200/30 border-y-4 border-yellow-600 relative overflow-hidden">
+                            <div className="absolute inset-y-0 left-0 w-1 bg-slate-700" />
+                            <div className="absolute inset-y-0 right-0 w-1 bg-slate-700" />
+                            <div className="absolute inset-0 animate-pulse">
+                                <div className="absolute inset-x-0 top-1/2 h-0.5 bg-yellow-100 shadow-[0_0_6px_rgba(250,204,21,0.9)]" />
+                            </div>
+                        </div>
+                    </div>
+                );
+                break;
+            // 215 Barrier A inactive (walkable). Faint outline of where the
+            //     barrier used to be, so the player gets visual feedback that
+            //     their switch press worked.
+            case 215:
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-2 border border-dashed border-yellow-600/40 opacity-60" />
+                );
+                break;
+            // 216 Teleport pad blue. Stepping on one warps the player to the
+            //     other tile of id 216 in the same map (or 217 for purple).
+            //     Pulsing rings make it obviously interactable.
+            case 216:
+                className += "tile-stone";
+                content = (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="absolute w-12 h-12 rounded-full border-4 border-cyan-300/60 animate-ping" />
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-300 to-blue-700 border-4 border-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.8)] flex items-center justify-center">
+                            <div className="text-white text-xl font-black">↯</div>
+                        </div>
+                    </div>
+                );
+                break;
+            // 217 Teleport pad purple (paired with the other 217).
+            case 217:
+                className += "tile-stone";
+                content = (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="absolute w-12 h-12 rounded-full border-4 border-fuchsia-300/60 animate-ping" />
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-fuchsia-300 to-purple-700 border-4 border-fuchsia-100 shadow-[0_0_12px_rgba(217,70,239,0.8)] flex items-center justify-center">
+                            <div className="text-white text-xl font-black">↯</div>
+                        </div>
+                    </div>
+                );
+                break;
+            // 218 Switch B (cyan). Toggles 219<->220 in the same map.
+            case 218:
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-1 bg-gradient-to-br from-cyan-300 to-cyan-600 border-2 border-cyan-800 rounded-md shadow-inner flex items-center justify-center">
+                        <div className="w-1/2 h-1/2 border-2 border-cyan-900 rounded-sm bg-cyan-200/40" />
+                    </div>
+                );
+                break;
+            // 219 Barrier B active.
+            case 219:
+                className += "tile-stone";
+                content = (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-full h-full bg-gradient-to-b from-cyan-200/30 via-cyan-400/50 to-cyan-200/30 border-y-4 border-cyan-600 relative overflow-hidden">
+                            <div className="absolute inset-y-0 left-0 w-1 bg-slate-700" />
+                            <div className="absolute inset-y-0 right-0 w-1 bg-slate-700" />
+                            <div className="absolute inset-0 animate-pulse">
+                                <div className="absolute inset-x-0 top-1/2 h-0.5 bg-cyan-100 shadow-[0_0_6px_rgba(34,211,238,0.9)]" />
+                            </div>
+                        </div>
+                    </div>
+                );
+                break;
+            // 220 Barrier B inactive.
+            case 220:
+                className += "tile-wood";
+                content = (
+                    <div className="absolute inset-2 border border-dashed border-cyan-600/40 opacity-60" />
+                );
+                break;
             case 65: 
                 className += "tile-stone"; 
                 content = (

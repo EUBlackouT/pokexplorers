@@ -6,6 +6,15 @@ export interface Item {
     price: number;
     icon: string;
     category: 'pokeball' | 'healing' | 'battle' | 'evolution' | 'key';
+    /** Override for the Mart sell price. When omitted the Mart computes
+     *  50% of `price`. Set this on items where the default is exploitable
+     *  (e.g. Rare Candy farming, classic 1g Master Ball) or thematically
+     *  wrong (rift-tier rewards selling for thousands of credits). */
+    sellPriceOverride?: number;
+    /** When true the item never appears in the Sell tab. Use this for
+     *  chase rewards (bounty-tier fusion gear) and items that would be
+     *  trivially exploitable if sold. */
+    unsellable?: boolean;
 }
 
 export const ITEMS: Record<string, Item> = {
@@ -39,7 +48,10 @@ export const ITEMS: Record<string, Item> = {
         description: 'The best Ball with the ultimate level of performance. It will catch any wild Pokémon without fail.',
         price: 50000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/masterball.png',
-        category: 'pokeball'
+        category: 'pokeball',
+        // Classic RBY: a Master Ball is given, never sold for cash. The
+        // economy would be wildly skewed by a 25,000g sale price.
+        sellPriceOverride: 1,
     },
     'potion': {
         id: 'potion',
@@ -465,7 +477,11 @@ export const ITEMS: Record<string, Item> = {
         description: 'A candy that is packed with energy. It raises the level of a single Pokémon by one.',
         price: 5000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/rarecandy.png',
-        category: 'healing'
+        category: 'healing',
+        // Block "buy candy at mart, sell for half = infinite levels" loop.
+        // Intentional 1g: still SELLABLE so the player can clear bag clutter
+        // without coding around an unsellable flag, but sale yields nothing.
+        sellPriceOverride: 1,
     },
     'full-heal': {
         id: 'full-heal',
@@ -902,7 +918,9 @@ export const ITEMS: Record<string, Item> = {
         description: 'A pulsing shard of rift-crystal. The holder charges the Sync Gauge 25% faster whenever it damages a foe.',
         price: 12000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/electirizer.png',
-        category: 'battle'
+        category: 'battle',
+        // Chase-tier reward: never appears in the Sell tab.
+        unsellable: true,
     },
     'chrono-prism': {
         id: 'chrono-prism',
@@ -910,7 +928,8 @@ export const ITEMS: Record<string, Item> = {
         description: 'An ancient lens that refracts time. Fusion moves used by the holder deal 25% more damage.',
         price: 15000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/griseousorb.png',
-        category: 'battle'
+        category: 'battle',
+        unsellable: true,
     },
     'dual-pendant': {
         id: 'dual-pendant',
@@ -918,7 +937,8 @@ export const ITEMS: Record<string, Item> = {
         description: 'A twin-locket amulet. On switch-in, if an ally shares a type with the holder, the Sync Gauge fills by 20 instantly.',
         price: 11000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/soothebell.png',
-        category: 'battle'
+        category: 'battle',
+        unsellable: true,
     },
     'link-crystal': {
         id: 'link-crystal',
@@ -926,7 +946,8 @@ export const ITEMS: Record<string, Item> = {
         description: 'A resonant crystal that syncs allied heartbeats. Once per battle, the holder\'s fusion move strikes with +1 priority.',
         price: 14000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/rainbowwing.png',
-        category: 'battle'
+        category: 'battle',
+        unsellable: true,
     },
     'harmony-bell': {
         id: 'harmony-bell',
@@ -934,7 +955,8 @@ export const ITEMS: Record<string, Item> = {
         description: 'A chiming bell forged in unison. When the holder uses a fusion move, their ally is healed for 25% of max HP.',
         price: 13000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/silverwing.png',
-        category: 'battle'
+        category: 'battle',
+        unsellable: true,
     },
     'rift-shard': {
         id: 'rift-shard',
@@ -942,6 +964,7 @@ export const ITEMS: Record<string, Item> = {
         description: 'A jagged fragment from beyond. The holder\'s Sync Gauge starts each battle with +20 charge.',
         price: 10000,
         icon: 'https://play.pokemonshowdown.com/sprites/itemicons/oddincense.png',
-        category: 'battle'
+        category: 'battle',
+        unsellable: true,
     }
 };
