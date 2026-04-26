@@ -76,11 +76,16 @@ export const PokemonStorage: React.FC<Props> = ({ player, onUpdate, onClose }) =
     const BOX_COLS = 6;
     const BOX_ROWS = BOX_SLOTS / BOX_COLS;
 
+    // Refresh the pending rename buffer when the user navigates boxes.
+    // We deliberately do NOT clear `selection` here -- the player should
+    // be able to pick up a Pokémon, hit `]` to a new box, and drop it.
+    // `boxes` is intentionally not in the dep list: it changes after any
+    // commit, which would clobber the rename buffer mid-edit.
     useEffect(() => {
         setPendingName(boxes[boxIdx]?.name ?? `Box ${boxIdx + 1}`);
         setRenaming(false);
-        setSelection(null);
-    }, [boxIdx, boxes]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [boxIdx]);
 
     // Resolve the cursor's current Selection target. Computed lazily so the
     // movement / commit handlers below stay readable.
@@ -101,6 +106,17 @@ export const PokemonStorage: React.FC<Props> = ({ player, onUpdate, onClose }) =
         const onKey = (e: KeyboardEvent) => {
             if (renaming) return;
             const k = e.key;
+            // Release-confirm modal: only Esc / Y / N respond. Anything else
+            // would feel like the cursor is moving behind the modal, which
+            // it kind of is (modal isn't a portal); arrow keys would scroll
+            // an invisible cursor under the dialog.
+            if (confirmRelease) {
+                if (k === 'Escape' || k === 'n' || k === 'N') {
+                    e.preventDefault();
+                    setConfirmRelease(false);
+                }
+                return;
+            }
             if (k === 'Escape' || k === 'q' || k === 'Q') {
                 e.preventDefault();
                 if (selection) { setSelection(null); return; }   // unstick first
@@ -157,7 +173,7 @@ export const PokemonStorage: React.FC<Props> = ({ player, onUpdate, onClose }) =
         // we deliberately don't re-bind on every keystroke to keep the
         // listener simple. The deps cover the values they actually read.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [renaming, boxes.length, boxIdx, cursor, selection, onClose]);
+    }, [renaming, confirmRelease, boxes.length, boxIdx, cursor, selection, onClose]);
 
     const partyCap = player.team.length;
 

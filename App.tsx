@@ -65,6 +65,8 @@ import { submitScore as submitExplorerScore, getSession as warmLeaderboardSessio
 import { BIOME_LORE } from './data/biomeLore';
 import { getHourlyMerchantChunk, getRoamingLegendary } from './utils/worldEvents';
 import { BattlePopupLayer } from './components/ui/BattlePopupLayer';
+import { BattleBuffFx } from './components/ui/BattleBuffFx';
+import { StatStageStrip } from './components/ui/StatStageStrip';
 import { popupAbility, popupStat, popupStatus, popupWeather, popupCrit, popupEffective, popupImmunity, popupItem, popupCustom } from './utils/battlePopupBus';
 import { writeSave, loadSave, hasSave, deleteSave, exportSaveToString, importSaveFromString, getLastSavedAt, formatSavedAt } from './utils/saveGame';
 import { EvolutionScene } from './components/screens/EvolutionScene';
@@ -94,6 +96,18 @@ import { TERA_TYPES, MEGA_ELIGIBLE, MEGA_ATK_MULT, MEGA_DEF_MULT, Z_DAMAGE_MULT 
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// True if `mapId` refers to a dynamically loaded map (chunk, interior,
+// puzzle) stored in `loadedChunks` rather than the static MAPS table.
+// Interiors and puzzles are placed into loadedChunks on entry by
+// handleMapMove's portal resolver; if we forget any prefix here, the
+// player gets stuck the moment they step onto that map type because
+// every `MAPS[mapId]` lookup returns undefined.
+const isDynamicMap = (mapId: string): boolean =>
+    mapId.startsWith('chunk_') || mapId.startsWith('interior:') || mapId.startsWith('puzzle_');
+
+const lookupMap = (mapId: string, loadedChunks: Record<string, any>): any =>
+    isDynamicMap(mapId) ? loadedChunks[mapId] : MAPS[mapId];
 
 /**
  * RIVAL MILESTONES ------------------------------------------------------
@@ -1355,12 +1369,7 @@ export default function App() {
       if (networkRole === 'client' && playerNum === 1) return; 
       const pos = playerNum === 1 ? playerState.position : playerState.p2Position;
       
-      let currentMap;
-      if (playerState.mapId.startsWith('chunk_')) {
-          currentMap = loadedChunks[playerState.mapId];
-      } else {
-          currentMap = MAPS[playerState.mapId];
-      }
+      const currentMap = lookupMap(playerState.mapId, loadedChunks);
       if (!currentMap) return;
 
       const checkDirs = [{x:0, y:0}, {x:0, y:-1}, {x:0, y:1}, {x:-1, y:0}, {x:1, y:0}];
@@ -2085,6 +2094,13 @@ export default function App() {
               currentMap = generateChunk(parseInt(cx), parseInt(cy), getKeystoneLevel(playerState.meta, 'rift_stability'));
               setLoadedChunks(prev => ({ ...prev, [currentMap.id]: currentMap }));
           }
+      } else if (playerState.mapId.startsWith('interior:') || playerState.mapId.startsWith('puzzle_')) {
+          // Dynamic interiors / puzzles live in loadedChunks; they're seeded
+          // by the portal resolver on entry. If they're not there it means
+          // the player teleported in via a save-load with a stale mapId, in
+          // which case we'd rather bail than crash -- the OVERWORLD effect
+          // hooks will rebuild on the next portal step.
+          currentMap = loadedChunks[playerState.mapId];
       } else {
           currentMap = MAPS[playerState.mapId];
       }
@@ -2871,12 +2887,7 @@ export default function App() {
           "Wild Encounter!";
       setBattleState(prev => ({ ...prev, phase: 'player_input', logs: [openingLog], isTrainerBattle: isTrainer, currentTrainerId: trainerData?.id, backgroundUrl: '', comboMeter: initialCombo }));
     try {
-      let currentMap;
-      if (playerState.mapId.startsWith('chunk_')) {
-          currentMap = loadedChunks[playerState.mapId];
-      } else {
-          currentMap = MAPS[playerState.mapId];
-      }
+      const currentMap = lookupMap(playerState.mapId, loadedChunks);
       if (!currentMap) return;
 
       const isMultiplayer = !!multiplayer.roomId;
@@ -3475,9 +3486,16 @@ export default function App() {
         return null;
     };
     const STAT_KEYWORD: Record<string, 'attack' | 'defense' | 'special-attack' | 'special-defense' | 'speed' | 'accuracy' | 'evasion'> = {
+        // Display labels (Pokemon-style title case + abbreviations)
         Attack: 'attack', Defense: 'defense', 'Sp. Atk': 'special-attack', 'Sp. Def': 'special-defense',
         'Special Attack': 'special-attack', 'Special Defense': 'special-defense',
         Speed: 'speed', Accuracy: 'accuracy', Evasion: 'evasion',
+        // Internal-name fallbacks (e.g. "Foil raised <name>'s special-attack!").
+        // Without these the parser misses any log line that interpolates the
+        // raw stat key, which a few ability sites still do. Bonus: if a future
+        // log reads "Speed boosted!" the lowercase "speed" still resolves.
+        attack: 'attack', defense: 'defense', 'special-attack': 'special-attack',
+        'special-defense': 'special-defense', speed: 'speed', accuracy: 'accuracy', evasion: 'evasion',
     };
     const STATUS_KEYWORD: Record<string, 'burn' | 'poison' | 'sleep' | 'freeze' | 'paralysis' | 'confusion'> = {
         burned: 'burn', poisoned: 'poison', 'fast asleep': 'sleep', asleep: 'sleep',
@@ -3520,6 +3538,25 @@ export default function App() {
                     if (w) {
                         const mag = m[2].startsWith('sharply') ? 2 : 1;
                         popupStat(w.side, w.slot, stat, m[2].endsWith('raised') ? mag : -mag);
+                    }
+                    return;
+                }
+            }
+            // "X's <Stat> rose/fell/sharply rose/harshly fell/sharply fell"
+            // This is the canonical form the central stat-change executor
+            // emits. We hook it directly at the source too, but the regex
+            // also catches the dozens of inline ability paths that mutate
+            // statStages and push their own "rose/fell" logs.
+            for (const [label, stat] of Object.entries(STAT_KEYWORD)) {
+                const re = new RegExp(`^([^']+?)'s ${label.replace(/\\./g, '\\\\.')} (sharply rose|harshly fell|sharply fell|rose|fell|rose drastically)\\s*[!.]?$`);
+                const m = line.match(re);
+                if (m) {
+                    const w = resolveMon(m[1].trim());
+                    if (w) {
+                        const verb = m[2];
+                        const up   = verb.includes('rose');
+                        const mag  = /(sharply|harshly|drastically)/.test(verb) ? 2 : 1;
+                        popupStat(w.side, w.slot, stat, up ? mag : -mag);
                     }
                     return;
                 }
@@ -6755,8 +6792,29 @@ export default function App() {
                                 }
 
                                 const oldVal = targetMon.statStages[stat] || 0;
-                                targetMon.statStages[stat] = Math.min(6, Math.max(-6, oldVal + sc.change));
-                                tempLogs.push(`${targetMon.name}'s ${stat} ${sc.change > 0 ? 'rose' : 'fell'}!`);
+                                const newVal = Math.min(6, Math.max(-6, oldVal + sc.change));
+                                const realDelta = newVal - oldVal;
+                                targetMon.statStages[stat] = newVal;
+                                // Pretty log line: at +/-6 cap, swap to "won't go any
+                                // higher" / "won't go any lower" so the player knows
+                                // why the stat didn't budge.
+                                if (realDelta === 0) {
+                                    tempLogs.push(
+                                        sc.change > 0
+                                            ? `${targetMon.name}'s ${stat} won't go any higher!`
+                                            : `${targetMon.name}'s ${stat} won't go any lower!`
+                                    );
+                                } else {
+                                    // Adverb on the verb so the regex parser
+                                    // in dispatchLogPopup knows whether to
+                                    // emit a +/-1 or +/-2 popup. The internal
+                                    // stat name (e.g. "special-attack") is now
+                                    // a recognized keyword too, so this single
+                                    // tempLogs.push triggers both the chip
+                                    // popup and the BattleBuffFx burst.
+                                    const adv = Math.abs(realDelta) >= 2 ? (realDelta > 0 ? 'sharply rose' : 'harshly fell') : (realDelta > 0 ? 'rose' : 'fell');
+                                    tempLogs.push(`${targetMon.name}'s ${stat} ${adv}!`);
+                                }
 
                                 // Eject Pack
                                 if (sc.change < 0 && targetMon.heldItem?.id === 'eject-pack') {
@@ -6799,7 +6857,14 @@ export default function App() {
                             }
                         });
                         if (sec.msg && !sec.weather && !sec.flinch && !sec.status) tempLogs.push(sec.msg);
-                        await syncState(500);
+                        // Stat-change events get a longer beat than other
+                        // secondary effects so the player has time to read
+                        // the buff burst (1.2s) and stat chip (2.2s) before
+                        // the next move animation fires. 900ms is the sweet
+                        // spot: the arrow pillar finishes its sweep, the
+                        // ground ring pulse completes, and the chip is still
+                        // visible when the next action begins.
+                        await syncState(900);
                     }
                 }
 
@@ -7959,12 +8024,7 @@ export default function App() {
         }
 
         if (battleState.currentTrainerId) {
-            let currentMap;
-            if (playerState.mapId.startsWith('chunk_')) {
-                currentMap = loadedChunks[playerState.mapId];
-            } else {
-                currentMap = MAPS[playerState.mapId];
-            }
+            const currentMap = lookupMap(playerState.mapId, loadedChunks);
             
             // Rival milestone trainers don't live in any map -- they're
             // synthesized by buildRivalTrainer() on demand. Detect them
@@ -8668,9 +8728,7 @@ export default function App() {
   // lazily as the player explores).
   useEffect(() => {
       if (phase !== GamePhase.OVERWORLD) return;
-      const map = playerState.mapId.startsWith('chunk_')
-          ? loadedChunks[playerState.mapId]
-          : MAPS[playerState.mapId];
+      const map = lookupMap(playerState.mapId, loadedChunks);
       const biome = map?.biome;
       if (!biome) return;
       const url = getStaticBackground(biome);
@@ -9976,6 +10034,7 @@ export default function App() {
                                         'bg-green-600/60 border-green-400/80'}`}
                                   />
                                   <PokemonSprite pokemon={mon} isTargetable={isTargeting} onSelect={() => handleTargetSelect(i)} />
+                                  <BattleBuffFx side="enemy" slot={i as 0 | 1} />
                                   <BattlePopupLayer side="enemy" slot={i as 0 | 1} />
                                   <AnimatePresence>
                                       {battleState.vfx && battleState.vfx.target === 'enemy' && battleState.vfx.index === i && (
@@ -9992,6 +10051,7 @@ export default function App() {
                                 level={mon.level} 
                                 status={mon.status} 
                               />
+                              <StatStageStrip stages={mon.statStages} align="left" />
                           </div>
                       ))}
                   </div>
@@ -10041,6 +10101,7 @@ export default function App() {
                                       />
                                   )}
                                   <PokemonSprite pokemon={mon} isBack />
+                                  <BattleBuffFx side="player" slot={i as 0 | 1} />
                                   <BattlePopupLayer side="player" slot={i as 0 | 1} />
                                   <AnimatePresence>
                                       {battleState.vfx && battleState.vfx.target === 'player' && battleState.vfx.index === i && (
@@ -10059,6 +10120,7 @@ export default function App() {
                                 maxXp={mon.maxXp} 
                                 status={mon.status} 
                               />
+                              <StatStageStrip stages={mon.statStages} align="left" />
                           </div>
                       ))}
                   </div>

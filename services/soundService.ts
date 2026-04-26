@@ -741,6 +741,34 @@ export const playMoveClickSfx = () => {
 };
 
 /**
+ * Stat-rise / stat-fall cues. Used by the battle popup layer when a stat
+ * change resolves so the player gets an audible confirmation in addition
+ * to the visual buff burst. The procedural fallbacks are a rising or
+ * falling 3-tone arpeggio so even with the canned sample missing, the
+ * pitch direction telegraphs which way the stat moved. Magnitude (1 vs 2)
+ * is conveyed by playing two stacked rises on a "sharply" change.
+ */
+export const playStatUpSfx = (sharply: boolean = false): void => {
+    playSample(PBR_SAMPLES.statUp, sharply ? 0.7 : 0.55, () => {
+        const ctx = initAudio();
+        if (!ctx || ctx.state !== 'running') return;
+        const v = getSfxVolume() * 0.28;
+        const tones = sharply ? [392, 523.25, 659.25, 783.99, 987.77] : [523.25, 659.25, 783.99];
+        tones.forEach((f, i) => playTone(ctx, 'triangle', f, f, 0.13, v, i * 0.06));
+    });
+};
+
+export const playStatDownSfx = (sharply: boolean = false): void => {
+    playSample(PBR_SAMPLES.statDown, sharply ? 0.7 : 0.55, () => {
+        const ctx = initAudio();
+        if (!ctx || ctx.state !== 'running') return;
+        const v = getSfxVolume() * 0.28;
+        const tones = sharply ? [659.25, 523.25, 415.30, 329.63, 261.63] : [523.25, 415.30, 329.63];
+        tones.forEach((f, i) => playTone(ctx, 'triangle', f, f, 0.16, v, i * 0.07));
+    });
+};
+
+/**
  * Eagerly prefetch the most common gameplay samples so the first time they're
  * needed, they're already in cache. Called on audio unlock.
  */
