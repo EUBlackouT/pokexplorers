@@ -1,0 +1,62 @@
+# Render Blueprint for Pokemon Explorers.
+#
+# To deploy:
+#   1. Push this file to your GitHub repo (already done if you see it on main).
+#   2. Go to https://dashboard.render.com/blueprints -> New Blueprint Instance.
+#   3. Pick the EUBlackouT/pokexplorers repo and click Apply.
+#
+# That's it -- Render reads everything from this file. No copy/paste from the
+# dashboard. Updates to this file are picked up on the next blueprint sync.
+#
+# Free tier notes:
+#   - 512 MB RAM, sleeps after 15 min of no traffic. First request after sleep
+#     takes ~30-60s to spin back up. Fine for "show friends" demos. If you
+#     want always-on, change `plan: free` to `plan: starter` ($7/mo).
+#   - Disk is ephemeral on free tier -- the leaderboard JSON file resets on
+#     every restart. Acceptable for now; revisit if you want persistent
+#     leaderboards (Render Postgres or Firestore-backed storage).
+#   - WebSockets work on free tier so Socket.io is fine (currently unused
+#     by the client, multiplayer state goes through Firestore).
+services:
+  - type: web
+    name: pokexplorers
+    runtime: node
+    plan: free
+    region: frankfurt           # closest to EU; change to oregon/singapore if friends are elsewhere
+    branch: main
+    autoDeploy: true            # redeploy automatically when main is pushed
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0          # matches local dev; tsx 4.x + vite 6 want >=20
+      - key: NODE_ENV
+        value: production
+      # Optional: uncomment + set in dashboard if you ever want your OWN
+      # Firebase project (room codes / leaderboard isolated from the public
+      # AI Studio one). Leave commented to use the bundled config.
+      # - key: VITE_FIREBASE_API_KEY
+      #   sync: false
+      # - key: VITE_FIREBASE_AUTH_DOMAIN
+      #   sync: false
+      # - key: VITE_FIREBASE_PROJECT_ID
+      #   sync: false
+      # - key: VITE_FIREBASE_APP_ID
+      #   sync: false
+      # - key: VITE_FIREBASE_STORAGE_BUCKET
+      #   sync: false
+      # - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+      #   sync: false
+      # - key: VITE_FIREBASE_FIRESTORE_DB_ID
+      #   sync: false
+      # Optional: AI-generated battle backgrounds (server-side Gemini call).
+      # Leave commented if you don't have a key -- the game falls back to
+      # bundled CSS gradients per biome.
+      # - key: GEMINI_API_KEY
+      #   sync: false
+      # Optional: extra entropy for leaderboard journal HMAC. If not set
+      # the service uses a default constant -- fine for solo/friend play,
+      # rotate before going public.
+      # - key: LEADERBOARD_JOURNAL_SECRET
+      #   sync: false
