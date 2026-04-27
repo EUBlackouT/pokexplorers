@@ -476,6 +476,12 @@ export enum GamePhase {
    *  PC terminal inside a Pokemon Center, or via the Pause Menu Items tab.
    *  Players can deposit, withdraw, swap, release and rename boxes. */
   POKEMON_STORAGE = 'POKEMON_STORAGE',
+  /** Trainer's Handbook -- the in-game tutorial / encyclopedia. Lives off
+   *  the main menu and opens a master-detail compendium that explains
+   *  every system in the game (controls, loop, battles, catching, the
+   *  Trainer Bond, Rift Atelier, multiplayer, tips). Read-only screen,
+   *  no save mutation. */
+  FIELD_GUIDE = 'FIELD_GUIDE',
 }
 
 // ---------------------------------------------------------------------------
@@ -609,6 +615,14 @@ export interface RunConstraints {
     maxDistanceReached: number; // For milestones
     badgesEarned: number;
     perks: string[];
+    /** Trainer Bond: temporary stacking buff that incentivises engaging
+     *  trainers in the overworld. Stacks gain +8% XP / +8% money / +5pp
+     *  held-item drop chance per pip. Decays 1 stack every TRAINER_BOND_
+     *  DECAY_DISTANCE chunks of total distance traveled without another
+     *  trainer fight; wipes to 0 on a run-ending defeat. Max 10 stacks
+     *  (so +80% XP / +80% money). Optional so old saves load cleanly --
+     *  treated as { stacks: 0, lastFightDistance: 0 } when missing. */
+    trainerBond?: { stacks: number; lastFightDistance: number };
 }
 
 export interface PlayerGlobalState {

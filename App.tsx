@@ -36,6 +36,7 @@ import { PokemonSprite } from './components/PokemonSprite';
 import { StarterSelect } from './components/StarterSelect';
 import { Overworld } from './components/Overworld';
 import { CatchComboBadge } from './components/ui/CatchComboBadge';
+import { TrainerBondBadge } from './components/ui/TrainerBondBadge';
 import { BountyBoard } from './components/screens/BountyBoard';
 import { ActionButton } from './components/ui/ActionButton';
 import { MoveButton } from './components/ui/MoveButton';
@@ -53,6 +54,7 @@ import { ShopMenu } from './components/screens/ShopMenu';
 import { DialogueBox } from './components/ui/DialogueBox';
 import { PokemonStorage, makeEmptyBoxes, DEFAULT_BOX_COUNT } from './components/screens/PokemonStorage';
 import { MetaMenu } from './components/screens/MetaMenu';
+import { FieldGuide } from './components/screens/FieldGuide';
 import { PokemonSummary } from './components/screens/PokemonSummary';
 import { PauseMenu } from './components/screens/PauseMenu';
 import { MAIN_QUESTS } from './data/quests';
@@ -267,6 +269,10 @@ export default function App() {
   const [loadedChunks, setLoadedChunks] = useState<Record<string, any>>({});
   const [isPaused, setIsPaused] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  // Trainer's Handbook overlay -- modal-style so players can read it
+  // mid-run from the pause menu without resetting position or losing
+  // any battle state.
+  const [showFieldGuide, setShowFieldGuide] = useState(false);
   // Transient "battle is ending" overlay flag. Set right before we leave a
   // battle to OVERWORLD so the whole arena can fade out instead of
   // popping. Auto-cleared on the next overworld frame.
@@ -6132,7 +6138,12 @@ export default function App() {
                         const streakBonus = 1 + Math.min(1, battleState.battleStreak * 0.1);
                         let itemXpMult = 1;
                         if (actor.heldItem?.id === 'lucky-egg') itemXpMult = 1.5;
-                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * purse_xpMult(playerState.meta) * itemXpMult * getDailyEvent().xpMult);
+                        // Trainer Bond XP multiplier: +8% per pip, max +80%.
+                        // Applies to BOTH wild and trainer KOs because the
+                        // bond is meant to feel like a "veteran" buff that
+                        // carries through any battle until decay catches up.
+                        const bondXpMult = 1 + (playerState.run.trainerBond?.stacks ?? 0) * 0.08;
+                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * purse_xpMult(playerState.meta) * itemXpMult * bondXpMult * getDailyEvent().xpMult);
                         const playerLevelCap = getPlayerLevelCap(playerState.badges);
                         const avgLevel = playerState.team.reduce((a, b) => a + b.level, 0) / playerState.team.length;
                         const r = await gainExperience(actor, xpGain, playerLevelCap, avgLevel);
@@ -8044,7 +8055,11 @@ export default function App() {
         // Expressed here in legacy "lootQuality level" units so the rest
         // of this function doesn't need to change its thresholds.
         const lootQuality = getKeystoneLevel(playerState.meta, 'scavenger_cache');
-        const dropChance = 0.2 + (newStreak * 0.05) + (lootQuality * 0.1); // Scavenger upgrade increases drop chance
+        // Trainer Bond pads the drop chance by +5pp per pip (max +50pp at
+        // 10 stacks). Reads PRE-increment via playerState so the bond
+        // bumped by *this* victory is rewarded next fight, not retroactively.
+        const bondDropBonus = (playerState.run.trainerBond?.stacks ?? 0) * 0.05;
+        const dropChance = 0.2 + (newStreak * 0.05) + (lootQuality * 0.1) + bondDropBonus;
         if (Math.random() < dropChance) {
             const pool = ['poke-ball', 'great-ball', 'potion', 'super-potion', 'revive', 'rare-candy'];
             if (newStreak >= 5 || lootQuality >= 1) pool.push('ultra-ball', 'hyper-potion', 'full-restore');
@@ -8148,7 +8163,14 @@ export default function App() {
             const baseMoney = isGymLeader ? 2000 : 500;
             let moneyMult = 1;
             if (survivingTeam.some(p => p.heldItem?.id === 'amulet-coin')) moneyMult = 2;
-            const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult * getDailyEvent().moneyMult);
+            // Trainer Bond multiplier (read PRE-increment so the bonus
+            // applies to *this* fight, not future fights). Each pip is
+            // worth +8% money; max 10 pips => +80%. Stacks decay over
+            // distance in the chunk-traversal effect; full design lives
+            // in the run.trainerBond comment in types.ts.
+            const bondPre = playerState.run.trainerBond?.stacks ?? 0;
+            const bondMoneyMult = 1 + bondPre * 0.08;
+            const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult * bondMoneyMult * getDailyEvent().moneyMult);
 
             // Victory Heal: normally +25% on win. Suppress entirely when
             // chaining a gauntlet -- the whole point of a "two trainers
@@ -8242,7 +8264,20 @@ export default function App() {
                     },
                     run: {
                         ...prev.run,
-                        capturePermits: prev.run.capturePermits + permitsEarned
+                        capturePermits: prev.run.capturePermits + permitsEarned,
+                        // Trainer Bond increment. Capped at 10. Stamp the
+                        // current distance so the decay effect can clear
+                        // stale stacks if the player wanders without
+                        // engaging another trainer. Gauntlet chains
+                        // count as a single bond bump (the player only
+                        // *chose* one engagement) -- partner battles are
+                        // automatic.
+                        trainerBond: chainingGauntlet
+                            ? prev.run.trainerBond
+                            : {
+                                stacks: Math.min(10, (prev.run.trainerBond?.stacks ?? 0) + 1),
+                                lastFightDistance: prev.run.maxDistanceReached,
+                            },
                     },
                     lifetime: {
                         ...lt,
@@ -8255,12 +8290,27 @@ export default function App() {
                 };
             });
             
+            // Trainer Bond messaging. Read the POST-bump value so the
+            // player sees the new total (e.g. "Trainer Bond x3 -> +24%").
+            const newBondStacks = chainingGauntlet
+                ? (playerState.run.trainerBond?.stacks ?? 0)
+                : Math.min(10, (playerState.run.trainerBond?.stacks ?? 0) + 1);
+            const bondMsg = !chainingGauntlet && newBondStacks > 0
+                ? `Trainer Bond x${newBondStacks} -> +${newBondStacks * 8}% XP & cash!`
+                : null;
+            // Toast on reaching big breakpoints so the bonus feels real.
+            if (!chainingGauntlet) {
+                if (newBondStacks === 5) showToast('Trainer Bond MAX TIER! +40% XP & loot.', 'reward', { kicker: 'Bond' });
+                else if (newBondStacks === 10) showToast('Trainer Bond LEGENDARY! +80% XP & loot.', 'reward', { kicker: 'Bond' });
+            }
+
             const victoryMsgs = isGymLeader ?
                 [
                     "Gym Leader defeated!",
                     "You earned a Badge!",
                     "You received 2 Capture Permits!",
                     `Gained ${essenceEarned} Rift Essence + ${TOKEN_AWARDS.gymLeader} Rift Tokens!`,
+                    ...(bondMsg ? [bondMsg] : []),
                     "Your team was partially healed!"
                 ] :
                 isRival && rivalMilestone ?
@@ -8278,7 +8328,13 @@ export default function App() {
                         `${trainer?.name ?? 'Trainer'} defeated! You got ${finalMoney}.`,
                         `${gauntletNext!.name} steps forward -- no rest, no heal!`,
                     ] :
-                    [`Trainer defeated! You got ${finalMoney}.`, "You received a Capture Permit!", "Gained 1 Rift Essence!", "Your team was partially healed!"];
+                    [
+                        `Trainer defeated! You got ${finalMoney}.`,
+                        "You received a Capture Permit!",
+                        "Gained 1 Rift Essence!",
+                        ...(bondMsg ? [bondMsg] : []),
+                        "Your team was partially healed!"
+                    ];
 
             if (loot.length > 0) {
                 if (chainingGauntlet) {
@@ -9170,6 +9226,43 @@ export default function App() {
     }
   }, [riftLayout, caveLayouts]);
 
+  // -- Trainer Bond decay --------------------------------------------------
+  // The bond builds from trainer victories (+1 pip per fight, max 10) and
+  // grants +8% XP / +8% money / +5pp held-item drop chance per pip. To
+  // keep it from being a permanent freebie, pips decay as the player
+  // walks away without engaging more trainers: every 4 chunks of new
+  // distance burns one pip, anchored to the lastFightDistance stamp set
+  // when the bond was last bumped. The "carrot" framing the user asked
+  // for (don't punish the player, just reward engagement) means we never
+  // touch HP, money, or capture rates on decay -- you just stop earning
+  // the bonus.
+  useEffect(() => {
+    const TRAINER_BOND_DECAY_DISTANCE = 4;
+    const bond = playerState.run.trainerBond;
+    if (!bond || bond.stacks <= 0) return;
+    const dist = playerState.run.maxDistanceReached;
+    const drift = dist - bond.lastFightDistance;
+    if (drift < TRAINER_BOND_DECAY_DISTANCE) return;
+    const decay = Math.floor(drift / TRAINER_BOND_DECAY_DISTANCE);
+    if (decay <= 0) return;
+    const newStacks = Math.max(0, bond.stacks - decay);
+    setPlayerState(prev => ({
+        ...prev,
+        run: {
+            ...prev.run,
+            trainerBond: {
+                stacks: newStacks,
+                // Re-anchor the timer so the next pip decays after another
+                // full DECAY_DISTANCE chunks rather than instantly.
+                lastFightDistance: bond.lastFightDistance + decay * TRAINER_BOND_DECAY_DISTANCE,
+            },
+        },
+    }));
+    if (newStacks === 0 && bond.stacks > 0) {
+        showToast('Trainer Bond faded. Beat a trainer to rebuild it.', 'info', { ttl: 4000 });
+    }
+  }, [playerState.run.maxDistanceReached]);
+
   // -- Box sync (multiplayer) ------------------------------------------------
   // The PC boxes are the foundation for any future PC-to-PC trade feature.
   // We broadcast the full box payload ONCE per change (with a 600ms debounce
@@ -9355,6 +9448,12 @@ export default function App() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (phase !== GamePhase.OVERWORLD) return;
+      // The Trainer's Handbook can be opened from the pause menu without
+      // tearing down the overworld phase. While it's up the guide owns
+      // the keyboard (its own arrow / number / Esc handler) -- so bail
+      // out here so we don't double-handle keys (e.g. an arrow key
+      // navigating sections also stepping the player one tile).
+      if (showFieldGuide) return;
 
       // Track Shift so the sprite sheet / tween / debounce all
       // agree on cadence. `repeat` filter prevents stomping the
@@ -9454,7 +9553,7 @@ export default function App() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [phase, playerState, networkRole, isPaused, dialogue]);
+  }, [phase, playerState, networkRole, isPaused, dialogue, showFieldGuide]);
 
   useEffect(() => { if (battleState.phase === 'execution' && (networkRole === 'none' || networkRole === 'host')) executeTurn(); }, [battleState.phase]);
 
@@ -9671,6 +9770,26 @@ export default function App() {
                         </span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
                     </button>
+
+                    {/* Trainer's Handbook -- the in-game tutorial / encyclopedia.
+                     *  Smaller than the headline buttons (Adventure / Atelier /
+                     *  Join) so it reads as a "side door" rather than a main
+                     *  action, but pulled forward for new players via the NEW!
+                     *  badge that only appears when there's no existing save. */}
+                    <button
+                        onClick={() => { unlockAudio(); setPhase(GamePhase.FIELD_GUIDE); }}
+                        className="group relative bg-cyan-600/90 hover:bg-cyan-500 px-6 py-4 rounded-2xl text-base border-b-8 border-cyan-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(8,145,178,0.3)]"
+                    >
+                        <span className="relative z-10 flex items-center justify-center gap-3">
+                            <span className="text-xl">📖</span> How To Play
+                        </span>
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                        {!hasExistingSave && (
+                            <div className="absolute -top-2 -right-2 bg-emerald-400 text-black text-[10px] px-3 py-1.5 rounded-full animate-bounce font-black shadow-lg border-2 border-black">
+                                NEW! START HERE
+                            </div>
+                        )}
+                    </button>
                 </div>
 
                 <div className="absolute bottom-8 flex flex-col items-center gap-4">
@@ -9694,6 +9813,7 @@ export default function App() {
         );
 
         if (phase === GamePhase.META_MENU) return <MetaMenu state={playerState} setState={setPlayerState} onBack={() => setPhase(GamePhase.MENU)} />;
+        if (phase === GamePhase.FIELD_GUIDE) return <FieldGuide onBack={() => setPhase(GamePhase.MENU)} />;
         if (phase === GamePhase.PERK_SELECT) return <PerkSelect onSelect={(perk) => {
             setPlayerState(prev => ({
                 ...prev,
@@ -9814,7 +9934,11 @@ export default function App() {
                         onDeleteSave={handleDeleteSave}
                         lastSavedAt={lastSavedAt}
                         onOpenStorage={() => { setIsPaused(false); setPhase(GamePhase.POKEMON_STORAGE); }}
+                        onOpenGuide={() => { setIsPaused(false); setShowFieldGuide(true); }}
                    />}
+                   {showFieldGuide && (
+                       <FieldGuide onBack={() => setShowFieldGuide(false)} />
+                   )}
                    {showLeaderboard && (
                        <LeaderboardScreen
                            inputs={{
@@ -9923,6 +10047,7 @@ export default function App() {
                     isRunning={isRunning}
                 />
                 <CatchComboBadge combo={playerState.catchCombo} />
+                <TrainerBondBadge bond={playerState.run.trainerBond} currentDistance={playerState.run.maxDistanceReached} />
                 {battleChallenge && (
                     <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[100] p-4">
                         <div className="bg-blue-900 border-4 border-blue-400 p-8 rounded-2xl text-center max-w-sm shadow-2xl animate-in zoom-in duration-300">

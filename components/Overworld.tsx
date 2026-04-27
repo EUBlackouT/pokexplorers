@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Coordinate, Chunk } from '../types';
 import { MAPS, generateChunk, CHUNK_SIZE, getGrassAura, type GrassAura } from '../services/mapData';
+import { resolveInterior, type InteriorKind } from '../services/interiors';
 import { BiomeAmbient } from './ui/BiomeAmbient';
 
 // ---------------------------------------------------------------
@@ -356,8 +357,37 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             const [,cx,cy] = mapId.split('_');
             currentMap = generateChunk(parseInt(cx), parseInt(cy), 0);
         }
+    } else if (mapId.startsWith('interior:') || mapId.startsWith('puzzle_')) {
+        // Interiors (Pokemon Centers, Marts, Houses, Gyms) and procedural
+        // puzzles are materialized lazily into `loadedChunks` by App.tsx's
+        // portal handler -- they don't live in the static MAPS dict.
+        currentMap = loadedChunks[mapId] || MAPS[mapId];
+
+        // Robustness: if we still don't have the interior (multiplayer
+        // client whose host hasn't synced it; or save file from before
+        // this fix landed; or a hypothetical future LRU eviction), rebuild
+        // it on the fly from the seed embedded in the mapId. The seed IS
+        // the interior's identity, so resolveInterior() is deterministic
+        // and the resulting MapZone matches what the host produced. This
+        // is what eliminates the "Map Error: interior:center:c_X_Y_..."
+        // crash the user hit walking into a far Pokemon Center.
+        if (!currentMap && mapId.startsWith('interior:')) {
+            const [, kindStr, seedAndCoords] = mapId.split(':');
+            const seed = (seedAndCoords || '').split(',')[0];
+            const kind = kindStr as InteriorKind;
+            if (kind === 'center' || kind === 'mart' || kind === 'house' || kind === 'gym') {
+                // returnTo is unused for in-Overworld rendering (door
+                // mat exits go through PREV_POS resolution in App.tsx),
+                // so a placeholder is fine here.
+                try {
+                    currentMap = resolveInterior(kind, seed, 'chunk_0_0,9,9', []);
+                } catch (err) {
+                    console.error('[Overworld] Failed to rebuild interior for', mapId, err);
+                }
+            }
+        }
     } else {
-        currentMap = MAPS[mapId];
+        currentMap = MAPS[mapId] || loadedChunks[mapId];
     }
 
     const layout = currentMap ? (customLayout || currentMap.layout) : null;

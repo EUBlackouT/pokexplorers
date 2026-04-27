@@ -87,7 +87,12 @@ export const PauseMenu: React.FC<{
      *  Pokemon without finding a Center. Useful in the field but it's
      *  optional so callers that don't pass it just hide the button. */
     onOpenStorage?: () => void;
-}> = ({ onClose, state, onSwap, onGiveItem, onSyncToCap, onApplyRelearn, onOpenLeaderboard, onSave, onExportSave, onImportSave, onDeleteSave, lastSavedAt, onOpenStorage }) => {
+    /** Optional: opens the Trainer's Handbook (FieldGuide) overlay. Mounted
+     *  as a top-level modal in App.tsx so the pause menu doesn't need to
+     *  embed the entire guide; when this is wired we render a "Help"
+     *  shortcut tile on the home tab. */
+    onOpenGuide?: () => void;
+}> = ({ onClose, state, onSwap, onGiveItem, onSyncToCap, onApplyRelearn, onOpenLeaderboard, onSave, onExportSave, onImportSave, onDeleteSave, lastSavedAt, onOpenStorage, onOpenGuide }) => {
     const [selectedMon, setSelectedMon] = useState<Pokemon | null>(null);
     const [activeTab, setActiveTab] = useState<TabId>('party');
     const [showRelearner, setShowRelearner] = useState(false);
@@ -254,6 +259,13 @@ export const PauseMenu: React.FC<{
                         <PillButton onClick={onOpenLeaderboard} color="indigo" fullSpan>
                             <span className="flex items-center justify-center gap-2">
                                 <span>★</span> Explorer Leaderboard <span>★</span>
+                            </span>
+                        </PillButton>
+                    )}
+                    {onOpenGuide && (
+                        <PillButton onClick={onOpenGuide} color="cyan" fullSpan>
+                            <span className="flex items-center justify-center gap-2">
+                                📖 Trainer's Handbook · How To Play
                             </span>
                         </PillButton>
                     )}
@@ -444,6 +456,11 @@ export const PauseMenu: React.FC<{
                                         <ResourceTile label="Potions" value={state.inventory.potions} accent="#60a5fa" />
                                         <ResourceTile label="Revives" value={state.inventory.revives ?? 0} accent="#f472b6" />
                                         <ResourceTile label="Rare Candy" value={state.inventory.rare_candy ?? 0} accent="#c084fc" />
+                                        <ResourceTile
+                                            label={`Trainer Bond ${state.run.trainerBond?.stacks ? `(+${(state.run.trainerBond.stacks * 8)}% XP/$)` : ''}`}
+                                            value={state.run.trainerBond?.stacks ?? 0}
+                                            accent="#fbbf24"
+                                        />
                                     </div>
 
                                     {/* Grouped items */}
