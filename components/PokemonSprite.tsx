@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Pokemon } from '../types';
 
 interface Props {
@@ -127,8 +128,50 @@ export const PokemonSprite: React.FC<Props> = ({ pokemon, isBack, isTargetable, 
         : "w-28 h-28 md:w-44 md:h-44 [@media(min-height:720px)]:md:w-52 [@media(min-height:720px)]:md:h-52 [@media(min-height:900px)]:md:w-56 [@media(min-height:900px)]:md:h-56") 
     : "w-32 h-32 md:w-48 md:h-48");
 
-  if (pokemon.isFainted) {
+  // Graceful faint animation -- mainline Pokemon style. The sprite slumps
+  // down (drops by ~70% of its height), greys out, fades, and then the
+  // slot becomes empty. We track the previous isFainted with a ref so we
+  // can play the cinematic exactly ONCE on the transition; subsequent
+  // renders keep the slot empty.
+  const faintedRef = useRef<boolean>(pokemon.isFainted);
+  const [faintAnimDone, setFaintAnimDone] = useState<boolean>(pokemon.isFainted);
+  useEffect(() => {
+      if (pokemon.isFainted && !faintedRef.current) {
+          faintedRef.current = true;
+          setFaintAnimDone(false);
+          const t = setTimeout(() => setFaintAnimDone(true), 750);
+          return () => clearTimeout(t);
+      }
+      if (!pokemon.isFainted) {
+          faintedRef.current = false;
+          setFaintAnimDone(false);
+      }
+  }, [pokemon.isFainted]);
+
+  if (pokemon.isFainted && faintAnimDone) {
       return <div className={containerClass}></div>;
+  }
+
+  if (pokemon.isFainted && !faintAnimDone) {
+      return (
+          <AnimatePresence>
+              <motion.div
+                  key="faint-anim"
+                  initial={{ y: 0, opacity: 1, filter: 'grayscale(0%) brightness(1)' }}
+                  animate={{ y: '70%', opacity: 0, filter: 'grayscale(100%) brightness(0.4)' }}
+                  transition={{ duration: 0.7, ease: 'easeIn' }}
+                  className={`relative flex ${isBattle ? 'items-end' : 'items-center'} justify-center ${containerClass}`}
+              >
+                  {!imgError && currentSrc && (
+                      <img
+                          src={currentSrc}
+                          alt={pokemon.name}
+                          className={`w-full h-full object-contain ${!is3D ? 'pixel-art' : ''} drop-shadow-2xl ${isBattle ? 'object-bottom origin-bottom' : 'object-center'}`}
+                      />
+                  )}
+              </motion.div>
+          </AnimatePresence>
+      );
   }
 
   return (

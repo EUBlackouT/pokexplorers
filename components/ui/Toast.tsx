@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 
-export type ToastTier = 'info' | 'reward' | 'story';
+export type ToastTier = 'info' | 'reward' | 'story' | 'warning' | 'danger';
 
 export interface ToastEntry {
     id: number;
@@ -17,6 +17,8 @@ const TIER_DEFAULT_TTL: Record<ToastTier, number> = {
     info: 1800,
     reward: 2600,
     story: 3200,
+    warning: 3000,
+    danger: 3800,
 };
 
 const TIER_STYLES: Record<ToastTier, { bg: string; border: string; accent: string; icon: string }> = {
@@ -38,6 +40,21 @@ const TIER_STYLES: Record<ToastTier, { bg: string; border: string; accent: strin
         accent: 'text-purple-200',
         icon: '◆',
     },
+    // Warning & danger tiers were referenced from App.tsx (gauntlet,
+    // rival, recovery paths) but never defined here, so TIER_STYLES
+    // returned undefined and ToastItem crashed reading `style.bg`.
+    warning: {
+        bg: 'bg-gradient-to-br from-amber-700/90 to-orange-900/90',
+        border: 'border-amber-400/70',
+        accent: 'text-amber-100',
+        icon: '⚠',
+    },
+    danger: {
+        bg: 'bg-gradient-to-br from-rose-900/95 to-red-800/90',
+        border: 'border-rose-400/70',
+        accent: 'text-rose-100',
+        icon: '⚡',
+    },
 };
 
 /** Used by consumers to mount a toast on-demand. */
@@ -55,8 +72,12 @@ export const makeToast = (
 
 const ToastItem: React.FC<{ toast: ToastEntry; onExpire: (id: number) => void }> = ({ toast, onExpire }) => {
     const { tier } = toast;
-    const ttl = toast.ttl ?? TIER_DEFAULT_TTL[tier];
-    const style = TIER_STYLES[tier];
+    // Defensive default: any unknown tier (older save files, future
+    // typos, multiplayer payloads from a mismatched client) falls back
+    // to 'info' instead of crashing the toast layer.
+    const safeTier: ToastTier = (TIER_STYLES as any)[tier] ? tier : 'info';
+    const ttl = toast.ttl ?? TIER_DEFAULT_TTL[safeTier];
+    const style = TIER_STYLES[safeTier];
     useEffect(() => {
         const t = setTimeout(() => onExpire(toast.id), ttl);
         return () => clearTimeout(t);

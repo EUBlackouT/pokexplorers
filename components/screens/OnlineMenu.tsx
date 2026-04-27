@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { multiplayer } from '../../services/multiplayer';
+import { auth, signInAnon, loginWithGoogle } from '../../firebase';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { MenuBackdrop, MenuCard, BrandTitle, BrandEyebrow, PushButton } from '../ui/MenuKit';
 
@@ -19,7 +20,27 @@ export const OnlineMenu: React.FC<{
         setStatus('connecting');
         setErrorMsg('');
         try {
-            await multiplayer.joinRoom(cleanId);
+            // Mirror the host-side auth ladder: silent anonymous, then
+            // Google popup. Without a uid Firestore writes are rejected
+            // and joinRoom throws "User must be authenticated."
+            if (!auth.currentUser) {
+                try {
+                    await signInAnon();
+                } catch (anonErr) {
+                    console.warn('[Join] Anon sign-in unavailable, opening Google popup...', anonErr);
+                    try { await loginWithGoogle(); }
+                    catch (googErr) {
+                        console.error('[Join] Google sign-in failed:', googErr);
+                        throw new Error('Sign-in required. Allow popups and try again.');
+                    }
+                }
+            }
+            // Race join against a 10s timeout so a hung Firestore handshake
+            // can't lock the menu (same pattern as Invite Friend).
+            const timeoutP = new Promise<never>((_, rej) =>
+                setTimeout(() => rej(new Error('Timed out joining room. Check the code & connection.')), 10_000)
+            );
+            await Promise.race([multiplayer.joinRoom(cleanId), timeoutP]);
             setStatus('connected');
             onStartGame();
         } catch (e: any) {

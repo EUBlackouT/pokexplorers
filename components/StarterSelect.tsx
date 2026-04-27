@@ -367,6 +367,7 @@ export const StarterSelect: React.FC<Props> = ({
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isInviting, setIsInviting] = useState(false);
+    const [inviteError, setInviteError] = useState<string | null>(null);
     const [codeCopied, setCodeCopied] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
 
@@ -416,6 +417,13 @@ export const StarterSelect: React.FC<Props> = ({
 
     useEffect(() => {
         if (networkRole === 'none' || !multiplayer) return;
+        // If START_GAME beats STARTERS_DATA across the wire (which it
+        // can on the very first sync because Firestore re-orders writes
+        // under load), the previous code dropped it on the floor and
+        // the client got stuck on "Sync...". Stash any premature
+        // START_GAME in a ref and replay it the moment STARTERS_DATA
+        // arrives.
+        let pendingStartIndices: number[] | null = null;
         const handleData = (data: any) => {
             if (data.type !== 'GAME_SYNC') return;
             if (data.payload?.type === 'STARTER_SELECT') {
@@ -424,8 +432,17 @@ export const StarterSelect: React.FC<Props> = ({
                 optionsRef.current = data.payload.options;
                 setOptions(data.payload.options);
                 setLoading(false);
+                // Replay any START_GAME that arrived before the data did.
+                if (pendingStartIndices) {
+                    const team = pendingStartIndices.map((i: number) => optionsRef.current[i]);
+                    pendingStartIndices = null;
+                    onSelect(team);
+                }
             } else if (data.payload?.type === 'START_GAME') {
-                if (optionsRef.current.length === 0) return;
+                if (optionsRef.current.length === 0) {
+                    pendingStartIndices = data.payload.selectedIndices;
+                    return;
+                }
                 const team = data.payload.selectedIndices.map((i: number) => optionsRef.current[i]);
                 onSelect(team);
             }
@@ -639,17 +656,43 @@ export const StarterSelect: React.FC<Props> = ({
                 {/* Co-op widget: warm "room code on a wooden sign" style */}
                 <div className="pointer-events-auto">
                     {networkRole === 'none' ? (
-                        <button
-                            onClick={async () => {
-                                setIsInviting(true);
-                                if (onInvite) await onInvite();
-                                setIsInviting(false);
-                            }}
-                            disabled={isInviting}
-                            className="bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white px-4 py-2 rounded-xl text-[9px] font-press-start uppercase tracking-wider transition-all border-b-4 border-emerald-900 active:translate-y-0.5 active:border-b-2 shadow-md"
-                        >
-                            {isInviting ? 'Opening Rift...' : '+ Invite Friend'}
-                        </button>
+                        <div className="flex flex-col items-end gap-1">
+                            <button
+                                onClick={async () => {
+                                    setIsInviting(true);
+                                    setInviteError(null);
+                                    try {
+                                        if (onInvite) await onInvite();
+                                    } catch (err) {
+                                        const msg = err instanceof Error ? err.message : String(err);
+                                        console.error('[StarterSelect] Invite Friend failed:', err);
+                                        // Surface a short, friendly hint -- the raw Firestore
+                                        // payload is JSON gibberish to the player. Common
+                                        // failures: anonymous auth disabled in Firebase,
+                                        // network blocked by ad-blocker, project not reachable.
+                                        setInviteError(
+                                            msg.includes('authenticated')
+                                                ? 'Sign-in required for online play.'
+                                                : 'Could not open Rift. Try again or check your connection.'
+                                        );
+                                    } finally {
+                                        // ALWAYS reset the spinner so the button doesn't
+                                        // get permanently stuck on "Opening Rift..." when
+                                        // createRoom() throws (the previous bug).
+                                        setIsInviting(false);
+                                    }
+                                }}
+                                disabled={isInviting}
+                                className="bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white px-4 py-2 rounded-xl text-[9px] font-press-start uppercase tracking-wider transition-all border-b-4 border-emerald-900 active:translate-y-0.5 active:border-b-2 shadow-md disabled:opacity-70"
+                            >
+                                {isInviting ? 'Opening Rift...' : '+ Invite Friend'}
+                            </button>
+                            {inviteError && (
+                                <div className="bg-red-900/80 text-red-100 text-[8px] font-press-start uppercase tracking-wider px-2 py-1 rounded border border-red-500/60 max-w-[16rem] text-right leading-tight">
+                                    {inviteError}
+                                </div>
+                            )}
+                        </div>
                     ) : (
                         <div className="bg-amber-100 border-4 border-amber-800 rounded-xl px-4 py-2 shadow-[0_4px_0_#78350f]">
                             <div className="text-[8px] text-amber-900 font-press-start uppercase tracking-wider">Room Code</div>

@@ -29,7 +29,7 @@ import { applyBountyEvent, rollBounties } from './data/bounties';
 import { ITEMS } from './services/itemData';
 import { generateBattleBackground, MENU_BACKGROUND_URL, getStaticBackground } from './services/imageService';
 import { multiplayer, NetworkPayload } from './services/multiplayer';
-import { auth, signInAnon } from './firebase';
+import { auth, signInAnon, loginWithGoogle } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { HealthBar } from './components/HealthBar';
 import { PokemonSprite } from './components/PokemonSprite';
@@ -267,6 +267,10 @@ export default function App() {
   const [loadedChunks, setLoadedChunks] = useState<Record<string, any>>({});
   const [isPaused, setIsPaused] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  // Transient "battle is ending" overlay flag. Set right before we leave a
+  // battle to OVERWORLD so the whole arena can fade out instead of
+  // popping. Auto-cleared on the next overworld frame.
+  const [battleFading, setBattleFading] = useState<null | 'victory' | 'defeat' | 'flee' | 'connecting'>(null);
   const [networkRole, setNetworkRole] = useState<'none' | 'host' | 'client'>('none');
   const [currentEmote, setCurrentEmote] = useState<string | null>(null);
   const [comboVfx, setComboVfx] = useState<boolean>(false);
@@ -1025,6 +1029,12 @@ export default function App() {
 
 
   function handleRunEnd() {
+      // Cinematic teardown: same fade overlay as victory, just labelled
+      // 'defeat' so the overlay can pick a redder palette if we want
+      // tonal contrast later. Right now it just draws a blackout, but
+      // having the explicit reason routed through state lets us add
+      // FX (cracked glass, warning siren) without rewiring callsites.
+      setBattleFading('defeat');
       const distance = Math.floor(Math.sqrt(playerState.chunkPos.x ** 2 + playerState.chunkPos.y ** 2));
       let essenceAwarded = Math.floor(distance / 2) + (playerState.badges * 5);
       essenceAwarded = Math.floor(essenceAwarded * purse_essenceMult(playerState.meta));
@@ -1322,6 +1332,36 @@ export default function App() {
       });
   };
 
+  /**
+   * Network-aware battle-action dispatcher. Mirrors the client→host path
+   * that handleTargetSelect already used for moves & captures, but for
+   * the rest of the action menu (potions, bag healing, switching). The
+   * previous code called queueAction() directly from these UI buttons,
+   * which only ran on the host: the client's potion/bag/switch presses
+   * appeared to do nothing in co-op (or worse, the host computed the
+   * turn assuming no action from slot 1 and the client desynced).
+   */
+  function dispatchBattleAction(
+      targetIndex: number,
+      item?: string,
+      move?: PokemonMove,
+      isFusion?: boolean,
+      switchIndex?: number
+  ) {
+      if (networkRole === 'client') {
+          // Active slot for the client is always index 1 in our co-op
+          // layout (host = 0). Send a structured INPUT_BATTLE_ACTION
+          // and clear the local selection UI so the menu collapses.
+          multiplayer.send({
+              type: 'INPUT_BATTLE_ACTION',
+              payload: { targetIndex, item, move, isFusion: !!isFusion, switchIndex, activePlayerIndex: 1 }
+          });
+          setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: null } }));
+      } else {
+          queueAction(targetIndex, item, move, isFusion, switchIndex);
+      }
+  }
+
   function handleTargetSelect(targetIndex: number) {
       unlockAudio();
       if (battleState.ui.selectionMode === 'TARGET') {
@@ -1337,14 +1377,24 @@ export default function App() {
           } else {
               if (item === 'combo') queueAction(targetIndex, 'combo');
               else if (move) queueAction(targetIndex, undefined, move);
-              else queueAction(targetIndex, 'pokeball');
+              // Bugfix: previously passed the literal string 'pokeball' which
+              // does not exist in ITEMS (the real id is 'poke-ball'). The
+              // resolver dropped the action silently so capture permits
+              // appeared to do nothing. Use the actual selectedItem id, with
+              // 'poke-ball' as the safe fallback for the Capture Permit path.
+              else queueAction(targetIndex, item || 'poke-ball');
           }
       }
   };
 
   function handleRun() {
       if (networkRole === 'client') {
-          multiplayer.send({ type: 'INPUT_MENU', payload: 'RUN' });
+          // Bugfix: previous code sent the literal string 'RUN', but the
+          // host-side INPUT_MENU dispatcher checks `data.payload.type ===
+          // 'RUN'` which evaluates `'RUN'.type` (undefined). The client's
+          // run press silently no-op'd in co-op. Match the object shape
+          // the rest of the dispatcher uses.
+          multiplayer.send({ type: 'INPUT_MENU', payload: { type: 'RUN' } });
           return;
       }
       if (battleState.isTrainerBattle) {
@@ -1353,6 +1403,7 @@ export default function App() {
           setBattleState(prev => ({...prev, logs: [...prev.logs, `${activePlayer.name} is trapped and cannot run!`]}));
       } else {
           const canAlwaysRun = playerState.team.some(p => p.heldItem?.id === 'smoke-ball' && !p.isFainted);
+          setBattleFading('flee');
           if (canAlwaysRun) {
               setPhase(GamePhase.OVERWORLD);
               setDialogue(["Got away safely using the Smoke Ball!"]);
@@ -7938,7 +7989,14 @@ export default function App() {
 
     if (victory) {
         const newStreak = battleState.battleStreak + 1;
-        setBattleState(prev => ({ ...prev, battleStreak: newStreak }));
+        // Push the latest enemy state to UI BEFORE we award rewards so the
+        // graceful faint animation on the last KO actually plays. Without
+        // this beat, the engine flashed straight from "still standing" to
+        // "battle over -- back to overworld" and the player saw the enemy
+        // sprite vanish without a fall-down/fade. 750ms matches the
+        // PokemonSprite faint duration.
+        setBattleState(prev => ({ ...prev, battleStreak: newStreak, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-6) }));
+        await delay(900);
 
         // Permanent Death: Remove fainted monsters from team. Also strip
         // in-battle Rift transform flags (Tera/Mega/Z) so they don't
@@ -8024,8 +8082,15 @@ export default function App() {
         }
 
         if (battleState.currentTrainerId) {
+            // Hardened victory chain: wrap the entire trainer-reward block so
+            // a single optional system (bounties, rival lookup, evolution
+            // build, etc.) cannot trap the player in the battle screen. On
+            // any failure we still award a baseline cash drop, log the
+            // error, and exit to the overworld with a recovery toast.
+            let _trainerRewardOk = false;
+            try {
             const currentMap = lookupMap(playerState.mapId, loadedChunks);
-            
+
             // Rival milestone trainers don't live in any map -- they're
             // synthesized by buildRivalTrainer() on demand. Detect them
             // by id prefix so we can award the milestone flag / trophy.
@@ -8228,15 +8293,50 @@ export default function App() {
             if (newStreak > 1 && !chainingGauntlet) victoryMsgs.push(`Battle Streak: ${newStreak}!`);
 
             setDialogue(victoryMsgs);
+            _trainerRewardOk = true;
 
             if (isGymLeader) {
                 setPhase(GamePhase.PERK_SELECT);
                 return;
             }
+            } catch (rewardErr) {
+                // Reward chain crashed -- award a safe baseline so the
+                // battle wasn't wasted, log the breadcrumb, and let the
+                // outer flow drop us back into the overworld instead of
+                // re-throwing into the executeTurn catch (which used to
+                // softlock the player at player_input).
+                console.error('[Battle] Trainer reward chain failed:', rewardErr);
+                if (!_trainerRewardOk) {
+                    setPlayerState(prev => ({
+                        ...prev,
+                        team: survivingTeam,
+                        money: prev.money + 250,
+                    }));
+                    setDialogue([
+                        'You won the battle!',
+                        'Reward delivery hit a snag, but you still pocketed $250.',
+                        '(See console for details if this keeps happening.)',
+                    ]);
+                    showToast('Reward chain recovered', 'info', { kicker: 'BATTLE' });
+                }
+            }
         } else {
-            // Wild victory
+            // Wild victory -- mirror the trainer-side hardening so a
+            // crash in the loot/lifetime/streak path can't softlock the
+            // player. Same recovery pattern: log + baseline + dialogue.
+            try {
             // Capture Permits: 1 for every 6 wild battles (streak) - Harder than trainers
             const permitsEarned = (newStreak % 6 === 0) ? 1 : 0;
+
+            // Wild battles now give a small cash drop on top of the XP per
+            // mon. Mainline Pokemon doesn't, but our pacing punishes the
+            // player for engaging in wilds (ammo + permits + risk) and then
+            // gives them nothing to show for it -- they end up dirt poor by
+            // the second town. Tiny baseline + streak/level scaling keeps
+            // it negligible at low levels but meaningful when chaining.
+            const wildLevel = Math.max(...tempETeam.map(p => p.level || 1), 1);
+            const wildMoneyBase = 40 + wildLevel * 6;
+            const wildMoney = Math.floor(wildMoneyBase * (1 + newStreak * 0.15) * (tempETeam.some(p => survivingTeam.some(s => s.heldItem?.id === 'amulet-coin')) ? 2 : 1));
 
             setPlayerState(prev => {
                 const newItems = [...prev.inventory.items, ...loot];
@@ -8244,6 +8344,7 @@ export default function App() {
                 return {
                     ...prev,
                     team: survivingTeam,
+                    money: prev.money + wildMoney,
                     inventory: { ...prev.inventory, items: newItems },
                     run: {
                         ...prev.run,
@@ -8253,18 +8354,33 @@ export default function App() {
                         ...lt,
                         currentStreak: newStreak,
                         biggestStreak: Math.max(lt.biggestStreak, newStreak),
+                        totalMoneyEarned: lt.totalMoneyEarned + wildMoney,
                     }
                 };
             });
-            
-            const wildMsgs = ["Wild Pokemon defeated."];
+
+            const wildMsgs = [`Wild Pokémon defeated! +$${wildMoney}`];
             if (permitsEarned > 0) wildMsgs.push("You earned a Capture Permit!");
             if (loot.length > 0) {
                 loot.forEach(id => wildMsgs.push(`Found a ${ITEMS[id].name}!`));
             }
             if (newStreak > 1) wildMsgs.push(`Battle Streak: ${newStreak}!`);
             setDialogue(wildMsgs);
+            } catch (wildErr) {
+                console.error('[Battle] Wild reward chain failed:', wildErr);
+                setPlayerState(prev => ({ ...prev, team: survivingTeam, money: prev.money + 100 }));
+                setDialogue(['Wild Pokémon defeated!', '(Reward chain hit a snag, awarded $100 baseline.)']);
+                showToast('Reward chain recovered', 'info', { kicker: 'BATTLE' });
+            }
         }
+        // Cinematic fade-to-black between battle and overworld so the
+        // arena dissolves instead of popping. The overlay component
+        // listens to `battleFading` and animates a 500ms blackout +
+        // crossfade. We pause for ~450ms here (slightly less than the
+        // overlay so phase swap happens at peak black) before flipping
+        // phase. The overlay is auto-cleared by an OVERWORLD effect.
+        setBattleFading('victory');
+        await delay(450);
         setPhase(GamePhase.OVERWORLD);
         return;
     }
@@ -8332,7 +8448,29 @@ export default function App() {
     setRemoteBattleActions([]);
 } catch (e) {
         console.error('Battle execution error:', e);
-        setBattleState(prev => ({ ...prev, phase: 'player_input' }));
+        // CRITICAL: if the error happened while resolving a victory (all
+        // enemy mons already fainted), DO NOT reset to player_input -- that
+        // permanently traps the player in a battle they already won. Force
+        // the game back to the overworld so they can keep playing. We still
+        // log the failure so the underlying bug can be tracked down later.
+        const enemyAllDown = battleStateRef.current?.enemyTeam?.every(p => p.isFainted);
+        const playerAllDown = battleStateRef.current?.playerTeam?.every(p => p.isFainted);
+        if (enemyAllDown) {
+            console.warn('[Battle] Force-exiting to overworld after victory crash.');
+            setDialogue([
+                'You won the battle!',
+                '(Reward calculation hit a snag -- check the console.)',
+            ]);
+            setPhase(GamePhase.OVERWORLD);
+            showToast('Battle hit a snag — exiting safely', 'info', { kicker: 'RECOVERY' });
+        } else if (playerAllDown) {
+            console.warn('[Battle] Force-ending run after defeat crash.');
+            handleRunEnd();
+            showToast('Battle hit a snag — wrapping up your run', 'info', { kicker: 'RECOVERY' });
+        } else {
+            setBattleState(prev => ({ ...prev, phase: 'player_input' }));
+            showToast('Battle hit a snag — recovered', 'info', { kicker: 'RECOVERY' });
+        }
     }
   };
 
@@ -8654,6 +8792,21 @@ export default function App() {
       }
   }, [playerState.mapId, playerState.chunkPos, playerState.discoveredChunks.length, playerState.lifetime?.graveyardsVisited, playerState.defeatedTrainers, loadedChunks, phase, showToast]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
+  // Universal battle-teardown fade: trigger the blackout overlay any time
+  // we leave the BATTLE phase, regardless of who set the new phase. This
+  // makes the multiplayer client (which doesn't run the host's reward
+  // chain) also see a fade instead of the arena snapping out the moment
+  // the GAME_SYNC arrives. We skip if a more-specific reason was already
+  // set (victory/defeat/flee) so we don't clobber the host-side label.
+  const lastPhaseRef = useRef<GamePhase>(phase);
+  useEffect(() => {
+      const wasBattle = lastPhaseRef.current === GamePhase.BATTLE;
+      const leavingBattle = wasBattle && phase !== GamePhase.BATTLE;
+      lastPhaseRef.current = phase;
+      if (leavingBattle && !battleFading) {
+          setBattleFading('connecting');
+      }
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clear any pending aura tier / outbreak override when we leave
   // BATTLE back to the overworld (flee / victory / whiteout / shop
   // transitions all exit through OVERWORLD). Guarantees no aura or
@@ -8662,8 +8815,15 @@ export default function App() {
       if (phase === GamePhase.OVERWORLD) {
           pendingAnomalyRef.current = false;
           pendingOutbreakRef.current = null;
+          // Hold the blackout one extra frame so the overlay's exit
+          // animation crossfades the new overworld in instead of
+          // snapping. 350ms matches the overlay's fade-out duration.
+          if (battleFading) {
+              const t = window.setTimeout(() => setBattleFading(null), 350);
+              return () => window.clearTimeout(t);
+          }
       }
-  }, [phase]);
+  }, [phase, battleFading]);
 
   // Gauntlet chain: when the victory dialogue from a gauntlet trainer
   // closes (phase back in OVERWORLD, dialogue cleared), immediately
@@ -8921,12 +9081,18 @@ export default function App() {
         if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex);
     } else if (data.type === 'INPUT_MENU') {
         if (isHostRef.current) {
-            if (data.payload === 'PAUSE') setIsPaused(prev => !prev);
-            if (data.payload.type === 'SWAP') handleSwapTeam(data.payload.i1, data.payload.i2);
-            if (data.payload.type === 'BUY') handleBuy(data.payload.item, data.payload.price);
-            if (data.payload.type === 'CLOSE_SHOP') setPhase(GamePhase.OVERWORLD);
-            if (data.payload.type === 'INTERACT') handleInteraction(2);
-            if (data.payload.type === 'RUN') handleRun();
+            // Defensive: payload may be a bare string (legacy clients) or
+            // an object { type, ... }. Coerce to object so both shapes
+            // route through the same switch -- previously only PAUSE
+            // worked for the string form, and only the object form
+            // worked for everything else.
+            const p: any = typeof data.payload === 'string' ? { type: data.payload } : (data.payload || {});
+            if (p.type === 'PAUSE') setIsPaused(prev => !prev);
+            else if (p.type === 'SWAP') handleSwapTeam(p.i1, p.i2);
+            else if (p.type === 'BUY') handleBuy(p.item, p.price);
+            else if (p.type === 'CLOSE_SHOP') setPhase(GamePhase.OVERWORLD);
+            else if (p.type === 'INTERACT') handleInteraction(2);
+            else if (p.type === 'RUN') handleRun();
         }
     } else if (data.type === 'INPUT_EMOTE') {
         triggerEmote(data.payload);
@@ -9166,7 +9332,11 @@ export default function App() {
                 playSound('https://cdn.jsdelivr.net/gh/smogon/pokemon-showdown@master/audio/sfx/hit.mp3', 0.4);
             }
         });
-    }, [battleState.logs?.length, networkRoleRef.current]);
+    // Bugfix: previously this depended on `networkRoleRef.current`,
+    // which is a ref read -- React skips it for change-detection so a
+    // mid-session role change wouldn't refresh the SFX gating closure.
+    // Use the actual networkRole state.
+    }, [battleState.logs?.length, networkRole]);
 
   // --- CONTROLS ---
   // Keyboard mapping (Pokemon-mainline-ish):
@@ -9295,6 +9465,24 @@ export default function App() {
     }
   }, [battleState.phase, isMultiplayerBattle, networkRole]);
 
+  // Multiplayer "Waiting for opponent..." watchdog. If the partner's
+  // BATTLE_ACTION never arrives within 25s (network drop, tab closed,
+  // Firestore stalled), we'd previously sit in waiting_for_opponent
+  // forever. Now we surface a warning toast and roll the host back to
+  // player_input so they can retry their move. Pure UX recovery -- the
+  // partner's action will still apply if it eventually arrives.
+  useEffect(() => {
+      if (battleState.phase !== 'waiting_for_opponent' || networkRole !== 'host') return;
+      const watchdog = window.setTimeout(() => {
+          setBattleState(prev => {
+              if (prev.phase !== 'waiting_for_opponent') return prev;
+              return { ...prev, phase: 'player_input', logs: [...prev.logs, 'Co-op partner did not respond. Rolling back...'] };
+          });
+          showToast('Partner timed out — pick again', 'warning', { kicker: 'CO-OP' });
+      }, 25_000);
+      return () => window.clearTimeout(watchdog);
+  }, [battleState.phase, networkRole, showToast]);
+
   const [musicStarted, setMusicStarted] = useState(false);
 
   useEffect(() => {
@@ -9317,9 +9505,13 @@ export default function App() {
   // hitting the procedural fallback while GitHub's raw CDN responds.
   useEffect(() => {
       if (phase !== GamePhase.BATTLE) return;
+      // Bugfix: we previously read `battleState.opponentTeam`, but the
+      // battle model uses `enemyTeam` everywhere else -- so the enemy
+      // side of the prefetch was a no-op for the entire history of
+      // this game. Wild & trainer move SFX now warm in parallel.
       const mons = [
           ...(battleState.playerTeam || []),
-          ...(battleState.opponentTeam || [])
+          ...(battleState.enemyTeam || [])
       ];
       const moves: Array<{ type?: string; name?: string; sfx?: string }> = [];
       for (const m of mons) {
@@ -9329,7 +9521,7 @@ export default function App() {
           }
       }
       if (moves.length) prefetchMoveSfx(moves);
-  }, [phase, battleState.playerTeam, battleState.opponentTeam]);
+  }, [phase, battleState.playerTeam, battleState.enemyTeam]);
 
   useEffect(() => {
       if (phase === GamePhase.MENU && !musicStarted) {
@@ -9525,7 +9717,30 @@ export default function App() {
                     multiplayer={multiplayer}
                     remotePlayers={remotePlayers}
                     onInvite={async () => {
-                        await multiplayer.createRoom();
+                        // Auth ladder: prefer anonymous (silent, zero-friction).
+                        // Verified live: many Firebase projects ship with
+                        // Anon Auth disabled (admin-restricted-operation),
+                        // which is why the user's friend got permanently
+                        // stuck on the spinner. Fall back to Google sign-in
+                        // automatically -- the popup is the only acceptable
+                        // friction here vs. an indefinite hang.
+                        if (!auth.currentUser) {
+                            try {
+                                await signInAnon();
+                            } catch (anonErr) {
+                                console.warn('[Invite] Anon sign-in unavailable, trying Google popup...', anonErr);
+                                try {
+                                    await loginWithGoogle();
+                                } catch (googErr) {
+                                    console.error('[Invite] Google sign-in also failed:', googErr);
+                                    throw new Error('Sign-in required for online play. Allow popups and try again.');
+                                }
+                            }
+                        }
+                        const timeout = new Promise<never>((_, rej) =>
+                            setTimeout(() => rej(new Error('Timed out opening Rift. Check your connection.')), 10_000)
+                        );
+                        await Promise.race([multiplayer.createRoom(), timeout]);
                         setNetworkRole('host');
                     }}
                     onBack={() => {
@@ -10232,7 +10447,7 @@ export default function App() {
                                        <ActionButton 
                                            label={`POTION (${playerState.inventory.potions})`} 
                                            color="bg-green-600" 
-                                           onClick={() => queueAction(battleState.activePlayerIndex, 'potion')} 
+                                           onClick={() => dispatchBattleAction(battleState.activePlayerIndex, 'potion')} 
                                        />
                                    )}
                                    {playerState.inventory.items.map((itemId, idx) => {
@@ -10247,7 +10462,7 @@ export default function App() {
                                                    if (item.category === 'pokeball') {
                                                        setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'TARGET', selectedItem: itemId } }));
                                                    } else {
-                                                       queueAction(battleState.activePlayerIndex, itemId);
+                                                       dispatchBattleAction(battleState.activePlayerIndex, itemId);
                                                    }
                                                }} 
                                            />
@@ -10272,7 +10487,7 @@ export default function App() {
                                                className={`p-2 rounded text-xs font-bold border-2 transition-all ${p.isFainted ? 'bg-gray-600 border-gray-800 opacity-50 cursor-not-allowed' : i === battleState.activePlayerIndex ? 'bg-blue-700 border-yellow-400' : 'bg-blue-500 border-blue-700 hover:bg-blue-400'}`}
                                                onClick={() => {
                                                    if (p.isFainted || i === battleState.activePlayerIndex) return;
-                                                   queueAction(battleState.activePlayerIndex, undefined, undefined, false, i);
+                                                   dispatchBattleAction(battleState.activePlayerIndex, undefined, undefined, false, i);
                                                }}
                                                disabled={p.isFainted || i === battleState.activePlayerIndex}
                                            >
@@ -10397,6 +10612,37 @@ export default function App() {
         <>
             <AudioWidget />
             {renderContent()}
+            {/* Battle teardown blackout. Sits above everything except the
+             *  pause/transform modals so the arena dissolves cleanly into
+             *  the next phase (overworld / perk select / run-end). The
+             *  reason field lets us label the overlay so the player gets
+             *  a beat of context instead of staring at pure black. */}
+            <AnimatePresence>
+                {battleFading && (
+                    <motion.div
+                        key="battle-fade"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.35 }}
+                        className={`fixed inset-0 z-[180] flex items-center justify-center pointer-events-none ${battleFading === 'defeat' ? 'bg-gradient-radial from-red-950/95 via-black/95 to-black' : 'bg-black/95'}`}
+                    >
+                        <motion.div
+                            initial={{ y: 8, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.08, duration: 0.25 }}
+                            className="text-center"
+                        >
+                            <div className="text-[9px] tracking-[0.5em] uppercase text-yellow-300/80 font-press-start mb-2">
+                                {battleFading === 'victory' ? 'Victory' : battleFading === 'defeat' ? 'Defeat' : battleFading === 'flee' ? 'Escaped' : 'Sync'}
+                            </div>
+                            <div className="text-white/70 text-xs uppercase tracking-widest">
+                                {battleFading === 'victory' ? 'Returning to overworld...' : battleFading === 'defeat' ? 'The expedition concludes...' : battleFading === 'flee' ? 'Slipping away...' : 'Syncing battle...'}
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
             {transformPicker && phase === GamePhase.BATTLE && battleState && (() => {
                 const idx = battleState.activePlayerIndex;
                 const active = battleState.playerTeam?.[idx];

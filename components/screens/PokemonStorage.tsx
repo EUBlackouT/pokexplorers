@@ -114,6 +114,12 @@ export const PokemonStorage: React.FC<Props> = ({ player, onUpdate, onClose }) =
                 if (k === 'Escape' || k === 'n' || k === 'N') {
                     e.preventDefault();
                     setConfirmRelease(false);
+                } else if (k === 'y' || k === 'Y' || k === 'Enter') {
+                    // Y/Enter confirms release. Without this, the modal
+                    // was keyboard-only-cancellable; users had to mouse
+                    // over to the "Yes" button.
+                    e.preventDefault();
+                    release();
                 }
                 return;
             }
@@ -459,7 +465,7 @@ export const PokemonStorage: React.FC<Props> = ({ player, onUpdate, onClose }) =
                             </button>
                         ) : (
                             <div className="flex gap-2 items-center">
-                                <span className="text-xs text-red-200">Release {selectedMon.name}?</span>
+                                <span className="text-xs text-red-200">Release {selectedMon.name}? <span className="opacity-60">(Y/N)</span></span>
                                 <button onClick={release} className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 font-bold">Yes</button>
                                 <button onClick={() => setConfirmRelease(false)} className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600">No</button>
                             </div>
