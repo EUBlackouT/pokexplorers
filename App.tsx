@@ -7985,8 +7985,10 @@ export default function App() {
         });
     
     // Final check after loop logic
-    if (tempPTeam.every((p: Pokemon) => p.isFainted)) gameOver = true;
-    if (tempETeam.every((p: Pokemon) => p.isFainted)) victory = true;
+    const playersAliveOrDefined = tempPTeam.filter(Boolean);
+    const enemiesAliveOrDefined = tempETeam.filter(Boolean);
+    if (playersAliveOrDefined.length > 0 && playersAliveOrDefined.every((p: Pokemon) => p.isFainted)) gameOver = true;
+    if (enemiesAliveOrDefined.length > 0 && enemiesAliveOrDefined.every((p: Pokemon) => p.isFainted)) victory = true;
 
     if (gameOver) {
         // Talent: Second Wind -- once per run, the first total-team wipe
@@ -8021,6 +8023,17 @@ export default function App() {
 
     if (victory) {
         const newStreak = battleState.battleStreak + 1;
+        /** Fade out and return to overworld (gym leaders use PERK_SELECT and `return` earlier). */
+        const completeVictoryTransitionToOverworld = async (): Promise<void> => {
+            if (!pendingGauntletNextRef.current) {
+                postBattleMusicOutcomeRef.current = 'victory';
+                battleMusicExitOutcomeSyncRef.current = 'victory';
+            }
+            if (isMultiplayerBattle && networkRole === 'host') setRemoteBattleActions([]);
+            setBattleFading('victory');
+            await delay(450);
+            setPhase(GamePhase.OVERWORLD);
+        };
         // Push the latest enemy state to UI BEFORE we award rewards so the
         // graceful faint animation on the last KO actually plays. Without
         // this beat, the engine flashed straight from "still standing" to
@@ -8042,6 +8055,7 @@ export default function App() {
             return;
         }
 
+        try {
         // --- POST-BATTLE EVOLUTION QUEUE ------------------------------------
         // Any team member that leveled into its evolution during this battle
         // now gets the cinematic. We build the evolved form up-front but
@@ -8450,21 +8464,12 @@ export default function App() {
                 showToast('Reward chain recovered', 'info', { kicker: 'BATTLE' });
             }
         }
-        // Cinematic fade-to-black between battle and overworld so the
-        // arena dissolves instead of popping. The overlay component
-        // listens to `battleFading` and animates a 500ms blackout +
-        // crossfade. We pause for ~450ms here (slightly less than the
-        // overlay so phase swap happens at peak black) before flipping
-        // phase. The overlay is auto-cleared by an OVERWORLD effect.
-        if (!pendingGauntletNextRef.current) {
-            postBattleMusicOutcomeRef.current = 'victory';
-            battleMusicExitOutcomeSyncRef.current = 'victory';
+        } catch (vicPipelineErr: unknown) {
+            console.error('[Battle] Victory pipeline failed:', vicPipelineErr);
+            showToast('Battle rewards hit a snag — returning to the field', 'warning', { kicker: 'BATTLE', ttl: 5000 });
+            setDialogue(['You won the battle!', 'Returning to the overworld...']);
         }
-        // Co-op host: drop partner move queue so no stale INPUT_BATTLE_ACTION bleed crosses into the next encounter.
-        if (isMultiplayerBattle && networkRole === 'host') setRemoteBattleActions([]);
-        setBattleFading('victory');
-        await delay(450);
-        setPhase(GamePhase.OVERWORLD);
+        await completeVictoryTransitionToOverworld();
         return;
     }
 
@@ -8536,9 +8541,9 @@ export default function App() {
         // permanently traps the player in a battle they already won. Force
         // the game back to the overworld so they can keep playing. We still
         // log the failure so the underlying bug can be tracked down later.
-        const enemyAllDown = battleStateRef.current?.enemyTeam?.every(p => p.isFainted);
+        const enemyAllDownSafe = battleStateRef.current?.enemyTeam?.filter(Boolean).every((p) => p.isFainted);
         const playerAllDown = battleStateRef.current?.playerTeam?.every(p => p.isFainted);
-        if (enemyAllDown) {
+        if (enemyAllDownSafe) {
             console.warn('[Battle] Force-exiting to overworld after victory crash.');
             postBattleMusicOutcomeRef.current = 'victory';
             battleMusicExitOutcomeSyncRef.current = 'victory';
