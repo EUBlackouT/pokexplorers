@@ -769,6 +769,28 @@ export const playBattleWinSfx = () => {
 };
 
 /**
+ * Short punchy sting for a loss / white-out so the trainer BGM can clear
+ * before the title theme comes back — matches the cadence of classic
+ * Pokémon "expedition ends" beats without requiring a licensed jingle file.
+ */
+export const playBattleLossSting = (): void => {
+    const ctx = initAudio();
+    if (!ctx || ctx.state !== 'running') return;
+    const v = getSfxVolume() * 0.34;
+    [392, 349.23, 311.13, 277.18, 246.94].forEach((f, i) =>
+        playTone(ctx, 'triangle', f, f * 0.97, 0.28, v, i * 0.11));
+};
+
+/** Light "whoosh away" sting for fled wild battles — quieter than victory. */
+export const playBattleFleeSting = (): void => {
+    const ctx = initAudio();
+    if (!ctx || ctx.state !== 'running') return;
+    const v = getSfxVolume() * 0.22;
+    [659.25, 523.25, 392].forEach((f, i) =>
+        playTone(ctx, 'triangle', f, f, 0.12, v, i * 0.07));
+};
+
+/**
  * Cinematic evolution sequence SFX. Three cues stacked on a timeline so a
  * UI component can just call `playEvolutionStart()`, let the animation run,
  * and call `playEvolutionComplete()` at the reveal frame.
@@ -1096,7 +1118,55 @@ const fadeOutAndDispose = (slot: BgmSlot, fadeMs: number) => {
  * out into town (town.mp3) doesn't audibly stop/start -- the two tracks
  * blend for ~1.6s.
  */
+/** Outcomes used when fading trainer battle music into field/title tracks. */
+export type BattleMusicExitOutcome = 'victory' | 'defeat' | 'flee';
+
+let battleTransitionTimers: number[] = [];
+
+const clearBattleTransitionTimers = (): void => {
+    battleTransitionTimers.forEach((id) => clearTimeout(id));
+    battleTransitionTimers = [];
+};
+
+/**
+ * Fade out the trainer battle loop, play a win/defeat/flee sting with a
+ * short breathable pause, then crossfade into `nextUrl` (typically field
+ * music or `TITLE` after a wipe).
+ *
+ * Cancels any prior pending battle-exit sequence when called again or when
+ * `playBGM`/`stopBGM` fires mid-schedule so field music can't sneak in late.
+ */
+export const transitionFromBattleMusic = (
+    outcome: BattleMusicExitOutcome,
+    nextUrl: string,
+    volume = 0.3,
+): void => {
+    clearBattleTransitionTimers();
+
+    const fadeBattleMs =
+        outcome === 'flee' ? 300 : outcome === 'defeat' ? 440 : 380;
+
+    fadeOutBGM(fadeBattleMs);
+
+    battleTransitionTimers.push(window.setTimeout(() => {
+        if (outcome === 'victory') playBattleWinSfx();
+        else if (outcome === 'defeat') playBattleLossSting();
+        else playBattleFleeSting();
+    }, Math.floor(fadeBattleMs * 0.42)));
+
+    const silenceTailMs =
+        outcome === 'victory' ? 920 :
+        outcome === 'defeat' ? 1300 :
+        620;
+
+    battleTransitionTimers.push(window.setTimeout(() => {
+        clearBattleTransitionTimers();
+        void playBGM(nextUrl, volume);
+    }, fadeBattleMs + silenceTailMs));
+};
+
 export const playBGM = async (url: string, volume: number = 0.3, fadeMs: number = DEFAULT_FADE_MS): Promise<void> => {
+    clearBattleTransitionTimers();
     const ctx = initAudio();
     if (!ctx || !url) return;
     if (currentBgmUrl === url && bgmSlots.length > 0) {
@@ -1186,10 +1256,10 @@ export const playBGM = async (url: string, volume: number = 0.3, fadeMs: number 
 };
 
 /**
- * Hard stop all BGM with no fade. Used for the BATTLE -> OVERWORLD silence
- * gap and for unloading the page.
+ * Hard stop all BGM with no fade. Clears any scheduled battle-exit sting.
  */
 export const stopBGM = (): void => {
+    clearBattleTransitionTimers();
     for (const slot of bgmSlots) teardownSlot(slot);
     bgmSlots = [];
     if (procBgmTimer !== null) {

@@ -22,7 +22,7 @@ import {
     TYPE_COLORS,
     getEffectiveDefensiveTypes,
 } from './services/pokeService';
-import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx } from './services/soundService';
+import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, transitionFromBattleMusic, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx, type BattleMusicExitOutcome } from './services/soundService';
 import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE, WORLD_MAX_DIST, getNextGymTarget, compassDirectionName, getGrassAura, getChunkOutbreak } from './services/mapData';
 import { resolveInterior, InteriorKind } from './services/interiors';
 import { applyBountyEvent, rollBounties } from './data/bounties';
@@ -618,6 +618,13 @@ export default function App() {
   // fires the next startBattle when the victory dialogue closes, so
   // the player's team HP/status carries over untouched.
   const pendingGauntletNextRef = useRef<TrainerData | null>(null);
+  /** Host + local: staging battle→field outcome sting before OVERWORLD kicks in. */
+  const postBattleMusicOutcomeRef = useRef<BattleMusicExitOutcome | null>(null);
+  /** Host-only: sent once on GAME_SYNC so the peer picks the same sting + avoids wrong defaults. */
+  const battleMusicExitOutcomeSyncRef = useRef<BattleMusicExitOutcome | null>(null);
+  /** Defeat wipes send TITLE via transitionFromBattleMusic — skip duplicate MENU effect playBGM (host only). */
+  const skipNextMenuTitleBgmRef = useRef(false);
+  const prevPhaseForMusicRef = useRef<GamePhase>(phase);
   // Rival intercept queue -- see RIVAL_MILESTONES below. The rival
   // ambushes the player when they FIRST cross a distance milestone.
   // We record which milestones have already fired via the
@@ -1043,6 +1050,9 @@ export default function App() {
 
 
   function handleRunEnd() {
+      battleMusicExitOutcomeSyncRef.current = 'defeat';
+      transitionFromBattleMusic('defeat', BGM_TRACKS.TITLE, 0.3);
+      skipNextMenuTitleBgmRef.current = true;
       // Cinematic teardown: same fade overlay as victory, just labelled
       // 'defeat' so the overlay can pick a redder palette if we want
       // tonal contrast later. Right now it just draws a blackout, but
@@ -1417,6 +1427,8 @@ export default function App() {
           setBattleState(prev => ({...prev, logs: [...prev.logs, `${activePlayer.name} is trapped and cannot run!`]}));
       } else {
           const canAlwaysRun = playerState.team.some(p => p.heldItem?.id === 'smoke-ball' && !p.isFainted);
+          postBattleMusicOutcomeRef.current = 'flee';
+          battleMusicExitOutcomeSyncRef.current = 'flee';
           setBattleFading('flee');
           if (canAlwaysRun) {
               setPhase(GamePhase.OVERWORLD);
@@ -8443,6 +8455,10 @@ export default function App() {
         // crossfade. We pause for ~450ms here (slightly less than the
         // overlay so phase swap happens at peak black) before flipping
         // phase. The overlay is auto-cleared by an OVERWORLD effect.
+        if (!pendingGauntletNextRef.current) {
+            postBattleMusicOutcomeRef.current = 'victory';
+            battleMusicExitOutcomeSyncRef.current = 'victory';
+        }
         setBattleFading('victory');
         await delay(450);
         setPhase(GamePhase.OVERWORLD);
@@ -8521,6 +8537,8 @@ export default function App() {
         const playerAllDown = battleStateRef.current?.playerTeam?.every(p => p.isFainted);
         if (enemyAllDown) {
             console.warn('[Battle] Force-exiting to overworld after victory crash.');
+            postBattleMusicOutcomeRef.current = 'victory';
+            battleMusicExitOutcomeSyncRef.current = 'victory';
             setDialogue([
                 'You won the battle!',
                 '(Reward calculation hit a snag -- check the console.)',
@@ -9099,8 +9117,25 @@ export default function App() {
         if (netRift) setRiftLayout(netRift);
         if (netCaves) setCaveLayouts(netCaves);
     } else if (data.type === 'GAME_SYNC') {
-        const { phase: netPhase, battleState: netBS, p2Position: netP2Pos, mapId: netMapId, type: nestedType } = data.payload;
+        const { phase: netPhase, battleState: netBS, p2Position: netP2Pos, mapId: netMapId, type: nestedType, battleMusicExitOutcome } = data.payload as {
+            phase?: GamePhase;
+            battleState?: BattleState | null;
+            p2Position?: { x: number; y: number };
+            mapId?: string;
+            type?: string;
+            battleMusicExitOutcome?: BattleMusicExitOutcome;
+        };
         
+        // Apply hosted battle→field sting hint BEFORE flipping phase so the
+        // music effect reads the correct outcome on the same tick as OVERWORLD.
+        if (
+            battleMusicExitOutcome &&
+            netPhase === GamePhase.OVERWORLD &&
+            phaseRef.current === GamePhase.BATTLE
+        ) {
+            postBattleMusicOutcomeRef.current = battleMusicExitOutcome;
+        }
+
         // Handle nested special types within GAME_SYNC
         if (nestedType === 'BATTLE_START' || data.payload.type === 'BATTLE_START') {
             console.log('[BATTLE] Processing BATTLE_START via GAME_SYNC');
@@ -9198,15 +9233,19 @@ export default function App() {
             })
         } : null;
 
+        const outcomeSnap = battleMusicExitOutcomeSyncRef.current;
+
         const syncData = { 
             phase, 
             battleState: optimizedBattleState, 
             p2Position: playerState.p2Position,
-            mapId: playerState.mapId
+            mapId: playerState.mapId,
+            ...(outcomeSnap ? { battleMusicExitOutcome: outcomeSnap } : {}),
         };
         const syncString = JSON.stringify(syncData);
         if (lastSyncRef.current === syncString) return;
         lastSyncRef.current = syncString;
+        if (outcomeSnap) battleMusicExitOutcomeSyncRef.current = null;
 
         multiplayer.send({ 
             type: 'GAME_SYNC', 
@@ -9593,72 +9632,64 @@ export default function App() {
   const [musicStarted, setMusicStarted] = useState(false);
 
   /*
-   * Context-aware BGM selector.
+   * Context-aware BGM selector + battle-exit sting bridge.
    * --------------------------------------------------------------
-   * Picks one of TITLE / TOWN / ROUTE_A / ROUTE_B / INTERIOR / WATER /
-   * BATTLE based on the current phase + map biome. Crossfading is
-   * handled by `playBGM` itself in soundService -- here we just
-   * declare the destination URL.
-   *
-   * Route variant alternates by chunk parity ((cx+cy) & 1) so the
-   * player gets musical variation as they traverse but always hears
-   * the same track when re-entering the same chunk. Town and water
-   * are dedicated tracks (one each) so they read instantly to the ear
-   * as "you are HERE".
-   *
-   * Interior detection trusts the `interior:` mapId prefix because
-   * that's the only way we materialize buildings. If somehow a static
-   * MAPS entry has biome=interior/lab/center/mart, those are caught
-   * via the biome string fall-through.
+   * Field tracks crossfade via `playBGM`. Leaving `BATTLE` runs
+   * `transitionFromBattleMusic` so trainer loop fades, a win/defeat/flee
+   * sting fires, then field music fades in. Gauntlet chains skip the sting
+   * (`pendingGauntletNextRef`) so BGM stays continuous into round two.
    */
   useEffect(() => {
       if (!musicStarted) return;
 
+      const prev = prevPhaseForMusicRef.current;
+      prevPhaseForMusicRef.current = phase;
+
+      const resolveOverworldBgmUrl = (): string => {
+          const mapId = playerState.mapId;
+          const map = lookupMap(mapId, loadedChunks);
+          const biome: string | undefined = map?.biome;
+          if (mapId.startsWith('interior:') || biome === 'interior' || biome === 'lab' || biome === 'center' || biome === 'mart') {
+              return BGM_TRACKS.INTERIOR;
+          }
+          if (biome === 'town') return BGM_TRACKS.TOWN;
+          if (biome === 'lake') return BGM_TRACKS.WATER;
+          if (mapId.startsWith('chunk_')) {
+              const parts = mapId.split('_');
+              const cx = parseInt(parts[1] ?? '0', 10) || 0;
+              const cy = parseInt(parts[2] ?? '0', 10) || 0;
+              return ((cx + cy) & 1) === 0 ? BGM_TRACKS.ROUTE_A : BGM_TRACKS.ROUTE_B;
+          }
+          return BGM_TRACKS.ROUTE_A;
+      };
+
       if (phase === GamePhase.MENU || phase === GamePhase.STARTER_SELECT) {
+          if (skipNextMenuTitleBgmRef.current) {
+              skipNextMenuTitleBgmRef.current = false;
+              return;
+          }
           playBGM(BGM_TRACKS.TITLE);
           return;
       }
       if (phase === GamePhase.BATTLE) {
-          // Snappier 600ms fade for the battle handoff -- the player's
-          // attention is suddenly on a battle, so we want the trainer
-          // theme to come up fast rather than dragging the field music
-          // over a half-loaded battle scene.
           playBGM(BGM_TRACKS.BATTLE, 0.3, 600);
           return;
       }
       if (phase !== GamePhase.OVERWORLD) {
-          // Other phases (META_MENU, FIELD_GUIDE, NETWORK_MENU, etc.)
-          // sit on top of the menu, so keep the title theme playing.
-          // We don't stop the music -- crossfading back to TITLE if
-          // these were entered from the field would feel jarring.
           return;
       }
 
-      // Overworld music depends on the current map's character.
-      const mapId = playerState.mapId;
-      const map = lookupMap(mapId, loadedChunks);
-      const biome: string | undefined = map?.biome;
+      const owUrl = resolveOverworldBgmUrl();
 
-      let target: string;
-      if (mapId.startsWith('interior:') || biome === 'interior' || biome === 'lab' || biome === 'center' || biome === 'mart') {
-          target = BGM_TRACKS.INTERIOR;
-      } else if (biome === 'town') {
-          target = BGM_TRACKS.TOWN;
-      } else if (biome === 'lake') {
-          target = BGM_TRACKS.WATER;
-      } else if (mapId.startsWith('chunk_')) {
-          // Parity-based alternation: even-sum chunks get variant A,
-          // odd-sum get variant B. Stable & deterministic so revisiting
-          // a chunk hears the same track again.
-          const parts = mapId.split('_');
-          const cx = parseInt(parts[1] ?? '0', 10) || 0;
-          const cy = parseInt(parts[2] ?? '0', 10) || 0;
-          target = ((cx + cy) & 1) === 0 ? BGM_TRACKS.ROUTE_A : BGM_TRACKS.ROUTE_B;
-      } else {
-          // Unknown / puzzle map -- default to Route A.
-          target = BGM_TRACKS.ROUTE_A;
+      if (prev === GamePhase.BATTLE && !pendingGauntletNextRef.current) {
+          const outcome = postBattleMusicOutcomeRef.current ?? 'victory';
+          postBattleMusicOutcomeRef.current = null;
+          transitionFromBattleMusic(outcome, owUrl, 0.3);
+          return;
       }
-      playBGM(target);
+
+      postBattleMusicOutcomeRef.current = null;
+      playBGM(owUrl);
   }, [phase, musicStarted, playerState.mapId, loadedChunks]);
 
   // Pre-fetch the official move SFX for every move that either side might use
