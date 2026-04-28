@@ -9592,20 +9592,74 @@ export default function App() {
 
   const [musicStarted, setMusicStarted] = useState(false);
 
+  /*
+   * Context-aware BGM selector.
+   * --------------------------------------------------------------
+   * Picks one of TITLE / TOWN / ROUTE_A / ROUTE_B / INTERIOR / WATER /
+   * BATTLE based on the current phase + map biome. Crossfading is
+   * handled by `playBGM` itself in soundService -- here we just
+   * declare the destination URL.
+   *
+   * Route variant alternates by chunk parity ((cx+cy) & 1) so the
+   * player gets musical variation as they traverse but always hears
+   * the same track when re-entering the same chunk. Town and water
+   * are dedicated tracks (one each) so they read instantly to the ear
+   * as "you are HERE".
+   *
+   * Interior detection trusts the `interior:` mapId prefix because
+   * that's the only way we materialize buildings. If somehow a static
+   * MAPS entry has biome=interior/lab/center/mart, those are caught
+   * via the biome string fall-through.
+   */
   useEffect(() => {
       if (!musicStarted) return;
 
-      if (phase === GamePhase.MENU) {
-          playBGM(BGM_TRACKS.MENU);
-      } else if (phase === GamePhase.BATTLE) {
-          playBGM(BGM_TRACKS.BATTLE);
-      } else if (phase === GamePhase.OVERWORLD) {
-          // Overworld is silent by design -- the procedural chiptune was placeholder
-          // and will be replaced with a real track later. stopBGM() ensures the
-          // battle track actually stops when returning to the map.
-          stopBGM();
+      if (phase === GamePhase.MENU || phase === GamePhase.STARTER_SELECT) {
+          playBGM(BGM_TRACKS.TITLE);
+          return;
       }
-  }, [phase, musicStarted]);
+      if (phase === GamePhase.BATTLE) {
+          // Snappier 600ms fade for the battle handoff -- the player's
+          // attention is suddenly on a battle, so we want the trainer
+          // theme to come up fast rather than dragging the field music
+          // over a half-loaded battle scene.
+          playBGM(BGM_TRACKS.BATTLE, 0.3, 600);
+          return;
+      }
+      if (phase !== GamePhase.OVERWORLD) {
+          // Other phases (META_MENU, FIELD_GUIDE, NETWORK_MENU, etc.)
+          // sit on top of the menu, so keep the title theme playing.
+          // We don't stop the music -- crossfading back to TITLE if
+          // these were entered from the field would feel jarring.
+          return;
+      }
+
+      // Overworld music depends on the current map's character.
+      const mapId = playerState.mapId;
+      const map = lookupMap(mapId, loadedChunks);
+      const biome: string | undefined = map?.biome;
+
+      let target: string;
+      if (mapId.startsWith('interior:') || biome === 'interior' || biome === 'lab' || biome === 'center' || biome === 'mart') {
+          target = BGM_TRACKS.INTERIOR;
+      } else if (biome === 'town') {
+          target = BGM_TRACKS.TOWN;
+      } else if (biome === 'lake') {
+          target = BGM_TRACKS.WATER;
+      } else if (mapId.startsWith('chunk_')) {
+          // Parity-based alternation: even-sum chunks get variant A,
+          // odd-sum get variant B. Stable & deterministic so revisiting
+          // a chunk hears the same track again.
+          const parts = mapId.split('_');
+          const cx = parseInt(parts[1] ?? '0', 10) || 0;
+          const cy = parseInt(parts[2] ?? '0', 10) || 0;
+          target = ((cx + cy) & 1) === 0 ? BGM_TRACKS.ROUTE_A : BGM_TRACKS.ROUTE_B;
+      } else {
+          // Unknown / puzzle map -- default to Route A.
+          target = BGM_TRACKS.ROUTE_A;
+      }
+      playBGM(target);
+  }, [phase, musicStarted, playerState.mapId, loadedChunks]);
 
   // Pre-fetch the official move SFX for every move that either side might use
   // as soon as we enter a battle. The first play is then gapless instead of

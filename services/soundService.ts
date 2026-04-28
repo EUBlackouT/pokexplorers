@@ -101,34 +101,96 @@ const MIRRORS = {
     ]
 };
 
-// Real Pokémon trainer-battle music from Showdown's CDN. Procedural chiptune
-// ("proc://…") is used for menu + overworld because GameFreak overworld BGM
-// isn't hosted anywhere we can legitimately hotlink from.
+// Real Pokémon trainer-battle music from Showdown's CDN, plus our own
+// in-house overworld/title tracks served straight from `public/music/`.
+//
+// The MP3s live next to the bundle so they share an origin with the app
+// (no proxy round-trip, no allow-list), which keeps first-play latency
+// predictable. Filenames are intentionally web-safe (no spaces or
+// non-ASCII): the original artist titles are preserved in CREDITS.md.
+//
+// `MENU` is kept as an alias to `TITLE` so existing call sites still
+// resolve while the rest of the codebase migrates. Procedural chiptune
+// (`proc://…`) survives only as a defensive fallback when the file
+// fails to load.
 export const BGM_TRACKS = {
-    MENU: 'proc://menu',
-    OVERWORLD: 'proc://overworld',
-    BATTLE: 'https://play.pokemonshowdown.com/audio/bw-trainer.mp3',
-    BATTLE_RIVAL: 'https://play.pokemonshowdown.com/audio/bw-rival.mp3',
+    /** Pokémon Ultra Sun & Ultra Moon - Title Screen. Played on the
+     *  main menu / starter pick. */
+    TITLE:        '/music/title.mp3',
+    /** Town theme. Played in town biome chunks (the starting town,
+     *  Pokémon Centers, Marts neighborhood). */
+    TOWN:         '/music/town.mp3',
+    /** Route theme variant A. The route theme alternates A/B per chunk
+     *  (parity-based), so a player walking through several routes hears
+     *  variation without abrupt restarts. */
+    ROUTE_A:      '/music/route_a.mp3',
+    /** Route theme variant B. See ROUTE_A. */
+    ROUTE_B:      '/music/route_b.mp3',
+    /** Interior theme. Played inside any building (homes, gyms, marts,
+     *  Pokémon Centers, labs). */
+    INTERIOR:     '/music/interior.mp3',
+    /** Water theme. Played in lake-biome chunks where the player is
+     *  surfing / surrounded by water. */
+    WATER:        '/music/water.mp3',
+
+    // -- Backwards-compat aliases ------------------------------------
+    MENU:         '/music/title.mp3',
+    OVERWORLD:    '/music/route_a.mp3',
+
+    // -- Battle & legacy fallbacks -----------------------------------
+    BATTLE:        'https://play.pokemonshowdown.com/audio/bw-trainer.mp3',
+    BATTLE_RIVAL:  'https://play.pokemonshowdown.com/audio/bw-rival.mp3',
     BATTLE_ELITE4: 'https://play.pokemonshowdown.com/audio/spl-elite4.mp3',
-    BATTLE_GYM: 'https://play.pokemonshowdown.com/audio/hgss-johto-trainer.mp3',
-    BATTLE_CHIPTUNE: 'proc://battle'
+    BATTLE_GYM:    'https://play.pokemonshowdown.com/audio/hgss-johto-trainer.mp3',
+    BATTLE_CHIPTUNE: 'proc://battle',
 };
 
 let audioCtx: AudioContext | null = null;
-let bgmSource: AudioBufferSourceNode | null = null;
-let bgmGain: GainNode | null = null;
+// =============================================================================
+// BGM crossfade state.
+// ---------------------------------------------------------------------------
+// To support smooth transitions (e.g. interior -> town) we keep a small slot
+// list of in-flight BGM channels. Each slot owns its source + gain. When the
+// caller asks for a new track we add a new slot at full target gain (ramped
+// up from 0) and ramp the existing slots' gains down to 0 over the same
+// fade window. Slots auto-clean themselves once their gain hits 0.
+//
 // `bgmBaseGain` is the developer-intended level for the currently-playing
 // track (computed at play time). We multiply by `getBgmVolume()` when
-// setting the real node gain so that settings sliders can live-adjust
+// setting the live node gain so that settings sliders can live-adjust
 // without destroying the per-track tuning.
+// =============================================================================
+interface BgmSlot {
+    url: string;
+    source: AudioBufferSourceNode | null;   // null for procedural tracks
+    gain: GainNode | null;                  // null for procedural tracks
+    procTheme: string | null;               // proc://<theme> identifier or null
+    baseGain: number;                       // dev-tuned target volume
+    fadeOutTimer: number | null;            // setTimeout id for cleanup
+}
+let bgmSlots: BgmSlot[] = [];
 let bgmBaseGain: number = 1;
 _applyLiveBgm = () => {
-    try { if (bgmGain) bgmGain.gain.value = bgmBaseGain * getBgmVolume(); } catch { /* noop */ }
+    // Re-apply the user's volume setting to whichever slot is currently the
+    // "active" one (most recent, last in array). Older fading slots keep
+    // their fade ramp; we don't want a settings slider tweak mid-fade to
+    // cancel the fade.
+    try {
+        const live = bgmSlots[bgmSlots.length - 1];
+        if (live && live.gain) {
+            const ctx = audioCtx;
+            const now = ctx ? ctx.currentTime : 0;
+            live.gain.gain.cancelScheduledValues(now);
+            live.gain.gain.setValueAtTime(live.baseGain * getBgmVolume(), now);
+        }
+    } catch { /* noop */ }
 };
 let currentBgmUrl: string | null = null;
 let audioUnlocked = false;
 
-// Procedural BGM state
+// Procedural BGM state. `procBgmActive` is the theme string of the
+// proc://<theme> currently being scheduled; setting it to null tells the
+// scheduler loop to bail on its next iteration.
 let procBgmTimer: number | null = null;
 let procBgmActive: string | null = null;
 
@@ -164,6 +226,7 @@ export const unlockAudio = () => {
         ctx.resume().then(() => {
             audioUnlocked = true;
             prefetchCannedSamples();
+            prefetchOverworldMusic();
         }).catch(err => {
             lastError = `Resume Fail: ${err.message}`;
             console.warn("[Audio] Resume failed:", err.message);
@@ -171,6 +234,7 @@ export const unlockAudio = () => {
     } else {
         audioUnlocked = true;
         prefetchCannedSamples();
+        prefetchOverworldMusic();
     }
 };
 
@@ -930,7 +994,7 @@ const scheduleLoop = (ctx: AudioContext, dest: GainNode, theme: ThemeSpec, start
     return melodyEnd;
 };
 
-const startProceduralBGM = (theme: string, volume: number) => {
+const startProceduralBGM = (theme: string, volume: number, slot: BgmSlot) => {
     const ctx = initAudio();
     if (!ctx) return;
     if (ctx.state === 'suspended') ctx.resume();
@@ -942,20 +1006,21 @@ const startProceduralBGM = (theme: string, volume: number) => {
     }
 
     procBgmActive = theme;
-    bgmGain = ctx.createGain();
-    bgmBaseGain = volume * spec.volume / 0.2;
-    bgmGain.gain.value = bgmBaseGain * getBgmVolume();
-    bgmGain.connect(ctx.destination);
+    slot.procTheme = theme;
+    slot.gain = ctx.createGain();
+    slot.baseGain = volume * spec.volume / 0.2;
+    // Live gain is set by crossfadeBGM's ramp; we just connect the node here.
+    slot.gain.gain.value = 0;
+    slot.gain.connect(ctx.destination);
 
     const loopBeats = Math.max(totalBeats(spec.melody), totalBeats(spec.bass));
     const loopDur = loopBeats * (60 / spec.bpm);
 
     let nextStart = ctx.currentTime + 0.05;
     const scheduleOne = () => {
-        if (procBgmActive !== theme || !bgmGain) return;
-        scheduleLoop(ctx, bgmGain, spec, nextStart);
+        if (procBgmActive !== theme || !slot.gain) return;
+        scheduleLoop(ctx, slot.gain, spec, nextStart);
         nextStart += loopDur;
-        // schedule next iteration slightly before the current loop ends
         const msUntilNext = Math.max(100, (nextStart - ctx.currentTime - 0.3) * 1000);
         procBgmTimer = window.setTimeout(scheduleOne, msUntilNext);
     };
@@ -964,47 +1029,208 @@ const startProceduralBGM = (theme: string, volume: number) => {
 };
 
 // =============================================================================
+// BGM CROSSFADE
+// ---------------------------------------------------------------------------
+// Default fade window for context-driven swaps (interior <-> town, route ->
+// water, etc). Long enough to feel musical, short enough that nobody waits
+// on the next track. Tweakable per-call via the second arg of playBGM.
+// =============================================================================
+const DEFAULT_FADE_MS = 1600;
 
-export const playBGM = async (url: string, volume: number = 0.3) => {
-    const ctx = initAudio();
-    if (!ctx || !url || currentBgmUrl === url) return;
-    stopBGM();
-    currentBgmUrl = url;
-
-    // Procedural theme?
-    if (url.startsWith('proc://')) {
-        startProceduralBGM(url.replace('proc://', ''), volume);
-        return;
+const teardownSlot = (slot: BgmSlot) => {
+    if (slot.fadeOutTimer !== null) {
+        clearTimeout(slot.fadeOutTimer);
+        slot.fadeOutTimer = null;
     }
-
-    try {
-        const buffer = await loadBuffer(url);
-        if (!buffer) return;
-        bgmSource = ctx.createBufferSource();
-        bgmSource.buffer = buffer;
-        bgmSource.loop = true;
-        bgmGain = ctx.createGain();
-        bgmBaseGain = volume;
-        bgmGain.gain.value = bgmBaseGain * getBgmVolume();
-        bgmSource.connect(bgmGain).connect(ctx.destination);
-        bgmSource.start(0);
-        console.log("[Audio] BGM Started:", url);
-    } catch (e) {
-        lastError = `BGM Fail: ${(e as Error).message}`;
-        console.error("[Audio] BGM Playback failed", e);
+    if (slot.source) {
+        try { slot.source.stop(); slot.source.disconnect(); } catch {}
+        slot.source = null;
+    }
+    if (slot.gain) {
+        try { slot.gain.disconnect(); } catch {}
+        slot.gain = null;
+    }
+    if (slot.procTheme) {
+        // Killing the active proc theme tells the scheduler loop to stop
+        // queueing the next bar. Any already-scheduled tail notes still
+        // ring out through the ramp-down gain, which is what we want.
+        if (procBgmActive === slot.procTheme) {
+            procBgmActive = null;
+            if (procBgmTimer !== null) {
+                clearTimeout(procBgmTimer);
+                procBgmTimer = null;
+            }
+        }
+        slot.procTheme = null;
     }
 };
 
-export const stopBGM = () => {
-    if (bgmSource) {
-        try { bgmSource.stop(); bgmSource.disconnect(); } catch {}
-        bgmSource = null;
+const fadeOutAndDispose = (slot: BgmSlot, fadeMs: number) => {
+    const ctx = audioCtx;
+    if (!ctx || !slot.gain) {
+        teardownSlot(slot);
+        return;
     }
-    if (bgmGain) { try { bgmGain.disconnect(); } catch {} bgmGain = null; }
+    try {
+        const now = ctx.currentTime;
+        slot.gain.gain.cancelScheduledValues(now);
+        // Hold the current value, then ramp linearly to 0. linear (not
+        // exponential) keeps the equal-power crossfade with the incoming
+        // track perceptually flat at the midpoint.
+        slot.gain.gain.setValueAtTime(slot.gain.gain.value, now);
+        slot.gain.gain.linearRampToValueAtTime(0.0001, now + fadeMs / 1000);
+    } catch { /* noop */ }
+    slot.fadeOutTimer = window.setTimeout(() => teardownSlot(slot), fadeMs + 100);
+};
+
+/**
+ * Play a BGM track with a soft crossfade from whatever's currently playing.
+ *
+ * - If `url` is the current track and a slot is alive, this is a no-op.
+ * - If `url` is a `proc://` theme, it boots the procedural scheduler.
+ * - Otherwise it streams the MP3 (using the buffer cache) and starts a
+ *   looped AudioBufferSource through a fresh gain node, ramping up from 0.
+ *
+ * The previous slot (if any) is faded down in parallel and torn down once
+ * its ramp completes. This means walking from a building (interior.mp3)
+ * out into town (town.mp3) doesn't audibly stop/start -- the two tracks
+ * blend for ~1.6s.
+ */
+export const playBGM = async (url: string, volume: number = 0.3, fadeMs: number = DEFAULT_FADE_MS): Promise<void> => {
+    const ctx = initAudio();
+    if (!ctx || !url) return;
+    if (currentBgmUrl === url && bgmSlots.length > 0) {
+        const live = bgmSlots[bgmSlots.length - 1];
+        if (live.fadeOutTimer === null) return; // already actively playing
+    }
+
+    currentBgmUrl = url;
+
+    // 1. Dispose any old slots: ramp them down to 0 over the fade window.
+    const oldSlots = bgmSlots.slice();
+    bgmSlots = [];
+    for (const slot of oldSlots) {
+        fadeOutAndDispose(slot, fadeMs);
+        bgmSlots.push(slot); // keep reference until teardown so volume slider can find it
+    }
+
+    // 2. Boot a fresh slot for the new track.
+    const newSlot: BgmSlot = {
+        url,
+        source: null,
+        gain: null,
+        procTheme: null,
+        baseGain: volume,
+        fadeOutTimer: null,
+    };
+    bgmBaseGain = volume;
+
+    if (url.startsWith('proc://')) {
+        startProceduralBGM(url.replace('proc://', ''), volume, newSlot);
+    } else {
+        try {
+            const buffer = await loadBuffer(url);
+            // RACE GUARD: if another playBGM() call superseded us during
+            // the fetch (player walked from town -> route -> water in <1s),
+            // drop this slot silently. Without this, the late-arriving
+            // buffer would push a third slot that doesn't match
+            // currentBgmUrl, leaving two competing tracks layered.
+            if (currentBgmUrl !== url) {
+                return;
+            }
+            if (!buffer) {
+                // Fetch failed (404, decode error). Drop the slot and bail
+                // rather than committing the player to silence; resetting
+                // currentBgmUrl lets the next call retry.
+                if (currentBgmUrl === url) currentBgmUrl = null;
+                return;
+            }
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            source.loop = true;
+            const gain = ctx.createGain();
+            gain.gain.value = 0;
+            source.connect(gain).connect(ctx.destination);
+            source.start(0);
+            newSlot.source = source;
+            newSlot.gain = gain;
+            console.log("[Audio] BGM started (crossfading in):", url);
+        } catch (e) {
+            lastError = `BGM Fail: ${(e as Error).message}`;
+            console.error("[Audio] BGM Playback failed", e);
+            if (currentBgmUrl === url) currentBgmUrl = null;
+            return;
+        }
+    }
+
+    // 3. Ramp the new slot up from 0 to its target gain.
+    if (newSlot.gain) {
+        const now = ctx.currentTime;
+        try {
+            newSlot.gain.gain.cancelScheduledValues(now);
+            newSlot.gain.gain.setValueAtTime(0.0001, now);
+            newSlot.gain.gain.linearRampToValueAtTime(
+                newSlot.baseGain * getBgmVolume(),
+                now + fadeMs / 1000,
+            );
+        } catch { /* noop */ }
+    }
+
+    bgmSlots.push(newSlot);
+
+    // 4. Garbage-collect torn-down slots from the array (they're already
+    //    audio-disposed by fadeOutAndDispose's setTimeout).
+    setTimeout(() => {
+        bgmSlots = bgmSlots.filter(s => s.gain !== null || s.procTheme !== null);
+    }, fadeMs + 200);
+};
+
+/**
+ * Hard stop all BGM with no fade. Used for the BATTLE -> OVERWORLD silence
+ * gap and for unloading the page.
+ */
+export const stopBGM = (): void => {
+    for (const slot of bgmSlots) teardownSlot(slot);
+    bgmSlots = [];
     if (procBgmTimer !== null) {
         clearTimeout(procBgmTimer);
         procBgmTimer = null;
     }
     procBgmActive = null;
     currentBgmUrl = null;
+};
+
+/**
+ * Soft stop: fade out whatever's playing without scheduling a replacement.
+ * Useful when the player enters a phase that should be silent (e.g. a
+ * cutscene) without the abrupt cut of stopBGM().
+ */
+export const fadeOutBGM = (fadeMs: number = DEFAULT_FADE_MS): void => {
+    for (const slot of bgmSlots) fadeOutAndDispose(slot, fadeMs);
+    currentBgmUrl = null;
+    setTimeout(() => {
+        bgmSlots = bgmSlots.filter(s => s.gain !== null || s.procTheme !== null);
+    }, fadeMs + 200);
+};
+
+/**
+ * Pre-warm the in-house overworld music so the first crossfade is already
+ * decoded. Call from `unlockAudio()` so the network round-trip happens in
+ * the background while the player is on the main menu.
+ *
+ * Total payload is ~12MB across 6 tracks; for users on slow links this
+ * still arrives well before they finish picking a starter.
+ */
+export const prefetchOverworldMusic = (): void => {
+    const urls = [
+        BGM_TRACKS.TITLE,
+        BGM_TRACKS.TOWN,
+        BGM_TRACKS.ROUTE_A,
+        BGM_TRACKS.ROUTE_B,
+        BGM_TRACKS.INTERIOR,
+        BGM_TRACKS.WATER,
+    ];
+    for (const u of urls) {
+        if (!bufferCache.has(u) && !failedUrls.has(u)) void loadBuffer(u);
+    }
 };
