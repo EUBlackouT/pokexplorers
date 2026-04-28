@@ -55,6 +55,14 @@ import { DialogueBox } from './components/ui/DialogueBox';
 import { PokemonStorage, makeEmptyBoxes, DEFAULT_BOX_COUNT } from './components/screens/PokemonStorage';
 import { MetaMenu } from './components/screens/MetaMenu';
 import { FieldGuide } from './components/screens/FieldGuide';
+import {
+    MenuCardButton,
+    IconPokeball,
+    IconCompass,
+    IconCrystal,
+    IconNetwork,
+    IconHandbook,
+} from './components/ui/MenuKit';
 import { PokemonSummary } from './components/screens/PokemonSummary';
 import { PauseMenu } from './components/screens/PauseMenu';
 import { MAIN_QUESTS } from './data/quests';
@@ -9711,23 +9719,37 @@ export default function App() {
                     </motion.div>
                 </motion.div>
 
-                <div className="z-10 flex flex-col gap-6 w-full max-w-sm px-6">
+                {/*
+                 * Main menu card stack -- redesigned as proper Pokemon-game
+                 * "trainer cards" rather than flat colored rectangles.
+                 *
+                 * Hierarchy:
+                 *   - Continue (if a save exists) is the HERO: oversized,
+                 *     pulsing amber halo, drops the eye to the obvious next
+                 *     action so returning players never hesitate.
+                 *   - Start / New Adventure is also a HERO when no save
+                 *     exists; demoted to STANDARD when Continue is taking
+                 *     the spotlight, since it's destructive (overwrites save).
+                 *   - Rift Atelier + Join Friend are STANDARD secondary cards.
+                 *   - How To Play is a COMPACT tertiary card so it reads
+                 *     as a side-door, not a main action.
+                 */}
+                <div className="z-10 flex flex-col gap-3.5 w-full max-w-md px-4">
                     {hasExistingSave && (
-                        <button
+                        <MenuCardButton
                             onClick={() => { unlockAudio(); handleLoadGame(); }}
-                            className="group relative bg-amber-500 hover:bg-amber-400 px-8 py-6 rounded-2xl text-xl border-b-8 border-amber-700 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(245,158,11,0.3)]"
-                        >
-                            <span className="relative z-10 flex items-center justify-center gap-3 text-black">
-                                <span className="text-2xl">💾</span> Continue
-                            </span>
-                            <div className="absolute bottom-1 left-0 right-0 text-center text-[8px] text-black/70 uppercase tracking-widest">
-                                saved {formatSavedAt(lastSavedAt)}
-                            </div>
-                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                        </button>
+                            size="hero"
+                            accent="#f59e0b"
+                            icon={<IconPokeball accent="#fbbf24" className="w-full h-full" />}
+                            eyebrow="Resume Expedition"
+                            title="CONTINUE"
+                            subtitle={`Saved ${formatSavedAt(lastSavedAt)}`}
+                            pulse
+                        />
                     )}
-                    <button
-                        onClick={()=>{
+
+                    <MenuCardButton
+                        onClick={() => {
                             unlockAudio();
                             setMusicStarted(true);
                             if (hasExistingSave) {
@@ -9738,58 +9760,61 @@ export default function App() {
                             }
                             setPhase(GamePhase.STARTER_SELECT);
                         }}
-                        className="group relative bg-blue-600 hover:bg-blue-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-blue-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(37,99,235,0.3)]"
-                    >
-                        <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">⚡</span> {hasExistingSave ? 'New Adventure' : 'Start Adventure'}
-                        </span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                    </button>
-                    
-                    <button 
-                        onClick={()=>setPhase(GamePhase.META_MENU)} 
-                        className="group relative bg-purple-600 hover:bg-purple-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-purple-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(147,51,234,0.3)]"
-                    >
-                        <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">💎</span> RIFT UPGRADES
-                        </span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                        {playerState.meta.riftEssence > 0 && (
-                            <div className="absolute -top-2 -right-2 bg-yellow-400 text-black text-[10px] px-3 py-1.5 rounded-full animate-bounce font-black shadow-lg border-2 border-black">
-                                {playerState.meta.riftEssence} ESSENCE
-                            </div>
-                        )}
-                    </button>
+                        size={hasExistingSave ? 'standard' : 'hero'}
+                        accent="#3c5aa6"
+                        icon={<IconCompass accent="#67e8f9" className="w-full h-full" />}
+                        eyebrow={hasExistingSave ? 'Reset & Restart' : 'Begin Your Journey'}
+                        title={hasExistingSave ? 'NEW ADVENTURE' : 'START ADVENTURE'}
+                        subtitle={hasExistingSave ? 'Erase save, pick a new starter' : 'Pick a starter and dive into the Rift'}
+                        pulse={!hasExistingSave}
+                    />
 
-                    <button 
-                        onClick={()=>{ unlockAudio(); setMusicStarted(true); setPhase(GamePhase.NETWORK_MENU); }} 
-                        className="group relative bg-emerald-600 hover:bg-emerald-500 px-8 py-6 rounded-2xl text-xl border-b-8 border-emerald-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(16,185,129,0.3)]"
-                    >
-                        <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-2xl">🌍</span> Join Friend
-                        </span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                    </button>
+                    <MenuCardButton
+                        onClick={() => setPhase(GamePhase.META_MENU)}
+                        size="standard"
+                        accent="#a855f7"
+                        icon={<IconCrystal accent="#c084fc" className="w-full h-full" />}
+                        eyebrow="Between-Run Upgrades"
+                        title="RIFT ATELIER"
+                        subtitle="Spend Essence on talents, keystones & vault unlocks"
+                        cornerBadge={playerState.meta.riftEssence > 0 ? (
+                            <motion.div
+                                animate={{ y: [0, -3, 0] }}
+                                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                                className="bg-yellow-400 text-black text-[10px] px-3 py-1.5 rounded-full font-black shadow-lg border-2 border-black tracking-wider"
+                            >
+                                ◆ {playerState.meta.riftEssence}
+                            </motion.div>
+                        ) : null}
+                    />
 
-                    {/* Trainer's Handbook -- the in-game tutorial / encyclopedia.
-                     *  Smaller than the headline buttons (Adventure / Atelier /
-                     *  Join) so it reads as a "side door" rather than a main
-                     *  action, but pulled forward for new players via the NEW!
-                     *  badge that only appears when there's no existing save. */}
-                    <button
+                    <MenuCardButton
+                        onClick={() => { unlockAudio(); setMusicStarted(true); setPhase(GamePhase.NETWORK_MENU); }}
+                        size="standard"
+                        accent="#10b981"
+                        icon={<IconNetwork accent="#34d399" className="w-full h-full" />}
+                        eyebrow="Multiplayer · Co-op"
+                        title="JOIN FRIEND"
+                        subtitle="Enter a room code to play double battles together"
+                    />
+
+                    <MenuCardButton
                         onClick={() => { unlockAudio(); setPhase(GamePhase.FIELD_GUIDE); }}
-                        className="group relative bg-cyan-600/90 hover:bg-cyan-500 px-6 py-4 rounded-2xl text-base border-b-8 border-cyan-800 active:border-b-0 active:translate-y-2 transition-all font-bold uppercase overflow-hidden shadow-[0_20px_50px_rgba(8,145,178,0.3)]"
-                    >
-                        <span className="relative z-10 flex items-center justify-center gap-3">
-                            <span className="text-xl">📖</span> How To Play
-                        </span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                        {!hasExistingSave && (
-                            <div className="absolute -top-2 -right-2 bg-emerald-400 text-black text-[10px] px-3 py-1.5 rounded-full animate-bounce font-black shadow-lg border-2 border-black">
+                        size="compact"
+                        accent="#0891b2"
+                        icon={<IconHandbook accent="#67e8f9" className="w-full h-full" />}
+                        eyebrow="Trainer's Handbook"
+                        title="HOW TO PLAY"
+                        cornerBadge={!hasExistingSave ? (
+                            <motion.div
+                                animate={{ y: [0, -3, 0], rotate: [-3, 3, -3] }}
+                                transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+                                className="bg-emerald-400 text-black text-[10px] px-3 py-1.5 rounded-full font-black shadow-lg border-2 border-black tracking-wider"
+                            >
                                 NEW! START HERE
-                            </div>
-                        )}
-                    </button>
+                            </motion.div>
+                        ) : null}
+                    />
                 </div>
 
                 <div className="absolute bottom-8 flex flex-col items-center gap-4">

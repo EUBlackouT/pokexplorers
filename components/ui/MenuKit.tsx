@@ -300,3 +300,311 @@ export const PokeballWatermark: React.FC<{ className?: string; opacity?: number 
         <circle cx="12" cy="12" r="3.4" fill="#f9fafb" stroke="#0f172a" strokeWidth="2" />
     </svg>
 );
+
+// ===========================================================================
+// MAIN-MENU ICONOGRAPHY
+// ---------------------------------------------------------------------------
+// Custom SVG icons sized to drop into the MenuCardButton's left art panel.
+// They share a viewBox of 0 0 64 64 and a single `accent` color so each one
+// can be re-themed by its host card without any per-icon style overrides.
+// All icons are designed to read at 48-80px sizes in the menu.
+// ===========================================================================
+
+interface IconProps { accent: string; className?: string; }
+
+/** Classic Pokéball, full-fidelity (continue / start adventure CTA). */
+export const IconPokeball: React.FC<IconProps> = ({ accent, className = '' }) => (
+    <svg viewBox="0 0 64 64" className={className} aria-hidden="true">
+        <defs>
+            <radialGradient id="ipb-top" cx="35%" cy="32%" r="60%">
+                <stop offset="0%" stopColor="#fda4af" />
+                <stop offset="55%" stopColor="#dc2626" />
+                <stop offset="100%" stopColor="#7f1d1d" />
+            </radialGradient>
+            <radialGradient id="ipb-bot" cx="35%" cy="68%" r="60%">
+                <stop offset="0%" stopColor="#f8fafc" />
+                <stop offset="60%" stopColor="#cbd5e1" />
+                <stop offset="100%" stopColor="#475569" />
+            </radialGradient>
+        </defs>
+        <circle cx="32" cy="32" r="28" fill={accent} opacity="0.15" />
+        <circle cx="32" cy="32" r="26" fill="url(#ipb-top)" />
+        <path d="M6 32 a26 26 0 0 0 52 0 z" fill="url(#ipb-bot)" />
+        <rect x="6" y="29.5" width="52" height="5" fill="#0f172a" />
+        <circle cx="32" cy="32" r="9" fill="#0f172a" />
+        <circle cx="32" cy="32" r="6.5" fill="#f8fafc" stroke="#0f172a" strokeWidth="1.5" />
+        <circle cx="29.5" cy="29.5" r="2" fill="#fff" opacity="0.9" />
+    </svg>
+);
+
+/** Compass rose: explorer / new adventure. */
+export const IconCompass: React.FC<IconProps> = ({ accent, className = '' }) => (
+    <svg viewBox="0 0 64 64" className={className} aria-hidden="true">
+        <defs>
+            <radialGradient id="ic-bg" cx="50%" cy="50%" r="55%">
+                <stop offset="0%" stopColor={`${accent}aa`} />
+                <stop offset="60%" stopColor={`${accent}33`} />
+                <stop offset="100%" stopColor="#0f172a" />
+            </radialGradient>
+        </defs>
+        <circle cx="32" cy="32" r="28" fill="url(#ic-bg)" stroke={accent} strokeWidth="2" />
+        <circle cx="32" cy="32" r="22" fill="none" stroke={`${accent}88`} strokeWidth="0.7" strokeDasharray="2 3" />
+        <polygon points="32,8 36,30 32,34 28,30" fill={accent} />
+        <polygon points="32,56 28,34 32,30 36,34" fill="#f8fafc" stroke={accent} strokeWidth="0.5" />
+        <polygon points="32,8 36,30 32,34 28,30" fill="none" stroke="#fff" strokeOpacity="0.5" strokeWidth="0.5" />
+        <circle cx="32" cy="32" r="3" fill="#0f172a" stroke={accent} strokeWidth="1.5" />
+        <text x="32" y="14" textAnchor="middle" fontSize="6" fill={accent} fontWeight="900" fontFamily="monospace">N</text>
+    </svg>
+);
+
+/** Cut crystal / Rift Essence gem (atelier upgrades). */
+export const IconCrystal: React.FC<IconProps> = ({ accent, className = '' }) => (
+    <svg viewBox="0 0 64 64" className={className} aria-hidden="true">
+        <defs>
+            <linearGradient id="icr-1" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#fff" stopOpacity="0.95" />
+                <stop offset="50%" stopColor={accent} />
+                <stop offset="100%" stopColor="#0f172a" />
+            </linearGradient>
+            <linearGradient id="icr-2" x1="0%" y1="100%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor={accent} />
+                <stop offset="100%" stopColor="#fff" stopOpacity="0.6" />
+            </linearGradient>
+        </defs>
+        <circle cx="32" cy="32" r="26" fill={accent} opacity="0.1" />
+        <polygon points="32,6 50,24 42,52 22,52 14,24" fill="url(#icr-1)" stroke={accent} strokeWidth="1.5" />
+        <polygon points="32,6 50,24 32,30 14,24" fill="url(#icr-2)" opacity="0.7" />
+        <polygon points="32,30 42,52 22,52" fill={accent} opacity="0.4" />
+        <line x1="14" y1="24" x2="50" y2="24" stroke="#fff" strokeOpacity="0.4" strokeWidth="0.7" />
+        <line x1="32" y1="6" x2="32" y2="52" stroke="#fff" strokeOpacity="0.3" strokeWidth="0.5" />
+    </svg>
+);
+
+/** Linked planet / network icon (multiplayer). */
+export const IconNetwork: React.FC<IconProps> = ({ accent, className = '' }) => (
+    <svg viewBox="0 0 64 64" className={className} aria-hidden="true">
+        <defs>
+            <radialGradient id="in-globe" cx="40%" cy="40%" r="60%">
+                <stop offset="0%" stopColor="#fff" stopOpacity="0.95" />
+                <stop offset="40%" stopColor={accent} />
+                <stop offset="100%" stopColor="#0f172a" />
+            </radialGradient>
+        </defs>
+        <circle cx="32" cy="32" r="20" fill="url(#in-globe)" stroke={accent} strokeWidth="2" />
+        <ellipse cx="32" cy="32" rx="20" ry="8" fill="none" stroke="#fff" strokeOpacity="0.4" strokeWidth="0.7" />
+        <ellipse cx="32" cy="32" rx="8" ry="20" fill="none" stroke="#fff" strokeOpacity="0.4" strokeWidth="0.7" />
+        <line x1="12" y1="32" x2="52" y2="32" stroke="#fff" strokeOpacity="0.4" strokeWidth="0.7" />
+        <circle cx="14" cy="14" r="5" fill={accent} stroke="#0f172a" strokeWidth="1.5" />
+        <circle cx="50" cy="50" r="5" fill={accent} stroke="#0f172a" strokeWidth="1.5" />
+        <circle cx="50" cy="14" r="3.5" fill="#fff" stroke={accent} strokeWidth="1.2" />
+        <line x1="14" y1="14" x2="32" y2="32" stroke="#fff" strokeOpacity="0.7" strokeWidth="1" strokeDasharray="2 2" />
+        <line x1="50" y1="50" x2="32" y2="32" stroke="#fff" strokeOpacity="0.7" strokeWidth="1" strokeDasharray="2 2" />
+    </svg>
+);
+
+/** Open book / handbook icon (how to play). */
+export const IconHandbook: React.FC<IconProps> = ({ accent, className = '' }) => (
+    <svg viewBox="0 0 64 64" className={className} aria-hidden="true">
+        <defs>
+            <linearGradient id="ih-page" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#f8fafc" />
+                <stop offset="100%" stopColor="#cbd5e1" />
+            </linearGradient>
+        </defs>
+        <circle cx="32" cy="32" r="26" fill={accent} opacity="0.12" />
+        <path d="M8 18 L32 14 L32 54 L8 50 Z" fill="url(#ih-page)" stroke={accent} strokeWidth="1.5" />
+        <path d="M56 18 L32 14 L32 54 L56 50 Z" fill="url(#ih-page)" stroke={accent} strokeWidth="1.5" />
+        <path d="M32 14 L32 54" stroke={accent} strokeWidth="1.5" />
+        <line x1="13" y1="24" x2="28" y2="22" stroke={accent} strokeWidth="1" />
+        <line x1="13" y1="29" x2="28" y2="27" stroke={accent} strokeWidth="1" />
+        <line x1="13" y1="34" x2="24" y2="32.5" stroke={accent} strokeWidth="1" />
+        <line x1="36" y1="22" x2="51" y2="24" stroke={accent} strokeWidth="1" />
+        <line x1="36" y1="27" x2="51" y2="29" stroke={accent} strokeWidth="1" />
+        <line x1="36" y1="32.5" x2="47" y2="34" stroke={accent} strokeWidth="1" />
+        {/* Bookmark ribbon */}
+        <path d="M44 14 L48 14 L48 28 L46 26 L44 28 Z" fill={accent} stroke="#0f172a" strokeWidth="0.8" />
+    </svg>
+);
+
+// ===========================================================================
+// MENU CARD BUTTON
+// ---------------------------------------------------------------------------
+// The hero / standard / compact card buttons used on the main menu. Provides
+// a consistent look that scales across CTA tiers:
+//   - hero:     ~144px tall, oversized icon, used for THE primary action.
+//   - standard: ~104px tall, regular two-line layout for secondary actions.
+//   - compact:  ~80px tall, single-line layout for tertiary actions.
+//
+// Visual recipe:
+//   - Outer holographic frame (gradient ring) tinted by `accent`
+//   - Inner dark slate panel with subtle inner glow
+//   - Left art panel: the supplied icon, big, with a rotating halo
+//   - Right text panel: BrandTitle-style gold title + cyan/eyebrow subtitle
+//   - Bottom border depth shadow that collapses on press (mainline "snap" feel)
+//   - Diagonal shimmer sweep on hover
+//   - Optional pulsing glow on `pulse=true` so the primary CTA self-attracts
+//
+// Per-button accent colors theme the ring, halo, and shimmer without
+// touching the typography. The title is ALWAYS gold-on-stroke so the menu
+// reads as one Pokemon-game family no matter what tier the card is.
+// ===========================================================================
+
+type MenuCardSize = 'hero' | 'standard' | 'compact';
+
+export const MenuCardButton: React.FC<{
+    onClick: () => void;
+    size?: MenuCardSize;
+    icon: React.ReactNode;
+    title: string;
+    subtitle?: string;
+    eyebrow?: string;
+    accent?: string;
+    /** Right-side decoration (e.g. essence count, NEW! badge). Goes under
+     *  the title block but inside the card. */
+    rightSlot?: React.ReactNode;
+    /** Full-bleed corner badge (e.g. "NEW! START HERE", currency pip). */
+    cornerBadge?: React.ReactNode;
+    /** Soft pulsing exterior glow drawing the eye to the primary CTA. */
+    pulse?: boolean;
+    disabled?: boolean;
+    className?: string;
+}> = ({
+    onClick,
+    size = 'standard',
+    icon,
+    title,
+    subtitle,
+    eyebrow,
+    accent = '#3c5aa6',
+    rightSlot,
+    cornerBadge,
+    pulse,
+    disabled,
+    className = '',
+}) => {
+    const sizing = size === 'hero'
+        ? { pad: 'p-5', iconWrap: 'w-24 h-24', iconInner: 'w-16 h-16', titleSize: 'text-2xl md:text-3xl', strokeW: '1.6px', shadowDepth: '3px', subSize: 'text-[11px]', eyebrowSize: 'text-[9px]' }
+        : size === 'standard'
+            ? { pad: 'p-4', iconWrap: 'w-20 h-20', iconInner: 'w-14 h-14', titleSize: 'text-xl md:text-2xl', strokeW: '1.3px', shadowDepth: '2.5px', subSize: 'text-[10px]', eyebrowSize: 'text-[8px]' }
+            : { pad: 'p-3', iconWrap: 'w-14 h-14', iconInner: 'w-10 h-10', titleSize: 'text-base md:text-lg',  strokeW: '1px',   shadowDepth: '2px', subSize: 'text-[9px]',  eyebrowSize: 'text-[7px]' };
+
+    return (
+        <motion.button
+            onClick={onClick}
+            disabled={disabled}
+            whileHover={disabled ? undefined : { y: -2 }}
+            whileTap={disabled ? undefined : { y: 4 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 24 }}
+            className={`group relative w-full text-left rounded-2xl overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+            style={{
+                // Outer holographic frame: a 2px gradient ring + colored
+                // shadow so the button reads as a "card" rather than a
+                // flat <button>. The double-shadow gives both the bottom
+                // depth (mainline button press) and a soft accent glow.
+                background: `linear-gradient(135deg, ${accent} 0%, ${accent}66 35%, #0f172a 60%, ${accent}44 100%)`,
+                padding: '2px',
+                boxShadow: pulse
+                    ? `0 8px 0 ${accent}88, 0 18px 40px ${accent}55, 0 0 36px ${accent}66`
+                    : `0 8px 0 ${accent}66, 0 14px 32px rgba(0,0,0,0.55)`,
+            }}
+        >
+            {/* Pulse halo for primary CTA */}
+            {pulse && (
+                <motion.div
+                    className="absolute inset-0 rounded-2xl pointer-events-none"
+                    animate={{ boxShadow: [`0 0 0 0 ${accent}55`, `0 0 0 18px ${accent}00`] }}
+                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut' }}
+                />
+            )}
+
+            {/* Inner card surface */}
+            <div
+                className={`relative w-full h-full rounded-[15px] overflow-hidden ${sizing.pad}`}
+                style={{
+                    background: `radial-gradient(ellipse at 0% 0%, ${accent}33 0%, rgba(15,23,42,0.95) 55%, #020617 100%)`,
+                    boxShadow: `inset 0 1px 0 0 ${accent}55, inset 0 -2px 0 0 rgba(0,0,0,0.6)`,
+                }}
+            >
+                {/* Faint pokeball watermark for game-feel texture */}
+                <PokeballWatermark
+                    className="absolute -right-4 -bottom-4 w-24 h-24 rotate-12"
+                    opacity={0.05}
+                />
+
+                {/* Layout: icon on the left, text block fills the rest */}
+                <div className="relative z-10 flex items-center gap-4">
+                    {/* Icon plinth: rotating halo + the icon itself */}
+                    <div className={`relative ${sizing.iconWrap} shrink-0 flex items-center justify-center`}>
+                        <motion.div
+                            className="absolute inset-0 rounded-full"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 14, repeat: Infinity, ease: 'linear' }}
+                            style={{
+                                background: `conic-gradient(from 0deg, transparent 0deg, ${accent}55 60deg, transparent 120deg, transparent 240deg, ${accent}55 300deg, transparent 360deg)`,
+                                filter: 'blur(2px)',
+                                opacity: 0.55,
+                            }}
+                        />
+                        <div
+                            className={`relative ${sizing.iconWrap} rounded-full flex items-center justify-center`}
+                            style={{
+                                background: `radial-gradient(circle at 35% 30%, rgba(255,255,255,0.18) 0%, ${accent}22 50%, rgba(2,6,23,0.85) 100%)`,
+                                border: `1.5px solid ${accent}aa`,
+                                boxShadow: `inset 0 0 12px ${accent}55, 0 4px 14px rgba(0,0,0,0.45)`,
+                            }}
+                        >
+                            <div className={sizing.iconInner}>{icon}</div>
+                        </div>
+                    </div>
+
+                    {/* Text block */}
+                    <div className="flex-1 min-w-0">
+                        {eyebrow && (
+                            <div
+                                className={`${sizing.eyebrowSize} uppercase font-black tracking-[0.32em] mb-1`}
+                                style={{ color: accent, textShadow: `0 0 8px ${accent}66` }}
+                            >
+                                {eyebrow}
+                            </div>
+                        )}
+                        <div
+                            className={`${sizing.titleSize} font-black italic tracking-tight leading-none`}
+                            style={{
+                                color: '#ffcb05',
+                                textShadow: `0 ${sizing.shadowDepth} 0 #1e293b, 0 ${parseInt(sizing.shadowDepth) * 2}px 12px rgba(0,0,0,0.55)`,
+                                WebkitTextStroke: `${sizing.strokeW} #1e293b`,
+                                paintOrder: 'stroke fill',
+                            }}
+                        >
+                            {title}
+                        </div>
+                        {subtitle && (
+                            <div className={`${sizing.subSize} text-slate-300/85 mt-1.5 leading-tight font-medium`}>
+                                {subtitle}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Right slot (e.g. currency pip) */}
+                    {rightSlot && <div className="shrink-0">{rightSlot}</div>}
+                </div>
+
+                {/* Diagonal shimmer sweep on hover */}
+                <div
+                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-out pointer-events-none"
+                />
+
+                {/* Top spec line */}
+                <div
+                    className="absolute top-0 left-6 right-6 h-px"
+                    style={{ background: `linear-gradient(90deg, transparent 0%, ${accent} 50%, transparent 100%)` }}
+                />
+            </div>
+
+            {/* Corner badge (NEW!, currency pip) */}
+            {cornerBadge && (
+                <div className="absolute -top-2 -right-2 z-20">{cornerBadge}</div>
+            )}
+        </motion.button>
+    );
+};

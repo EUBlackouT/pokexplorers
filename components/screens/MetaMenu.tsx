@@ -278,7 +278,7 @@ export const MetaMenu: React.FC<{
 
                     <div className="flex items-center justify-center gap-4 mt-4">
                         <div className="h-[2px] w-14 bg-purple-400/50" />
-                        <p className="text-purple-200/80 text-[9px] tracking-[0.45em] uppercase">
+                        <p className="text-purple-200/90 text-[11px] tracking-[0.45em] uppercase font-bold">
                             Forge Your Next Run
                         </p>
                         <div className="h-[2px] w-14 bg-amber-300/50" />
@@ -442,7 +442,7 @@ const CompendiumRow: React.FC<{
         initial={{ opacity: 0, x: -8 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: animationDelay }}
-        className="relative text-left rounded-xl border-2 px-2.5 py-2 flex items-center gap-2.5 transition-all active:translate-x-0.5 overflow-hidden"
+        className="relative text-left rounded-xl border-2 px-3 py-2.5 flex items-center gap-3 transition-all active:translate-x-0.5 overflow-hidden"
         style={{
             borderColor: selected ? accent : owned ? `${accent}88` : `${accent}33`,
             background: selected
@@ -460,14 +460,28 @@ const CompendiumRow: React.FC<{
             <motion.span
                 initial={{ opacity: 0, x: -4 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="absolute -left-[3px] top-1/2 -translate-y-1/2 w-[3px] h-7 rounded-r"
+                className="absolute -left-[3px] top-1/2 -translate-y-1/2 w-[3px] h-8 rounded-r"
                 style={{ background: accent, boxShadow: `0 0 8px ${accent}` }}
             />
         )}
-        <RuneIcon url={iconUrl} accent={accent} size="sm" dim={dim} glow={owned && !dim} />
+        <RuneIcon url={iconUrl} accent={accent} size="md" dim={dim} glow={owned && !dim} />
         <div className="flex-1 min-w-0">
-            <div className="text-[7px] uppercase tracking-[0.25em]" style={{ color: `${accent}cc` }}>{eyebrow}</div>
-            <div className="text-[10px] font-black uppercase tracking-wider truncate" style={{ color: selected ? '#f8fafc' : dim ? '#94a3b8' : '#e2e8f0' }}>
+            {/* Bumped from 7px/10px to 9px/13px so the row is actually
+             *  legible without zooming. The user called the Atelier
+             *  "really unreadable" -- the hero offender was these rows. */}
+            <div
+                className="text-[9px] uppercase tracking-[0.28em] font-bold"
+                style={{ color: `${accent}dd`, textShadow: `0 0 6px ${accent}55` }}
+            >
+                {eyebrow}
+            </div>
+            <div
+                className="text-[13px] font-black uppercase tracking-wide truncate mt-0.5"
+                style={{
+                    color: selected ? '#fff' : dim ? '#94a3b8' : '#f1f5f9',
+                    textShadow: selected ? `0 1px 6px ${accent}99` : '0 1px 2px rgba(0,0,0,0.6)',
+                }}
+            >
                 {name}
             </div>
         </div>
@@ -636,7 +650,7 @@ const KeystoneDetail: React.FC<{
                 </div>
 
                 {/* Description + per-level effect */}
-                <p className="text-[10px] md:text-[11px] text-slate-200/90 leading-relaxed mt-5 max-w-lg mx-auto">
+                <p className="text-[13px] md:text-[14px] text-slate-100 leading-relaxed mt-5 max-w-lg mx-auto">
                     {k.desc}
                 </p>
                 <div
@@ -858,7 +872,7 @@ const TalentDetail: React.FC<{
                     {t.name.toUpperCase()}
                 </h3>
 
-                <p className="text-[10px] md:text-[11px] text-slate-200/90 leading-relaxed mt-5 max-w-lg mx-auto">
+                <p className="text-[13px] md:text-[14px] text-slate-100 leading-relaxed mt-5 max-w-lg mx-auto">
                     {t.desc}
                 </p>
                 <p className="text-[10px] italic mt-4 max-w-lg mx-auto" style={{ color: t.accent }}>
@@ -1125,10 +1139,10 @@ const MechanicDetail: React.FC<{
                     {v.name.toUpperCase()}
                 </h3>
 
-                <p className="text-[10px] md:text-[11px] text-slate-200/90 leading-relaxed mt-5 max-w-xl mx-auto">
+                <p className="text-[13px] md:text-[14px] text-slate-100 leading-relaxed mt-5 max-w-xl mx-auto">
                     {v.desc}
                 </p>
-                <p className="text-[10px] md:text-[11px] italic mt-3 max-w-xl mx-auto" style={{ color: v.accent }}>
+                <p className="text-[11px] md:text-[12px] italic mt-3 max-w-xl mx-auto" style={{ color: v.accent }}>
                     <span className="opacity-70">"</span>{v.flavor}<span className="opacity-70">"</span>
                 </p>
 
@@ -1239,7 +1253,7 @@ const UtilityDetail: React.FC<{
                     {v.name.toUpperCase()}
                 </h3>
 
-                <p className="text-[10px] md:text-[11px] text-slate-200/90 leading-relaxed mt-4 max-w-lg mx-auto">
+                <p className="text-[13px] md:text-[14px] text-slate-100 leading-relaxed mt-4 max-w-lg mx-auto">
                     {v.desc}
                 </p>
                 <p className="text-[10px] italic mt-3 max-w-lg mx-auto" style={{ color: v.accent }}>
@@ -1294,8 +1308,8 @@ const EarningLedger: React.FC<{ open: boolean; onToggle: () => void }> = ({ open
                 ★
             </div>
             <div className="flex-1 min-w-0">
-                <div className="text-[8px] uppercase tracking-[0.35em] text-amber-300">Earning Ledger</div>
-                <h4 className="text-[10px] md:text-[11px] uppercase font-black tracking-wide text-amber-200">
+                <div className="text-[10px] uppercase tracking-[0.35em] text-amber-300 font-bold">Earning Ledger</div>
+                <h4 className="text-[13px] md:text-[14px] uppercase font-black tracking-wide text-amber-100" style={{ textShadow: '0 0 10px rgba(251,191,36,0.55)' }}>
                     How to Earn Rift Tokens
                 </h4>
             </div>
@@ -1316,7 +1330,7 @@ const EarningLedger: React.FC<{ open: boolean; onToggle: () => void }> = ({ open
                     transition={{ duration: 0.22 }}
                     className="overflow-hidden"
                 >
-                    <div className="px-3 md:px-4 pb-3 md:pb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-[8px]">
+                    <div className="px-3 md:px-4 pb-3 md:pb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-[11px]">
                         <TokenSource label="Gym Leader"          value={`+${TOKEN_AWARDS.gymLeader}`} />
                         <TokenSource label="Rival Milestone"     value={`+${TOKEN_AWARDS.rivalMilestone}`} />
                         <TokenSource label="Alpha Catch"         value={`+${TOKEN_AWARDS.alphaCatch}`} />
@@ -1340,7 +1354,7 @@ const ListGroupLabel: React.FC<{ color: string; label: string; pulse?: boolean }
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: color, boxShadow: `0 0 8px ${color}` }}
         />
-        <h5 className="text-[8px] uppercase tracking-[0.4em] font-black" style={{ color }}>{label}</h5>
+        <h5 className="text-[10px] uppercase tracking-[0.4em] font-black" style={{ color, textShadow: `0 0 8px ${color}55` }}>{label}</h5>
         <div className="flex-1 h-[1px]" style={{ background: `linear-gradient(to right, ${color}66, transparent)` }} />
     </div>
 );
@@ -1476,8 +1490,8 @@ const ProgressPip: React.FC<{ label: string; value: string; accent: string }> = 
         className="rounded-2xl border border-white/10 px-3 py-2 flex items-center justify-between gap-2"
         style={{ background: `linear-gradient(135deg, ${accent}10 0%, rgba(12,8,30,0.85) 60%, rgba(2,6,23,0.95) 100%)` }}
     >
-        <div className="text-[7px] md:text-[8px] uppercase tracking-[0.25em] text-slate-400 truncate">{label}</div>
-        <div className="text-sm md:text-base font-black tabular-nums" style={{ color: accent }}>{value}</div>
+        <div className="text-[10px] md:text-[11px] uppercase tracking-[0.22em] text-slate-300 truncate font-bold">{label}</div>
+        <div className="text-base md:text-lg font-black tabular-nums" style={{ color: accent, textShadow: `0 0 8px ${accent}55` }}>{value}</div>
     </div>
 );
 
@@ -1504,8 +1518,8 @@ const TabPushButton: React.FC<{
                 : `0 2px 0 ${theme.border}`,
         }}
     >
-        <div className="text-[8px] tracking-[0.35em] opacity-80">{theme.eyebrow}</div>
-        <div className="text-sm md:text-base tracking-[0.3em] mt-0.5">{theme.label}</div>
+        <div className="text-[10px] tracking-[0.35em] opacity-90 font-bold">{theme.eyebrow}</div>
+        <div className="text-base md:text-lg tracking-[0.3em] mt-0.5">{theme.label}</div>
         {/* shimmer sweep on active */}
         {active && (
             <motion.div
@@ -1716,8 +1730,8 @@ const EconStat: React.FC<{ label: string; value: string; accent: string; dim?: b
             background: dim ? 'rgba(15,23,42,0.5)' : `linear-gradient(180deg, ${accent}18 0%, rgba(15,23,42,0.6) 100%)`,
         }}
     >
-        <div className="text-[7px] uppercase tracking-[0.3em] text-slate-400">{label}</div>
-        <div className="text-sm font-black tabular-nums" style={{ color: dim ? '#64748b' : accent }}>
+        <div className="text-[9px] uppercase tracking-[0.28em] text-slate-300/85 font-bold">{label}</div>
+        <div className="text-base md:text-lg font-black tabular-nums leading-tight" style={{ color: dim ? '#64748b' : accent, textShadow: dim ? 'none' : `0 0 8px ${accent}66` }}>
             {value}
         </div>
     </div>
@@ -1748,14 +1762,22 @@ const CostPill: React.FC<{
 );
 
 // --- Section intro ruler --------------------------------------------------
+// Bumped from 10px/9px to 12px/12px so the body copy actually reads at a
+// glance. The 9px italic copy was the second-worst readability offender
+// in the Atelier (after the compendium row name).
 const SectionIntro: React.FC<{ title: string; body: string; color: string }> = ({ title, body, color }) => (
     <div className="mb-6">
-        <div className="flex items-center gap-3 mb-2">
-            <div className="h-[2px] flex-1" style={{ background: `linear-gradient(to right, transparent, ${color}66)` }} />
-            <h3 className="text-[10px] uppercase tracking-[0.45em]" style={{ color }}>{title}</h3>
-            <div className="h-[2px] flex-1" style={{ background: `linear-gradient(to left, transparent, ${color}66)` }} />
+        <div className="flex items-center gap-3 mb-3">
+            <div className="h-[2px] flex-1" style={{ background: `linear-gradient(to right, transparent, ${color}88)` }} />
+            <h3
+                className="text-xs uppercase tracking-[0.45em] font-black"
+                style={{ color, textShadow: `0 0 10px ${color}88` }}
+            >
+                {title}
+            </h3>
+            <div className="h-[2px] flex-1" style={{ background: `linear-gradient(to left, transparent, ${color}88)` }} />
         </div>
-        <p className="text-[9px] text-slate-400 leading-relaxed text-center italic max-w-2xl mx-auto">{body}</p>
+        <p className="text-[12px] md:text-[13px] text-slate-300 leading-relaxed text-center max-w-2xl mx-auto">{body}</p>
     </div>
 );
 

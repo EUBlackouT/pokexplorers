@@ -89,9 +89,19 @@ const SectionHero: React.FC<{
                 {icon}
             </div>
             <div>
-                <div className="text-[8px] uppercase tracking-[0.4em]" style={{ color: accent }}>{eyebrow}</div>
-                <div className="text-2xl md:text-3xl font-black text-white leading-tight tracking-tight">{title}</div>
-                <div className="text-sm text-slate-300/90 mt-1.5 max-w-xl leading-snug">{blurb}</div>
+                <div
+                    className="text-[10px] uppercase tracking-[0.4em] font-black"
+                    style={{ color: accent, textShadow: `0 0 8px ${accent}88` }}
+                >
+                    {eyebrow}
+                </div>
+                <div
+                    className="text-2xl md:text-3xl font-black text-white leading-tight tracking-tight mt-1"
+                    style={{ textShadow: '0 2px 6px rgba(0,0,0,0.6)' }}
+                >
+                    {title}
+                </div>
+                <div className="text-[15px] text-slate-100 mt-2 max-w-xl leading-relaxed">{blurb}</div>
             </div>
         </div>
     </div>
@@ -117,11 +127,14 @@ const FactPanel: React.FC<{
                 className="w-1.5 h-1.5 rounded-full"
                 style={{ backgroundColor: accent, boxShadow: `0 0 8px ${accent}` }}
             />
-            <h4 className="text-[10px] uppercase tracking-[0.3em] font-black" style={{ color: accent }}>
+            <h4
+                className="text-[11px] uppercase tracking-[0.3em] font-black"
+                style={{ color: accent, textShadow: `0 0 8px ${accent}55` }}
+            >
                 {title}
             </h4>
         </div>
-        <div className="text-sm text-slate-200/90 space-y-2 leading-relaxed">{children}</div>
+        <div className="text-[14px] md:text-[15px] text-slate-100 space-y-2 leading-relaxed">{children}</div>
     </div>
 );
 
@@ -135,8 +148,13 @@ const ProTip: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     >
         <span className="text-2xl leading-none shrink-0">💡</span>
         <div>
-            <div className="text-[9px] uppercase tracking-[0.35em] font-black text-amber-300 mb-1">Pro Tip</div>
-            <div className="text-sm text-amber-50/90 leading-relaxed">{children}</div>
+            <div
+                className="text-[11px] uppercase tracking-[0.35em] font-black text-amber-300 mb-1"
+                style={{ textShadow: '0 0 8px rgba(251,191,36,0.55)' }}
+            >
+                Pro Tip
+            </div>
+            <div className="text-[14px] md:text-[15px] text-amber-50 leading-relaxed">{children}</div>
         </div>
     </div>
 );
@@ -164,8 +182,8 @@ const KeyRow: React.FC<{
             ))}
         </div>
         <div className="flex-1">
-            <div className="text-sm text-slate-100 font-bold">{label}</div>
-            {detail && <div className="text-[11px] text-slate-400 leading-tight">{detail}</div>}
+            <div className="text-[14px] text-slate-50 font-bold">{label}</div>
+            {detail && <div className="text-[12px] text-slate-300/90 leading-snug mt-0.5">{detail}</div>}
         </div>
     </div>
 );
@@ -202,8 +220,8 @@ const Step: React.FC<{ n: number; title: string; children: React.ReactNode; acce
             {n}
         </div>
         <div className="flex-1">
-            <div className="font-black text-slate-100 text-sm leading-tight">{title}</div>
-            <div className="text-sm text-slate-300/85 mt-1 leading-relaxed">{children}</div>
+            <div className="font-black text-slate-50 text-[15px] md:text-base leading-tight">{title}</div>
+            <div className="text-[14px] md:text-[15px] text-slate-100 mt-1 leading-relaxed">{children}</div>
         </div>
     </div>
 );
@@ -225,10 +243,13 @@ const Callout: React.FC<{ icon: string; title: string; children: React.ReactNode
         >
             <span className="text-xl leading-none shrink-0">{icon}</span>
             <div>
-                <div className="text-[10px] uppercase tracking-[0.3em] font-black mb-0.5" style={{ color: toneColor }}>
+                <div
+                    className="text-[11px] uppercase tracking-[0.3em] font-black mb-0.5"
+                    style={{ color: toneColor, textShadow: `0 0 8px ${toneColor}66` }}
+                >
                     {title}
                 </div>
-                <div className="text-sm text-slate-200/85 leading-relaxed">{children}</div>
+                <div className="text-[14px] text-slate-100 leading-relaxed">{children}</div>
             </div>
         </div>
     );
@@ -874,7 +895,7 @@ export const FieldGuide: React.FC<{
 
                     <div className="flex items-center justify-center gap-4 mt-4">
                         <div className="h-[2px] w-14 bg-emerald-400/50" />
-                        <p className="text-emerald-200/80 text-[9px] tracking-[0.45em] uppercase">
+                        <p className="text-emerald-200/90 text-[11px] tracking-[0.45em] uppercase font-bold">
                             Everything You Need To Survive
                         </p>
                         <div className="h-[2px] w-14 bg-cyan-300/50" />
@@ -924,17 +945,20 @@ export const FieldGuide: React.FC<{
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2">
-                                                <span className="text-[10px] font-mono tabular-nums opacity-50">
+                                                <span className="text-[11px] font-mono tabular-nums opacity-70 font-bold">
                                                     {String(SECTIONS.indexOf(s) + 1).padStart(2, '0')}
                                                 </span>
                                                 <span
-                                                    className="font-black text-sm uppercase tracking-wider truncate"
-                                                    style={{ color: isActive ? s.accent : '#e2e8f0' }}
+                                                    className="font-black text-[15px] uppercase tracking-wider truncate"
+                                                    style={{
+                                                        color: isActive ? '#fff' : '#f1f5f9',
+                                                        textShadow: isActive ? `0 0 8px ${s.accent}aa` : '0 1px 2px rgba(0,0,0,0.6)',
+                                                    }}
                                                 >
                                                     {s.title}
                                                 </span>
                                             </div>
-                                            <div className="text-[11px] text-slate-400/85 mt-0.5 leading-tight">
+                                            <div className="text-[12px] text-slate-300/90 mt-1 leading-snug">
                                                 {s.teaser}
                                             </div>
                                         </div>
