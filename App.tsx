@@ -1430,6 +1430,7 @@ export default function App() {
           postBattleMusicOutcomeRef.current = 'flee';
           battleMusicExitOutcomeSyncRef.current = 'flee';
           setBattleFading('flee');
+          if (isMultiplayerBattle && networkRole === 'host') setRemoteBattleActions([]);
           if (canAlwaysRun) {
               setPhase(GamePhase.OVERWORLD);
               setDialogue(["Got away safely using the Smoke Ball!"]);
@@ -8459,6 +8460,8 @@ export default function App() {
             postBattleMusicOutcomeRef.current = 'victory';
             battleMusicExitOutcomeSyncRef.current = 'victory';
         }
+        // Co-op host: drop partner move queue so no stale INPUT_BATTLE_ACTION bleed crosses into the next encounter.
+        if (isMultiplayerBattle && networkRole === 'host') setRemoteBattleActions([]);
         setBattleFading('victory');
         await delay(450);
         setPhase(GamePhase.OVERWORLD);
@@ -9153,22 +9156,30 @@ export default function App() {
         }
         if (netBS) {
             if (networkRoleRef.current === 'client') {
-                // Always sync backgroundUrl if provided and not empty
-                if (netBS.backgroundUrl && netBS.backgroundUrl !== battleStateRef.current?.backgroundUrl) {
-                    setBattleState(prev => prev ? { ...prev, backgroundUrl: netBS.backgroundUrl } : netBS);
-                }
+                const isPvP = !!netBS.isPvP;
+                const mergedBs = {
+                    ...netBS,
+                    playerTeam: isPvP ? netBS.enemyTeam : netBS.playerTeam,
+                    enemyTeam: isPvP ? netBS.playerTeam : netBS.enemyTeam,
+                    pendingMoves: [] as typeof netBS.pendingMoves,
+                };
 
-                // Only sync full battleState if not in player_input, or if the host says it's execution, 
-                // or if we have no pokemon teams yet (initialization)
-                const hasNoTeams = !battleStateRef.current || (battleStateRef.current.playerTeam.length === 0 && battleStateRef.current.enemyTeam.length === 0);
-                if (hasNoTeams || battleStateRef.current?.phase !== 'player_input' || netBS.phase === 'execution') {
-                    const isPvP = !!netBS.isPvP;
-                    setBattleState({
-                        ...netBS,
-                        playerTeam: isPvP ? netBS.enemyTeam : netBS.playerTeam,
-                        enemyTeam: isPvP ? netBS.playerTeam : netBS.enemyTeam,
-                        pendingMoves: []
-                    });
+                // Overworld transitions MUST merge unconditionally — the legacy gate below could skip
+                // snapshots whenever BOTH peers still showed `player_input` while the host already
+                // flipped GamePhase to OVERWORLD (trainer KO races ahead of the last INPUT_BATTLE_ACTION
+                // ack). Guests stayed locked on the arena forever even though phase synced.
+                if (netPhase === GamePhase.OVERWORLD) {
+                    setBattleState(mergedBs);
+                    setRemoteBattleActions([]);
+                } else {
+                    if (netBS.backgroundUrl && netBS.backgroundUrl !== battleStateRef.current?.backgroundUrl) {
+                        setBattleState(prev => prev ? { ...prev, backgroundUrl: netBS.backgroundUrl } : mergedBs);
+                    }
+
+                    const hasNoTeams = !battleStateRef.current || (battleStateRef.current.playerTeam.length === 0 && battleStateRef.current.enemyTeam.length === 0);
+                    if (hasNoTeams || battleStateRef.current?.phase !== 'player_input' || netBS.phase === 'execution') {
+                        setBattleState(mergedBs);
+                    }
                 }
             } else {
                 setBattleState(netBS);
