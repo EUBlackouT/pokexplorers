@@ -483,7 +483,14 @@ const SpriteAnimation: React.FC<{
 // -----------------------------------------------------------------------------
 
 export const MoveVFX: React.FC<{ vfx: NonNullable<BattleState['vfx']> }> = ({ vfx }) => {
-    const { type, damage, isCrit, isMiss, isSuperEffective, isNotVeryEffective, moveName, target } = vfx;
+    // Defensive default: vfx.type can theoretically arrive undefined for
+    // weirdly-shaped payloads (status-only moves, missing data rows, etc.).
+    // Without this default, both `type.replace(...)` in the status branch
+    // and `type.toLowerCase()` in the move-animation branch throw and
+    // unmount the sprite box. SilentErrorBoundary catches this in App.tsx
+    // but defaulting at the source keeps the UX cleaner.
+    const { damage, isCrit, isMiss, isSuperEffective, isNotVeryEffective, moveName, target } = vfx;
+    const type: string = (typeof vfx.type === 'string' && vfx.type.length > 0) ? vfx.type : 'normal';
 
     // ------------------------- damage popup -------------------------
     if (damage !== undefined) {

@@ -42,6 +42,7 @@ import { ActionButton } from './components/ui/ActionButton';
 import { MoveButton } from './components/ui/MoveButton';
 import { MoveVFX } from './components/ui/MoveVFX';
 import { BattleFxOverlay } from './components/ui/BattleFxOverlay';
+import { SilentErrorBoundary } from './components/ui/SilentErrorBoundary';
 import { BattleFieldHud } from './components/ui/BattleFieldHud';
 import { BattleLog } from './components/ui/BattleLog';
 import { EmoteOverlay } from './components/ui/EmoteOverlay';
@@ -625,6 +626,25 @@ export default function App() {
    * `startBattle` and on the OVERWORLD landing effect.
    */
   const battleExitInFlightRef = useRef<boolean>(false);
+  /**
+   * Lifetime tracker for any setTimeout the battle-exit pipeline schedules
+   * (4s victory safety net, 450ms recovery-fade follow-up, etc.). Refified
+   * so the outer catch in `executeTurn` and the OVERWORLD landing useEffect
+   * can both kill in-flight timers without leaking past phase transitions.
+   * Without this, a safety timer scheduled at the end of battle N could
+   * fire DURING battle N+1 and prematurely yank the player to overworld.
+   */
+  const battleExitTimersRef = useRef<number[]>([]);
+  const trackBattleExitTimer = (id: number) => {
+      battleExitTimersRef.current.push(id);
+      return id;
+  };
+  const clearBattleExitTimers = () => {
+      for (const id of battleExitTimersRef.current) {
+          window.clearTimeout(id);
+      }
+      battleExitTimersRef.current = [];
+  };
   /** Host + local: staging battle→field outcome sting before OVERWORLD kicks in. */
   const postBattleMusicOutcomeRef = useRef<BattleMusicExitOutcome | null>(null);
   /** Host-only: sent once on GAME_SYNC so the peer picks the same sting + avoids wrong defaults. */
@@ -3199,6 +3219,10 @@ export default function App() {
       // into BATTLE after a recovered crash (which set the guard true)
       // would silently skip the next victory fade.
       battleExitInFlightRef.current = false;
+      // Kill any lingering exit timers from a PREVIOUS battle. Without
+      // this, a 4s safety timer scheduled at the end of battle N could
+      // fire mid-way through battle N+1 and yank the player out.
+      clearBattleExitTimers();
 
       setBattleState({
         playerTeam, enemyTeam: enemies,
@@ -4645,6 +4669,26 @@ export default function App() {
                 continue;
             }
 
+            // ---------------------------------------------------------------
+            // Normalize the move's type ONCE per action.
+            //
+            // Move data flows in from two sources:
+            //   - PokeAPI moves -> already lowercase ("fire", "fighting", ...)
+            //   - NEW_MOVES     -> capitalized in the source file ("Fire",
+            //                      "Fighting", ...) but `buildMoveFromNewMoves`
+            //                      lowercases them when hydrating PokemonMove.
+            //
+            // In practice every `action.move.type` SHOULD already be
+            // lowercase, but several ability checks below were authored
+            // against the raw NEW_MOVES capitalization (e.g. 'Fighting',
+            // 'Fairy', 'Poison'). Those have been silently broken for one
+            // side of the fight forever. Computing one canonical value here
+            // and using it everywhere kills that whole class of bug.
+            const moveTypeLC = (action.move.type || 'normal').toLowerCase();
+            if (action.move.type !== moveTypeLC) {
+                action.move.type = moveTypeLC;
+            }
+
             // Move Logic
             actor.lastMoveMissed = false;
             const targetTeam = action.isPlayer ? tempETeam : tempPTeam;
@@ -4937,7 +4981,7 @@ export default function App() {
                 }
 
                 // Sour Sap Ability: Grass moves may lower Sp. Def
-                if (actor.ability.name === 'SourSap' && action.move.type === 'grass' && Math.random() < 0.2) {
+                if (actor.ability.name === 'SourSap' && moveTypeLC === 'grass' && Math.random() < 0.2) {
                     if (target.statStages) {
                         target.statStages['special-defense'] = Math.max(-6, (target.statStages['special-defense'] || 0) - 1);
                         const aSide: 'player' | 'enemy' = action.isPlayer ? 'player' : 'enemy';
@@ -5279,23 +5323,18 @@ export default function App() {
                         }
                     }
 
-                    // Wardrum Ability
-                    if (actor.ability.name === 'Wardrum' && action.move.type === 'Fighting') {
-                        const allyIdx = 1 - actorIdx;
-                        const ally = (action.isPlayer) ? tempPTeam[allyIdx] : tempETeam[allyIdx];
-                        if (ally && !ally.isFainted && ally.statStages) {
-                            ally.statStages.attack = Math.min(6, (ally.statStages.attack || 0) + 1);
-                            tempLogs.push(`${actor.name}'s Wardrum boosted ${ally.name}'s Attack!`);
-                        }
-                    }
+                    // Wardrum Ability — handled later in the post-action
+                    // effects pass (with the intended 30% gate). The block
+                    // here was an accidental duplicate that, before the
+                    // type-casing fix, was silently dead because it checked
+                    // 'Fighting' against a now-lowercase value. Removed
+                    // outright to prevent a +2 Atk double-trigger on
+                    // every Fighting hit.
 
-                    // RuneBloom Ability
-                    if (actor.ability.name === 'RuneBloom' && action.move.type === 'Fairy' && action.move.damage_class === 'status') {
-                        if (actor.statStages) {
-                            actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
-                            tempLogs.push(`${actor.name}'s RuneBloom boosted its Speed!`);
-                        }
-                    }
+                    // RuneBloom Ability — duplicate of the gated copy in
+                    // the post-action effects pass. Same fix as Wardrum
+                    // above: avoid double speed-boost on Fairy status moves
+                    // now that the type comparison actually matches.
 
                     // Heavy Stance Ability
                     if (target.ability.name === 'HeavyStance' && action.move.contact && finalDamage > 0) {
@@ -5333,7 +5372,7 @@ export default function App() {
                     }
 
                     // Iron Blood Ability
-                    if (target.ability.name === 'IronBlood' && action.move.type === 'Poison') {
+                    if (target.ability.name === 'IronBlood' && moveTypeLC === 'poison') {
                         const heal = Math.floor(target.maxHp / 4);
                         target.currentHp = Math.min(target.maxHp, target.currentHp + heal);
                         tempLogs.push(`${target.name}'s Iron Blood absorbed the poison!`);
@@ -7053,7 +7092,7 @@ export default function App() {
                 }
 
                 // Wardrum Ability
-                if (actor.ability.name === 'Wardrum' && action.move.type === 'fighting' && Math.random() < 0.3) {
+                if (actor.ability.name === 'Wardrum' && moveTypeLC === 'fighting' && Math.random() < 0.3) {
                     const allyIdx = 1 - actorIdx;
                     const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
                     if (ally && !ally.isFainted && ally.statStages) {
@@ -7062,8 +7101,10 @@ export default function App() {
                     }
                 }
 
-                // Rune Bloom Ability
-                if (actor.ability.name === 'RuneBloom' && action.move.type === 'fairy' && action.move.category === 'status' && !actor.hasUsedRuneBloomThisTurn) {
+                // Rune Bloom Ability — was checking `action.move.category`
+                // which doesn't exist on PokemonMove (correct field is
+                // `damage_class`); this trigger never fired.
+                if (actor.ability.name === 'RuneBloom' && moveTypeLC === 'fairy' && action.move.damage_class === 'status' && !actor.hasUsedRuneBloomThisTurn) {
                     if (actor.statStages) {
                         actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
                         actor.hasUsedRuneBloomThisTurn = true;
@@ -8156,11 +8197,11 @@ export default function App() {
         // completes (rejected promise, unhandled throw inside a sync that
         // the inner try doesn't catch), force it after 4s. The user always
         // gets back to the overworld.
-        const victorySafetyTimer = window.setTimeout(() => {
+        const victorySafetyTimer = trackBattleExitTimer(window.setTimeout(() => {
             if (battleExitInFlightRef.current) return;
             console.warn('[Battle] Victory safety timer fired -- forcing overworld.');
             void completeVictoryTransitionToOverworld();
-        }, 4000);
+        }, 4000));
         // Push the latest enemy state to UI BEFORE we award rewards so the
         // graceful faint animation on the last KO actually plays. Without
         // this beat, the engine flashed straight from "still standing" to
@@ -8721,7 +8762,7 @@ export default function App() {
                     'You won the battle!',
                     '(Reward calculation hit a snag -- check the console.)',
                 ]);
-                window.setTimeout(() => setPhase(GamePhase.OVERWORLD), 450);
+                trackBattleExitTimer(window.setTimeout(() => setPhase(GamePhase.OVERWORLD), 450));
             }
             showToast('Battle hit a snag — exiting safely', 'info', { kicker: 'RECOVERY' });
         } else if (playerAllDown) {
@@ -9078,6 +9119,9 @@ export default function App() {
           pendingOutbreakRef.current = null;
           // Battle is fully behind us -- arm the guard for the next exit.
           battleExitInFlightRef.current = false;
+          // Anything still scheduled by the exit pipeline can be safely
+          // disposed now that we've physically landed in the overworld.
+          clearBattleExitTimers();
           // Hold the blackout one extra frame so the overlay's exit
           // animation crossfades the new overworld in instead of
           // snapping. 350ms matches the overlay's fade-out duration.
@@ -10539,8 +10583,13 @@ export default function App() {
                   {/* Battle-field-wide VFX overlay (type flash, vignette,
                    * shockwave, screen sparks). Mounted once at the battle
                    * container level so it scales to the whole fight, not a
-                   * single Pokemon's sprite box. */}
-                  <BattleFxOverlay vfx={battleState.vfx} />
+                   * single Pokemon's sprite box. Wrapped in a silent error
+                   * boundary -- a missing field on a single move payload
+                   * should NOT be allowed to unmount the whole battle
+                   * scene and softlock the player. */}
+                  <SilentErrorBoundary tag="BattleFxOverlay">
+                      <BattleFxOverlay vfx={battleState.vfx} />
+                  </SilentErrorBoundary>
                   {/* Persistent field state -- weather, terrain, screens,
                    * tailwind, hazards, etc. Renders BOTH the chip readout
                    * (top center + side strips) AND the ambient overlays
@@ -10672,12 +10721,18 @@ export default function App() {
                                         'bg-green-600/60 border-green-400/80'}`}
                                   />
                                   <PokemonSprite pokemon={mon} isTargetable={isTargeting} onSelect={() => handleTargetSelect(i)} />
-                                  <BattleBuffFx side="enemy" slot={i as 0 | 1} />
-                                  <BattlePopupLayer side="enemy" slot={i as 0 | 1} />
+                                  <SilentErrorBoundary tag="EnemyBattleBuffFx">
+                                      <BattleBuffFx side="enemy" slot={i as 0 | 1} />
+                                  </SilentErrorBoundary>
+                                  <SilentErrorBoundary tag="EnemyBattlePopupLayer">
+                                      <BattlePopupLayer side="enemy" slot={i as 0 | 1} />
+                                  </SilentErrorBoundary>
                                   <AnimatePresence>
                                       {battleState.vfx && battleState.vfx.target === 'enemy' && battleState.vfx.index === i && (
                                           <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
-                                              <MoveVFX vfx={battleState.vfx} />
+                                              <SilentErrorBoundary tag="EnemyMoveVFX">
+                                                  <MoveVFX vfx={battleState.vfx} />
+                                              </SilentErrorBoundary>
                                           </div>
                                       )}
                                   </AnimatePresence>
@@ -10739,12 +10794,18 @@ export default function App() {
                                       />
                                   )}
                                   <PokemonSprite pokemon={mon} isBack />
-                                  <BattleBuffFx side="player" slot={i as 0 | 1} />
-                                  <BattlePopupLayer side="player" slot={i as 0 | 1} />
+                                  <SilentErrorBoundary tag="PlayerBattleBuffFx">
+                                      <BattleBuffFx side="player" slot={i as 0 | 1} />
+                                  </SilentErrorBoundary>
+                                  <SilentErrorBoundary tag="PlayerBattlePopupLayer">
+                                      <BattlePopupLayer side="player" slot={i as 0 | 1} />
+                                  </SilentErrorBoundary>
                                   <AnimatePresence>
                                       {battleState.vfx && battleState.vfx.target === 'player' && battleState.vfx.index === i && (
                                           <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
-                                              <MoveVFX vfx={battleState.vfx} />
+                                              <SilentErrorBoundary tag="PlayerMoveVFX">
+                                                  <MoveVFX vfx={battleState.vfx} />
+                                              </SilentErrorBoundary>
                                           </div>
                                       )}
                                   </AnimatePresence>
