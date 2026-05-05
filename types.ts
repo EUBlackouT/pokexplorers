@@ -365,7 +365,16 @@ export interface BattleState {
   playerTeam: Pokemon[];
   enemyTeam: Pokemon[];
   turn: number;
-  phase: 'start' | 'player_input' | 'execution' | 'end_game' | 'loading' | 'capture_anim';
+  phase:
+    | 'start'
+    | 'player_input'
+    | 'execution'
+    | 'end_game'
+    | 'loading'
+    | 'capture_anim'
+    | 'waiting_for_opponent'
+    | 'victory'
+    | 'defeat';
   logs: string[];
   vfx?: { 
     type: string, 

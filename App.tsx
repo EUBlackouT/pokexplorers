@@ -618,6 +618,14 @@ export default function App() {
   // fires the next startBattle when the victory dialogue closes, so
   // the player's team HP/status carries over untouched.
   const pendingGauntletNextRef = useRef<TrainerData | null>(null);
+  /**
+   * Re-entry guard for victory transition. Once we commit to fading out of
+   * a battle, additional triggers (timeout safety net, recovery catch,
+   * stale executeTurn) must NOT re-fire the fade -- otherwise the overlay
+   * flickers and the phase change races itself. Reset to false on every
+   * `startBattle` and on the OVERWORLD landing effect.
+   */
+  const battleExitInFlightRef = useRef<boolean>(false);
   /** Host + local: staging battle→field outcome sting before OVERWORLD kicks in. */
   const postBattleMusicOutcomeRef = useRef<BattleMusicExitOutcome | null>(null);
   /** Host-only: sent once on GAME_SYNC so the peer picks the same sting + avoids wrong defaults. */
@@ -3188,6 +3196,11 @@ export default function App() {
       let firstActive = 0;
       while (firstActive < playerTeam.length && playerTeam[firstActive].isFainted) firstActive++;
 
+      // Fresh battle = clean transition state. Without this, a re-entry
+      // into BATTLE after a recovered crash (which set the guard true)
+      // would silently skip the next victory fade.
+      battleExitInFlightRef.current = false;
+
       setBattleState({
         playerTeam, enemyTeam: enemies,
         turn: 1, phase: 'player_input', logs: startLogs, pendingMoves: [], activePlayerIndex: firstActive, ui: { selectionMode: 'MOVE', selectedMove: null },
@@ -3384,6 +3397,32 @@ export default function App() {
           }
       }
   };
+
+  /** Whole-party elimination (bench included). Uses HP so stray 0 HP can't stall wins. */
+  function rosterEliminated(team: Pokemon[] | undefined | null): boolean {
+    if (!team?.length) return false;
+    const roster = team.filter(Boolean);
+    return roster.length > 0 && roster.every((p) => p.isFainted || (p.currentHp ?? 0) <= 0);
+  }
+
+  /** Trainer rosters store bench mons at index 2+. Pull living bench into slots 0–1 when leads are down. */
+  function promoteTrainerEnemyBench(tempETeam: Pokemon[], isTrainerBattle: boolean, tempLogs: string[]): void {
+    if (!isTrainerBattle || tempETeam.length <= 2) return;
+    for (let slot = 0; slot < 2; slot++) {
+      const cur = tempETeam[slot];
+      const slotDead = !cur || cur.isFainted || (cur.currentHp ?? 0) <= 0;
+      if (!slotDead) continue;
+      const benchIdx = tempETeam.findIndex(
+        (p, i) => i >= 2 && !!p && !p.isFainted && (p.currentHp ?? 0) > 0,
+      );
+      if (benchIdx === -1) continue;
+      const incoming = tempETeam[benchIdx]!;
+      tempETeam[slot] = incoming;
+      tempETeam[benchIdx] = cur ?? incoming;
+      tempLogs.push(`Enemy ${incoming.name} was sent out!`);
+      playCry(incoming.id, incoming.name);
+    }
+  }
 
   async function executeTurn() {
     try {
@@ -3724,9 +3763,10 @@ export default function App() {
     }
 
     for (const action of fullQueue as any[]) {
-            // Re-check game state
-            if (tempPTeam.every((p: Pokemon) => p.isFainted)) { gameOver = true; break; }
-            if (tempETeam.every((p: Pokemon) => p.isFainted)) { victory = true; break; }
+            // Re-check game state (promote enemy bench before judging trainer fights)
+            promoteTrainerEnemyBench(tempETeam, battleState.isTrainerBattle, tempLogs);
+            if (rosterEliminated(tempPTeam)) { gameOver = true; break; }
+            if (rosterEliminated(tempETeam)) { victory = true; break; }
             
             let actor = action.isPlayer ? tempPTeam[action.actorIndex] : tempETeam[action.actorIndex];
             if (!actor) {
@@ -4541,7 +4581,8 @@ export default function App() {
                             };
                         });
 
-                        if (tempETeam.every((p: Pokemon) => p.isFainted)) {
+                        promoteTrainerEnemyBench(tempETeam, battleState.isTrainerBattle, tempLogs);
+                        if (rosterEliminated(tempETeam)) {
                             victory = true;
                             await syncState(500);
                             break;
@@ -5005,6 +5046,9 @@ export default function App() {
                     }
                 }
 
+                /** Who took the damaging hit last (handles Sacrificial Guard); faint logic runs outside the multihit loop. */
+                let lastKoDamageTarget: Pokemon = target;
+
                 for (let h = 0; h < finalNumHits; h++) {
                     // Spread damage reduction
                     let finalDamage = res.damage;
@@ -5099,6 +5143,7 @@ export default function App() {
                     
                     damageTarget.currentHp = Math.max(0, damageTarget.currentHp - finalDamage);
                     if (finalDamage > 0) damageTarget.tookDamageThisTurn = true;
+                    lastKoDamageTarget = damageTarget;
                     totalDamage += finalDamage;
 
                     // Primal Hunger Ability
@@ -5967,8 +6012,15 @@ export default function App() {
                     }
                 }
                 
-                // Handle Fainting
-                if (target.currentHp === 0 && !target.isFainted) {
+                // Handle Fainting — KO applies to whoever reached 0 HP (e.g. Sacrificial Guard redirects damage).
+                const faintSubject =
+                  lastKoDamageTarget.currentHp <= 0 && !lastKoDamageTarget.isFainted
+                    ? lastKoDamageTarget
+                    : target.currentHp <= 0 && !target.isFainted
+                      ? target
+                      : null;
+                if (faintSubject) {
+                    const target = faintSubject;
                     target.isFainted = true;
                     playFaintSfx();
                     tempLogs.push(`${target.name} fainted!`);
@@ -7129,6 +7181,12 @@ export default function App() {
                     mon.currentHp = Math.max(0, mon.currentHp - damage);
                     tempLogs.push(`${mon.name} was hit by Future Sight!`);
                     mon.futureSightTurns = undefined;
+                    if (mon.currentHp <= 0) {
+                        mon.currentHp = 0;
+                        mon.isFainted = true;
+                        playFaintSfx();
+                        tempLogs.push(`${mon.name} fainted!`);
+                    }
                 }
             }
 
@@ -7162,6 +7220,12 @@ export default function App() {
                 const damage = Math.floor(mon.maxHp / 4);
                 mon.currentHp = Math.max(0, mon.currentHp - damage);
                 tempLogs.push(`${mon.name} is locked in a nightmare!`);
+                if (mon.currentHp <= 0) {
+                    mon.currentHp = 0;
+                    mon.isFainted = true;
+                    playFaintSfx();
+                    tempLogs.push(`${mon.name} fainted!`);
+                }
             }
 
             // Curse (Ghost)
@@ -7169,6 +7233,12 @@ export default function App() {
                 const damage = Math.floor(mon.maxHp / 4);
                 mon.currentHp = Math.max(0, mon.currentHp - damage);
                 tempLogs.push(`${mon.name} is afflicted by a curse!`);
+                if (mon.currentHp <= 0) {
+                    mon.currentHp = 0;
+                    mon.isFainted = true;
+                    playFaintSfx();
+                    tempLogs.push(`${mon.name} fainted!`);
+                }
             }
 
             // Trapping Damage (Binding Band)
@@ -7632,6 +7702,12 @@ export default function App() {
                 const damage = Math.floor(mon.maxHp / 4);
                 mon.currentHp = Math.max(0, mon.currentHp - damage);
                 tempLogs.push(`Enemy ${mon.name} is locked in a nightmare!`);
+                if (mon.currentHp <= 0) {
+                    mon.currentHp = 0;
+                    mon.isFainted = true;
+                    playFaintSfx();
+                    tempLogs.push(`Enemy ${mon.name} fainted!`);
+                }
             }
 
             // Curse (Ghost)
@@ -7639,6 +7715,12 @@ export default function App() {
                 const damage = Math.floor(mon.maxHp / 4);
                 mon.currentHp = Math.max(0, mon.currentHp - damage);
                 tempLogs.push(`Enemy ${mon.name} is afflicted by a curse!`);
+                if (mon.currentHp <= 0) {
+                    mon.currentHp = 0;
+                    mon.isFainted = true;
+                    playFaintSfx();
+                    tempLogs.push(`Enemy ${mon.name} fainted!`);
+                }
             }
 
             const endRes = handleEndOfTurnStatus(mon, battleState.weather, battleState.terrain);
@@ -7779,6 +7861,12 @@ export default function App() {
                 const damage = Math.floor(mon.maxHp / 4);
                 mon.currentHp = Math.max(0, mon.currentHp - damage);
                 tempLogs.push(`Enemy ${mon.name} is locked in a nightmare!`);
+                if (mon.currentHp <= 0) {
+                    mon.currentHp = 0;
+                    mon.isFainted = true;
+                    playFaintSfx();
+                    tempLogs.push(`Enemy ${mon.name} fainted!`);
+                }
             }
 
             // Curse (Ghost) (Enemy)
@@ -7786,6 +7874,12 @@ export default function App() {
                 const damage = Math.floor(mon.maxHp / 4);
                 mon.currentHp = Math.max(0, mon.currentHp - damage);
                 tempLogs.push(`Enemy ${mon.name} is afflicted by a curse!`);
+                if (mon.currentHp <= 0) {
+                    mon.currentHp = 0;
+                    mon.isFainted = true;
+                    playFaintSfx();
+                    tempLogs.push(`Enemy ${mon.name} fainted!`);
+                }
             }
 
             // Energy Core (Enemy)
@@ -7984,11 +8078,10 @@ export default function App() {
             }
         });
     
-    // Final check after loop logic
-    const playersAliveOrDefined = tempPTeam.filter(Boolean);
-    const enemiesAliveOrDefined = tempETeam.filter(Boolean);
-    if (playersAliveOrDefined.length > 0 && playersAliveOrDefined.every((p: Pokemon) => p.isFainted)) gameOver = true;
-    if (enemiesAliveOrDefined.length > 0 && enemiesAliveOrDefined.every((p: Pokemon) => p.isFainted)) victory = true;
+    // Final check after loop logic (trainer bench must rotate in before judging elimination)
+    promoteTrainerEnemyBench(tempETeam, battleState.isTrainerBattle, tempLogs);
+    if (rosterEliminated(tempPTeam)) gameOver = true;
+    if (rosterEliminated(tempETeam)) victory = true;
 
     if (gameOver) {
         // Talent: Second Wind -- once per run, the first total-team wipe
@@ -8023,8 +8116,25 @@ export default function App() {
 
     if (victory) {
         const newStreak = battleState.battleStreak + 1;
-        /** Fade out and return to overworld (gym leaders use PERK_SELECT and `return` earlier). */
+        // Lock the battle into a terminal sub-phase so the executeTurn
+        // useEffect cannot re-fire if anything below schedules a stale
+        // setBattleState before we hit OVERWORLD. The overlay covers
+        // the brief window during which we still render BATTLE.
+        setBattleState(prev => ({ ...prev, phase: 'victory', pendingMoves: [] }));
+        /**
+         * Fade out and return to overworld. Idempotent via
+         * `battleExitInFlightRef` so duplicate calls (recovery catch,
+         * gym-leader early return, safety timeout) only ever fire ONE
+         * fade overlay + ONE phase change. Gym leaders still skip this
+         * helper entirely and route to PERK_SELECT.
+         */
         const completeVictoryTransitionToOverworld = async (): Promise<void> => {
+            if (battleExitInFlightRef.current) {
+                console.log('[Battle] Victory transition already in-flight, skipping duplicate.');
+                return;
+            }
+            battleExitInFlightRef.current = true;
+            console.log('[Battle] Victory transition: starting fade.');
             if (!pendingGauntletNextRef.current) {
                 postBattleMusicOutcomeRef.current = 'victory';
                 battleMusicExitOutcomeSyncRef.current = 'victory';
@@ -8032,8 +8142,18 @@ export default function App() {
             if (isMultiplayerBattle && networkRole === 'host') setRemoteBattleActions([]);
             setBattleFading('victory');
             await delay(450);
+            console.log('[Battle] Victory transition: setting phase to OVERWORLD.');
             setPhase(GamePhase.OVERWORLD);
         };
+        // Safety net: if for any reason the awaited transition below never
+        // completes (rejected promise, unhandled throw inside a sync that
+        // the inner try doesn't catch), force it after 4s. The user always
+        // gets back to the overworld.
+        const victorySafetyTimer = window.setTimeout(() => {
+            if (battleExitInFlightRef.current) return;
+            console.warn('[Battle] Victory safety timer fired -- forcing overworld.');
+            void completeVictoryTransitionToOverworld();
+        }, 4000);
         // Push the latest enemy state to UI BEFORE we award rewards so the
         // graceful faint animation on the last KO actually plays. Without
         // this beat, the engine flashed straight from "still standing" to
@@ -8387,6 +8507,11 @@ export default function App() {
             _trainerRewardOk = true;
 
             if (isGymLeader) {
+                window.clearTimeout(victorySafetyTimer);
+                battleExitInFlightRef.current = true;
+                console.log('[Battle] Gym leader victory: routing to PERK_SELECT.');
+                setBattleFading('victory');
+                await delay(300);
                 setPhase(GamePhase.PERK_SELECT);
                 return;
             }
@@ -8469,6 +8594,7 @@ export default function App() {
             showToast('Battle rewards hit a snag — returning to the field', 'warning', { kicker: 'BATTLE', ttl: 5000 });
             setDialogue(['You won the battle!', 'Returning to the overworld...']);
         }
+        window.clearTimeout(victorySafetyTimer);
         await completeVictoryTransitionToOverworld();
         return;
     }
@@ -8509,6 +8635,30 @@ export default function App() {
         }
     });
 
+    // Final bench-promote tick: between turns, anything that died from
+    // end-of-turn poison/leech/curse needs its slot filled BEFORE the
+    // player enters move-select. Without this, the user sees a fainted
+    // enemy slot during their input phase and reasonably assumes the
+    // battle has ended (which is exactly the "stuck after KO" report).
+    promoteTrainerEnemyBench(tempETeam, battleState.isTrainerBattle, tempLogs);
+    if (rosterEliminated(tempETeam)) {
+        // A late KO from end-of-turn just emptied the roster -- treat as
+        // victory so we don't fall through to player_input on a finished
+        // fight.
+        console.log('[Battle] Late-turn KO drained the enemy roster -- forcing victory branch.');
+        battleExitInFlightRef.current = false; // allow the recovery path to fire properly
+        setBattleState(prev => ({ ...prev, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-6), phase: 'victory', pendingMoves: [] }));
+        setBattleFading('victory');
+        await delay(450);
+        if (!pendingGauntletNextRef.current) {
+            postBattleMusicOutcomeRef.current = 'victory';
+            battleMusicExitOutcomeSyncRef.current = 'victory';
+        }
+        setPhase(GamePhase.OVERWORLD);
+        battleExitInFlightRef.current = true;
+        return;
+    }
+
     const mustSwitch = tempPTeam.some((p, i) => i < 2 && p.isFainted && tempPTeam.slice(2).some(bp => !bp.isFainted));
     const switchingIdx = tempPTeam.findIndex((p, i) => i < 2 && p.isFainted && tempPTeam.slice(2).some(bp => !bp.isFainted));
 
@@ -8541,17 +8691,27 @@ export default function App() {
         // permanently traps the player in a battle they already won. Force
         // the game back to the overworld so they can keep playing. We still
         // log the failure so the underlying bug can be tracked down later.
-        const enemyAllDownSafe = battleStateRef.current?.enemyTeam?.filter(Boolean).every((p) => p.isFainted);
-        const playerAllDown = battleStateRef.current?.playerTeam?.every(p => p.isFainted);
+        const enemyAllDownSafe = rosterEliminated(battleStateRef.current?.enemyTeam);
+        const playerAllDown = rosterEliminated(battleStateRef.current?.playerTeam);
         if (enemyAllDownSafe) {
             console.warn('[Battle] Force-exiting to overworld after victory crash.');
-            postBattleMusicOutcomeRef.current = 'victory';
-            battleMusicExitOutcomeSyncRef.current = 'victory';
-            setDialogue([
-                'You won the battle!',
-                '(Reward calculation hit a snag -- check the console.)',
-            ]);
-            setPhase(GamePhase.OVERWORLD);
+            // Recovery MUST also fade — otherwise the screen snaps from
+            // BATTLE to OVERWORLD with no transition, which the player
+            // experiences as "stuck and then teleport". Idempotent guard
+            // means the normal victory pipeline (if it eventually
+            // completes) won't double-fade.
+            if (!battleExitInFlightRef.current) {
+                battleExitInFlightRef.current = true;
+                postBattleMusicOutcomeRef.current = 'victory';
+                battleMusicExitOutcomeSyncRef.current = 'victory';
+                setBattleState(prev => ({ ...prev, phase: 'victory', pendingMoves: [] }));
+                setBattleFading('victory');
+                setDialogue([
+                    'You won the battle!',
+                    '(Reward calculation hit a snag -- check the console.)',
+                ]);
+                window.setTimeout(() => setPhase(GamePhase.OVERWORLD), 450);
+            }
             showToast('Battle hit a snag — exiting safely', 'info', { kicker: 'RECOVERY' });
         } else if (playerAllDown) {
             console.warn('[Battle] Force-ending run after defeat crash.');
@@ -8905,6 +9065,8 @@ export default function App() {
       if (phase === GamePhase.OVERWORLD) {
           pendingAnomalyRef.current = false;
           pendingOutbreakRef.current = null;
+          // Battle is fully behind us -- arm the guard for the next exit.
+          battleExitInFlightRef.current = false;
           // Hold the blackout one extra frame so the overlay's exit
           // animation crossfades the new overworld in instead of
           // snapping. 350ms matches the overlay's fade-out duration.
@@ -10863,6 +11025,31 @@ export default function App() {
         <>
             <AudioWidget />
             {renderContent()}
+            {/* Global dialogue layer. The OVERWORLD render owns its own
+             *  DialogueBox for legacy reasons, but BATTLE / PERK_SELECT /
+             *  STARTER_SELECT etc. did not -- which meant any
+             *  setDialogue() call from inside the battle pipeline (e.g.
+             *  the trainer-victory reward dialogue) set state but
+             *  rendered nothing. The user described that as "stuck"
+             *  because the click-to-advance affordance was invisible.
+             *  Mounting it here at the root makes it visible across all
+             *  phases. We suppress on OVERWORLD to avoid a duplicate
+             *  with the legacy mount. */}
+            {dialogue && phase !== GamePhase.OVERWORLD && (
+                <DialogueBox
+                    dialogue={dialogue}
+                    onAdvance={() => {
+                        const r = dialogue?.resolve;
+                        setDialogueRaw(null);
+                        r?.(null);
+                    }}
+                    onChoice={(id) => {
+                        const r = dialogue?.resolve;
+                        setDialogueRaw(null);
+                        r?.(id);
+                    }}
+                />
+            )}
             {/* Battle teardown blackout. Sits above everything except the
              *  pause/transform modals so the arena dissolves cleanly into
              *  the next phase (overworld / perk select / run-end). The
