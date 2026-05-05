@@ -558,12 +558,18 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     // Team size: 2 for rookie, 3 for veteran, 4 for ace.
     const teamSize = 2 + tierIndex; // 2 / 3 / 4
 
-    // Level scaling matches wild floor but biases slightly higher so
-    // route trainers feel like a proper break. The player's party is
-    // auto-scaled via perks, so this is more "flavor challenge" than
-    // grind wall.
-    const baseLevel = Math.max(4, Math.floor(dist * 1.3) + 2 + tierIndex * 2);
-    const level = baseLevel;
+    // Route-trainer level curve (rebalanced):
+    // - Early game: gentle slope so first encounters don't spike too hard.
+    // - Mid game: pick up pace around dist~12.
+    // - Late game: continue rising but with smaller incremental steps so
+    //   badges + wild-cap logic can still breathe.
+    const levelFromDistance = (d: number, tierBonus: number): number => {
+        const early = Math.floor(d * 0.85) + 3;
+        const mid = d > 12 ? Math.floor((d - 12) * 0.40) : 0;
+        const late = d > 32 ? Math.floor((d - 32) * 0.22) : 0;
+        return Math.max(3, Math.min(100, early + mid + late + tierBonus));
+    };
+    const level = levelFromDistance(dist, tierIndex * 2);
 
     // Team composition: mix of archetype signature + biome pool.
     const biomePool = (typeof (globalThis as any).__BIOME_POOLS_CACHE__ === 'object')
@@ -594,7 +600,7 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
         const tier2: 'rookie' | 'veteran' | 'ace' =
             tierIndex2 === 2 ? 'ace' : tierIndex2 === 1 ? 'veteran' : 'rookie';
         const teamSize2 = 2 + tierIndex2;
-        const level2 = Math.max(4, Math.floor(dist * 1.3) + 2 + tierIndex2 * 2);
+        const level2 = levelFromDistance(dist, tierIndex2 * 2);
         const team2: number[] = [];
         for (let i = 0; i < teamSize2; i++) {
             const pick = Math.floor(hash4(cx, cy, 9999, i) * arch2.signaturePool.length);
@@ -1892,54 +1898,15 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         };
     }
 
-    const trainerCount = rng.nextInt(0, 2) + (dist > 8 ? 1 : 0);
-    const spriteKeys = Object.keys(TRAINER_SPRITES).filter(k => !k.startsWith('leader') && k !== 'prof' && k !== 'rival');
-    
-    for(let i=0; i<trainerCount; i++) {
-        const tx = rng.nextInt(2, CHUNK_SIZE-3);
-        const ty = rng.nextInt(2, CHUNK_SIZE-3);
-        if (layout[ty] && (layout[ty][tx] === 4 || layout[ty][tx] === bgTile) && !trainers[`${tx},${ty}`]) {
-            const spriteKey = spriteKeys[rng.nextInt(0, spriteKeys.length - 1)];
-            const trainerName = spriteKey.charAt(0).toUpperCase() + spriteKey.slice(1);
-            
-            // Random team size based on distance - Minimum 4 for 2v2
-            const teamSize = dist < 5 ? 4 : (dist < 15 ? rng.nextInt(4, 5) : rng.nextInt(5, 6));
-            const team = [];
-            
-            // Pick a "theme" for the trainer
-            const themes = [
-                [1, 4, 7], // Starters
-                [25, 26, 135], // Electric
-                [92, 93, 94], // Ghost
-                [66, 67, 68], // Fighting
-                [133, 134, 135, 136, 196, 197], // Eeveelutions
-                [147, 148, 149], // Dragon
-                [143, 131, 112], // Tanky
-                [63, 64, 65], // Psychic
-                [74, 75, 76], // Rock/Ground
-            ];
-            
-            const theme = themes[rng.nextInt(0, themes.length - 1)];
-            for(let j=0; j<teamSize; j++) {
-                if (j < theme.length && rng.next() < 0.7) {
-                    team.push(theme[j]);
-                } else {
-                    team.push(rng.nextInt(1, 151));
-                }
-            }
-
-            trainers[`${tx},${ty}`] = {
-                id: `chunk_${cx}_${cy}_t${i}`,
-                name: trainerName,
-                sprite: TRAINER_SPRITES[spriteKey as keyof typeof TRAINER_SPRITES],
-                team: team,
-                level: levelBase + rng.nextInt(-1, 3), // Slightly higher level for trainers
-                reward: levelBase * 50,
-                dialogue: "I've been training hard! Let's see what you've got!",
-                winDialogue: "You're clearly a master..."
-            };
-        }
-    }
+    // Legacy "random trainer clutter" system retired.
+    //
+    // Why:
+    // - It bypassed route-trainer progression rules and could roll teams like
+    //   [Gastly, Haunter, Gengar] at very low levels.
+    // - It forced oversized early squads (minimum 4 mons) that spiked
+    //   difficulty before players had enough resources/moves.
+    // - It competed with the newer archetype route-trainer placement below,
+    //   causing inconsistent balancing from chunk to chunk.
 
     // Safety sweep: decorative props (bench/lamppost/mailbox) were placed at
     // random very early. If a trainer or NPC was later dropped on top of one,

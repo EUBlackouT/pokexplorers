@@ -7,6 +7,8 @@ import { getFusionMove } from './data/fusionChart';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
     getWildPokemon, 
+    getTrainerTeam,
+    recommendedTrainerTeamSizeForLevel,
     calculateDamage, 
     gainExperience, 
     checkEvolution, 
@@ -618,6 +620,11 @@ export default function App() {
   // fires the next startBattle when the victory dialogue closes, so
   // the player's team HP/status carries over untouched.
   const pendingGauntletNextRef = useRef<TrainerData | null>(null);
+  // Procedural trainer roster cache (route_ / chunk_*_t* / boss_*). We roll
+  // species once per trainer id, then keep it stable for retries so the
+  // player doesn't see "new team every rematch attempt" volatility. This is
+  // intentionally transient (not saved): a fresh run can randomize anew.
+  const proceduralTrainerRosterRef = useRef<Record<string, number[]>>({});
   /**
    * Re-entry guard for victory transition. Once we commit to fading out of
    * a battle, additional triggers (timeout safety net, recovery catch,
@@ -3076,7 +3083,35 @@ export default function App() {
                   e.currentHp = e.maxHp = e.stats.hp;
               });
           } else {
-              enemies = await Promise.all(trainerData.team.map(id => fetchPokemon(id, trainerData.level, true, 0, difficulty)));
+              const trainerId = trainerData.id || '';
+              const isProceduralTrainer =
+                  /^route_/.test(trainerId) ||
+                  /^chunk_.*_t\d+$/.test(trainerId) ||
+                  /^boss_/.test(trainerId);
+
+              if (isProceduralTrainer) {
+                  // Rebalanced procedural trainers:
+                  // - randomize roster per run (fixes "same first trainer every time")
+                  // - cap team size by level curve (prevents level-4 four-mon walls)
+                  // - keep archetype flavor by using authored trainerData.team as a
+                  //   preferred species bias when rolling.
+                  const trainerBiome = biome || currentMap.biome || 'forest';
+                  const rawCount = Array.isArray(trainerData.team) ? trainerData.team.length : 2;
+                  const sizeCap = recommendedTrainerTeamSizeForLevel(trainerData.level);
+                  const finalCount = Math.max(2, Math.min(rawCount || 2, sizeCap));
+
+                  const cachedSpecies = proceduralTrainerRosterRef.current[trainerId];
+                  if (cachedSpecies && cachedSpecies.length > 0) {
+                      enemies = await Promise.all(
+                          cachedSpecies.slice(0, finalCount).map(id => fetchPokemon(id, trainerData.level, true, 0, difficulty))
+                      );
+                  } else {
+                      enemies = await getTrainerTeam(finalCount, trainerData.level, trainerBiome, difficulty, trainerData.team || []);
+                      proceduralTrainerRosterRef.current[trainerId] = enemies.map(m => m.id);
+                  }
+              } else {
+                  enemies = await Promise.all(trainerData.team.map(id => fetchPokemon(id, trainerData.level, true, 0, difficulty)));
+              }
           }
       } else {
           const wildCap = getWildLevelCap(playerState.badges, distance);
@@ -8968,6 +9003,8 @@ export default function App() {
   function triggerEmote(e: string) { setCurrentEmote(e); setTimeout(()=>setCurrentEmote(null), 2000); };
   function handleStarterSelect(team: Pokemon[]) { 
       if (team[0]) playCry(team[0].id, team[0].name);
+      // New run -> fresh procedural trainer rolls.
+      proceduralTrainerRosterRef.current = {};
       setPlayerState(prev=>({...prev, team})); 
       setPhase(GamePhase.OVERWORLD); 
   };

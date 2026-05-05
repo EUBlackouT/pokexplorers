@@ -2393,9 +2393,16 @@ const calculateStatValue = (base: number = 0, iv: number = 0, ev: number = 0, le
     const l = isNaN(level) ? 1 : level;
     const n = isNaN(natureMult) ? 1 : natureMult;
 
-    // Dynamic Progression: Base stats improve slightly as level increases
-    // Early game pokemon (lower BST) get a bigger boost to stay relevant
-    const growthBonus = bst < 400 ? Math.floor(l / 5) : Math.floor(l / 10);
+    // Dynamic progression rebalance:
+    // - Early levels should read close to vanilla Pokemon stat growth.
+    // - Low-BST species still get a modest late-game lift so they don't
+    //   instantly become dead slots versus pseudo/legendary curves.
+    //
+    // Previous model (lvl/5 for low BST) was too steep in mid/late game and
+    // amplified roster-power swings in procedural trainer generation.
+    const bstClamp = Math.max(280, Math.min(680, bst || 400));
+    const lowBstBias = (680 - bstClamp) / 400; // ~0.0 (high BST) -> ~1.0 (low BST)
+    const growthBonus = Math.floor((l / 12) * (0.35 + lowBstBias * 0.65));
     b += growthBonus;
 
     if (isHp) {
@@ -3013,27 +3020,59 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
   return { mon: p, leveledUp, newMoves: learnedMoves };
 };
 
-export const getTrainerTeam = async (count: number, level: number, biome: string = 'forest', difficulty: number = 1): Promise<Pokemon[]> => {
-    let basePool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
-    let pool: number[] = [];
-    
-    if (level < 18) {
-        pool = basePool.filter(id => EARLY_IDS.includes(id));
-        if (pool.length === 0) pool = EARLY_IDS;
-    } else if (level < 35) {
-        pool = basePool.filter(id => EARLY_IDS.includes(id) || MID_IDS.includes(id));
-        if (pool.length === 0) pool = [...EARLY_IDS, ...MID_IDS];
-    } else {
-        pool = [...basePool, ...UNCOMMON_IDS, ...RARE_IDS];
+export const recommendedTrainerTeamSizeForLevel = (level: number): number => {
+    if (level <= 8) return 2;
+    if (level <= 18) return 3;
+    if (level <= 35) return 4;
+    if (level <= 55) return 5;
+    return 6;
+};
+
+const filterProgressionPool = (pool: number[], level: number): number[] => {
+    if (level <= 12) {
+        return pool.filter(id => EARLY_IDS.includes(id));
+    }
+    if (level <= 30) {
+        return pool.filter(id => EARLY_IDS.includes(id) || MID_IDS.includes(id));
+    }
+    return pool.filter(id => EARLY_IDS.includes(id) || MID_IDS.includes(id) || LATE_IDS.includes(id));
+};
+
+export const getTrainerTeam = async (
+    count: number,
+    level: number,
+    biome: string = 'forest',
+    difficulty: number = 1,
+    preferredSpecies: number[] = [],
+): Promise<Pokemon[]> => {
+    const basePool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
+    const normalizedPreferred = Array.from(new Set((preferredSpecies || []).filter(id => Number.isFinite(id))));
+    const thematicSource = normalizedPreferred.length > 0 ? normalizedPreferred : basePool;
+
+    let pool = filterProgressionPool(thematicSource, level);
+    if (pool.length === 0) pool = filterProgressionPool(basePool, level);
+    if (pool.length === 0) {
+        // Last resort -- never hard fail team generation.
+        pool = level <= 12
+            ? EARLY_IDS
+            : level <= 30
+                ? [...EARLY_IDS, ...MID_IDS]
+                : [...EARLY_IDS, ...MID_IDS, ...LATE_IDS];
     }
 
     const team: Pokemon[] = [];
-    
-    for (let i = 0; i < count; i++) {
-        const id = pool[Math.floor(Math.random() * pool.length)];
+    const picked = new Set<number>();
+    const targetCount = Math.max(2, Math.min(6, count));
+
+    for (let i = 0; i < targetCount; i++) {
+        const available = pool.filter(id => !picked.has(id));
+        const pickPool = available.length > 0 ? available : pool;
+        const id = pickPool[Math.floor(Math.random() * pickPool.length)];
+        picked.add(id);
+
         const mon = await fetchPokemon(id, level, true, 0, difficulty);
-        
-        // Assign interesting held items for trainers
+
+        // Held-item pressure scales into mid/late game.
         const items = [
             { id: 'leftovers', name: 'Leftovers' },
             { id: 'choice-scarf', name: 'Choice Scarf' },
@@ -3044,14 +3083,14 @@ export const getTrainerTeam = async (count: number, level: number, biome: string
             { id: 'assault-vest', name: 'Assault Vest' },
             { id: 'expert-belt', name: 'Expert Belt' }
         ];
-        
-        if (Math.random() < 0.4) {
+        const itemChance = level <= 12 ? 0.08 : level <= 25 ? 0.18 : level <= 40 ? 0.30 : 0.40;
+        if (Math.random() < itemChance) {
             mon.heldItem = items[Math.floor(Math.random() * items.length)];
         }
-        
+
         team.push(mon);
     }
-    
+
     return team;
 };
 
