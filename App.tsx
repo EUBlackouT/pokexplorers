@@ -4140,7 +4140,10 @@ export default function App() {
                 if (p.ability.name === 'MysticFog') {
                     setBattleState(prev => ({ ...prev, mysticFogActive: true }));
                     tempLogs.push(`${p.name}'s Mystic Fog lowered Accuracy for everyone!`);
-                    [...tempPTeam, ...tempETeam].forEach(t => {
+                    // FIELD only -- bench accuracy doesn't matter and was
+                    // bleeding stat stacks onto pokemon that hadn't even
+                    // been sent out yet.
+                    [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(t => {
                         if (t && !t.isFainted && t.statStages) {
                             t.statStages.accuracy = Math.max(-6, (t.statStages.accuracy || 0) - 1);
                         }
@@ -4156,15 +4159,6 @@ export default function App() {
                         if (!t.status && !t.isFainted && !t.types.includes('poison') && !t.types.includes('steel')) {
                             t.status = 'poison';
                             tempLogs.push(`${t.name} was poisoned by ${p.name}'s Venomous Aura!`);
-                        }
-                    });
-                }
-                if (p.ability.name === 'MysticFog') {
-                    setBattleState(prev => ({ ...prev, mysticFogActive: true }));
-                    tempLogs.push(`${p.name}'s Mystic Fog lowered Accuracy for everyone!`);
-                    [...tempPTeam, ...tempETeam].forEach(t => {
-                        if (t && !t.isFainted && t.statStages) {
-                            t.statStages.accuracy = Math.max(-6, (t.statStages.accuracy || 0) - 1);
                         }
                     });
                 }
@@ -4653,7 +4647,15 @@ export default function App() {
             actor.lastMoveMissed = false;
             const targetTeam = action.isPlayer ? tempETeam : tempPTeam;
             const isBothFoes = action.move.target === 'Both foes' || action.move.target === 'all-opponents';
-            const targetsToHit = isBothFoes ? targetTeam.filter((t: Pokemon) => !t.isFainted) : [targetTeam[action.targetIndex]];
+            // Spread moves only ever hit ACTIVE field slots (0 and 1). Without
+            // the slice cap, AOE attacks (Earthquake/Surf/Discharge/etc.)
+            // pulled the whole trainer roster into `targetsToHit` -- so a
+            // single move was hitting the 2 visible mons AND the 2 hidden
+            // bench mons. Capping to slice(0,2) restores standard double-
+            // battle targeting without changing single-target moves.
+            const targetsToHit = isBothFoes
+                ? targetTeam.slice(0, 2).filter((t: Pokemon) => t && !t.isFainted)
+                : [targetTeam[action.targetIndex]];
             
             if (targetsToHit.length === 0 || targetsToHit.every(t => !t || t.isFainted)) {
                 tempLogs.push(`${actor.name}'s attack missed!`);
@@ -4795,8 +4797,8 @@ export default function App() {
                     continue;
                 }
 
-                // Static Field Ability
-                const staticFieldUser = [...tempPTeam, ...tempETeam].find(p => p && !p.isFainted && p.ability.name === 'StaticField');
+                // Static Field Ability — must be on the field to suppress priority.
+                const staticFieldUser = [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].find(p => p && !p.isFainted && p.ability.name === 'StaticField');
                 if (staticFieldUser && (action.move?.priority || 0) > 0 && Math.random() < 0.25) {
                     tempLogs.push(`${staticFieldUser.name}'s Static Field disrupted the priority move!`);
                     await syncState(500);
@@ -5970,8 +5972,8 @@ export default function App() {
                         tempLogs.push("Trick Room started!");
                     }
 
-                    // Room Service
-                    [...tempPTeam, ...tempETeam].forEach(mon => {
+                    // Room Service — only field-active mons consume it.
+                    [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(mon => {
                         if (mon && !mon.isFainted && mon.heldItem?.id === 'room-service' && mon.statStages) {
                             mon.statStages.speed = Math.max(-6, (mon.statStages.speed || 0) - 1);
                             tempLogs.push(`${mon.name}'s Room Service lowered its Speed!`);
@@ -6122,9 +6124,11 @@ export default function App() {
                         tempLogs.push(`${target.name}'s Spirit Tether restored ${targetAlly.name}'s HP!`);
                     }
 
-                    // Ashen Body Ability
+                    // Ashen Body Ability — only burns the foes ON FIELD
+                    // (slots 0-1). Without the slice, the bench got
+                    // burned too.
                     if (target.ability.name === 'AshenBody') {
-                        const foes = action.isPlayer ? tempETeam : tempPTeam;
+                        const foes = (action.isPlayer ? tempETeam : tempPTeam).slice(0, 2);
                         foes.forEach(f => {
                             if (f && !f.isFainted && !f.status && !f.types.includes('fire')) {
                                 f.status = 'burn';
@@ -6135,7 +6139,7 @@ export default function App() {
 
                     // Death Wail Ability
                     if (target.ability.name === 'DeathWail') {
-                        const foes = action.isPlayer ? tempETeam : tempPTeam;
+                        const foes = (action.isPlayer ? tempETeam : tempPTeam).slice(0, 2);
                         foes.forEach(f => {
                             if (f && !f.isFainted && f.statStages) {
                                 f.statStages.attack = Math.max(-6, (f.statStages.attack || 0) - 1);
@@ -6171,9 +6175,9 @@ export default function App() {
                         tempLogs.push(`${targetAlly.name}'s Grudge Engine is revving up!`);
                     }
 
-                    // Final Spark Ability
+                    // Final Spark Ability — only the active foes on field.
                     if (target.ability.name === 'FinalSpark') {
-                        const foes = action.isPlayer ? tempETeam : tempPTeam;
+                        const foes = (action.isPlayer ? tempETeam : tempPTeam).slice(0, 2);
                         const dmg = Math.floor(target.maxHp * 0.25);
                         foes.forEach(f => {
                             if (f && !f.isFainted) {
@@ -6564,7 +6568,8 @@ export default function App() {
                 }
 
                 if (sec.clearStats) {
-                    [...tempPTeam, ...tempETeam].forEach((p: Pokemon) => {
+                    // Haze etc. only resets the active battlefield, not the bench.
+                    [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach((p: Pokemon) => {
                         if (p && p.statStages) {
                             p.statStages = { attack: 0, defense: 0, 'special-attack': 0, 'special-defense': 0, speed: 0, accuracy: 0, evasion: 0 };
                         }
@@ -6778,9 +6783,9 @@ export default function App() {
                     setBattleState(prev => ({ ...prev, weather: sec.weather!, weatherTurns: duration }));
                     tempLogs.push(sec.msg || `The weather became ${sec.weather}!`);
                     
-                    // Tide Turner Ability
+                    // Tide Turner Ability — field-only ability.
                     if (sec.weather === 'rain') {
-                        [...tempPTeam, ...tempETeam].forEach(p => {
+                        [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(p => {
                             if (p && !p.isFainted && p.ability.name === 'TideTurner' && p.statStages) {
                                 p.statStages.speed = Math.min(6, (p.statStages.speed || 0) + 1);
                                 tempLogs.push(`${p.name}'s Tide Turner boosted its Speed!`);
@@ -6814,8 +6819,8 @@ export default function App() {
                         target.confusionTurns = Math.floor(Math.random() * 4) + 2; // 2-5 turns
                         checkBerries(target, tempLogs);
                     } else {
-                        // Verdant Veil Ability
-                        const verdantVeilUser = [...tempPTeam, ...tempETeam].find(p => p && !p.isFainted && p.ability.name === 'VerdantVeil');
+                        // Verdant Veil Ability — only an active mon's veil counts.
+                        const verdantVeilUser = [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].find(p => p && !p.isFainted && p.ability.name === 'VerdantVeil');
                         const isTargetAllyOfVeil = verdantVeilUser && (
                             (tempPTeam.includes(verdantVeilUser) && tempPTeam.includes(target)) ||
                             (tempETeam.includes(verdantVeilUser) && tempETeam.includes(target))
@@ -7148,9 +7153,9 @@ export default function App() {
                 tempLogs.push(`${mon.name}'s Energy Core boosted the Sync Gauge!`);
             }
 
-            // Bleakwind Ability
+            // Bleakwind Ability — field foes only.
             if (mon.ability.name === 'Bleakwind' && battleState.weather === 'hail') {
-                tempETeam.forEach(e => {
+                tempETeam.slice(0, 2).forEach(e => {
                     if (e && !e.isFainted && e.statStages) {
                         e.statStages.speed = Math.max(-6, (e.statStages.speed || 0) - 1);
                         tempLogs.push(`${mon.name}'s Bleakwind lowered ${e.name}'s Speed!`);
@@ -7335,9 +7340,9 @@ export default function App() {
                     tempLogs.push(`${mon.name}'s Overclock boosted Speed but caused recoil!`);
                 }
             }
-            // Slow Pulse
+            // Slow Pulse — field-only.
             if (mon.ability.name === 'SlowPulse') {
-                [...tempPTeam, ...tempETeam].forEach(target => {
+                [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(target => {
                     if (target && !target.isFainted && target.statStages) {
                         target.statStages.speed = Math.max(-6, (target.statStages.speed || 0) - 1);
                     }
@@ -7636,9 +7641,9 @@ export default function App() {
                 tempLogs.push(`Enemy ${mon.name}'s Stone Harvest restored HP and raised Defense!`);
             }
 
-            // Bleakwind Ability
+            // Bleakwind Ability — field foes only.
             if (mon.ability.name === 'Bleakwind' && battleState.weather === 'hail') {
-                tempPTeam.forEach(p => {
+                tempPTeam.slice(0, 2).forEach(p => {
                     if (!p.isFainted && p.statStages) {
                         p.statStages.speed = Math.max(-6, (p.statStages.speed || 0) - 1);
                         tempLogs.push(`Enemy ${mon.name}'s Bleakwind lowered ${p.name}'s Speed!`);
@@ -7778,9 +7783,9 @@ export default function App() {
                     tempLogs.push(`Enemy ${mon.name}'s Overclock boosted Speed but caused recoil!`);
                 }
             }
-            // Slow Pulse (Enemy)
+            // Slow Pulse (Enemy) — field-only.
             if (mon.ability.name === 'SlowPulse') {
-                [...tempPTeam, ...tempETeam].forEach(target => {
+                [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(target => {
                     if (target && !target.isFainted && target.statStages) {
                         target.statStages.speed = Math.max(-6, (target.statStages.speed || 0) - 1);
                     }
@@ -7964,9 +7969,9 @@ export default function App() {
                 setBattleState(prev => ({ ...prev, weather: 'none', weatherTurns: 0 }));
                 tempLogs.push(`The weather returned to normal.`);
                 
-                // Shoreline Ability
+                // Shoreline Ability — only the active mons benefit.
                 if (oldWeather === 'rain') {
-                    [...tempPTeam, ...tempETeam].forEach(p => {
+                    [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(p => {
                         if (!p.isFainted && p.ability.name === 'Shoreline') {
                             const heal = Math.floor(p.maxHp * 0.25);
                             p.currentHp = Math.min(p.maxHp, p.currentHp + heal);
@@ -8599,8 +8604,12 @@ export default function App() {
         return;
     }
 
-    // End of Turn: Healing Items
-    [...tempPTeam, ...tempETeam].forEach(p => {
+    // End of Turn: Healing Items / Status Items.
+    // CRITICAL: only the active battlefield (slots 0-1) ticks held items.
+    // Iterating the full roster meant bench Pokémon silently restored HP
+    // from Leftovers, took damage from Sticky Barb, and even got burned
+    // by their own Flame Orb while sitting in reserve.
+    [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)].forEach(p => {
         if (p && !p.isFainted) {
             checkBerries(p, tempLogs);
             if (p.heldItem?.id === 'leftovers') {
