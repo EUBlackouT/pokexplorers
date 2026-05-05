@@ -76,6 +76,12 @@ interface Props {
 export const BattleFxOverlay: React.FC<Props> = ({ vfx }) => {
     if (!vfx) return null;
 
+    // Hard guard: some setVFX call sites read `action.move.type` which can
+    // legitimately be undefined for fixed-data moves or status-only moves
+    // ("Curse" etc.). Without this early-out, vfx.type.toLowerCase() below
+    // throws and unmounts the whole battle scene mid-turn.
+    if (typeof vfx.type !== 'string' || vfx.type.length === 0) return null;
+
     // Ignore payloads that are popups rather than move casts.
     const skip =
         vfx.damage !== undefined ||

@@ -202,7 +202,6 @@ function buildRivalTrainer(m: RivalMilestone): TrainerData {
 }
 
 export default function App() {
-  console.log('App Rendering: Start');
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [phase, setPhase] = useState<GamePhase>(GamePhase.MENU);
@@ -3720,8 +3719,11 @@ export default function App() {
     }
 
     const setVFX = async (type: string, target: 'player' | 'enemy', index: number, moveName?: string) => {
-        setBattleState(prev => ({ ...prev, vfx: { type, target, index, moveName } }));
-        // Showdown sprite animations run ~900ms; old hard-coded 500 ms cut them off.
+        // Defensive: a few move data rows have no .type (status-only / fixed
+        // damage moves). Falling through with undefined here was crashing
+        // BattleFxOverlay when it called vfx.type.toLowerCase().
+        const safeType = (typeof type === 'string' && type.length > 0) ? type : 'normal';
+        setBattleState(prev => ({ ...prev, vfx: { type: safeType, target, index, moveName } }));
         await delay(900);
         setBattleState(prev => ({ ...prev, vfx: null }));
     }
@@ -9921,7 +9923,6 @@ export default function App() {
             </div>
         );
 
-        console.log('App Rendering: Phase =', phase);
         if (phase === GamePhase.MENU) return (
             <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center relative overflow-hidden font-press-start">
                 {/* Hand-crafted hero background (cel-shaded Pokemon-style vista) */}
