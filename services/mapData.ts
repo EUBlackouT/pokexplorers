@@ -531,7 +531,7 @@ interface RouteTrainerPlacement {
 
 export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTrainerPlacement[] => {
     const dist = Math.sqrt(cx * cx + cy * cy);
-    if (dist < 3) return []; // no route trainers in tutorial zone
+    if (dist < 1) return []; // keep origin chunk trainer-free, allow nearby routes
     const archetypes = ROUTE_ARCHETYPES[biome] ?? EMPTY_ARCHETYPES;
     if (archetypes.length === 0) return [];
 
@@ -1925,7 +1925,13 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
     //
     // Skip if we're a "danger floor" tile chunk too -- those are
     // gauntlet-like already.
-    if (!poiPlaced) {
+    // Route trainers should still appear on many chunks even when a light POI
+    // (camp, sign, lore object) exists. Hard-blocking on `poiPlaced` made
+    // trainers feel like they vanished after the balancing pass.
+    const hasMajorStoryTrainer = Object.values(trainers).some(t =>
+        t.isGymLeader || /^boss_/.test(t.id) || /^elite_/.test(t.id) || /^champion_/.test(t.id)
+    );
+    if (!hasMajorStoryTrainer) {
         const placements = getRouteTrainers(cx, cy, biome);
         if (placements.length > 0) {
             // Find up to `placements.length` walkable bgTile cells away

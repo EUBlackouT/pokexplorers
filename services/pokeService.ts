@@ -27,6 +27,22 @@ export const normalizePokeName = (raw: string): string => {
         .replace(/^-|-$/g, '');    // trim leading/trailing
 };
 
+const normalizeMoveNameKey = (name?: string): string =>
+    (name || '').toLowerCase().trim();
+
+const dedupeMoveSet = (moves: PokemonMove[], max: number = 4): PokemonMove[] => {
+    const out: PokemonMove[] = [];
+    const seen = new Set<string>();
+    for (const m of moves) {
+        const key = normalizeMoveNameKey(m?.name);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(m);
+        if (out.length >= max) break;
+    }
+    return out;
+};
+
 /**
  * Type-based fallback pool for custom abilities.
  *
@@ -2695,6 +2711,8 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
       }
   }
 
+  const finalizedMoves = dedupeMoveSet(moves, 4);
+
     return {
     id: data.id,
     name: data.name.charAt(0).toUpperCase() + data.name.slice(1),
@@ -2706,7 +2724,7 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
     nature: nature,
     ability: ability,
     types: data.types.map((t: any) => t.type.name),
-    moves,
+    moves: finalizedMoves,
     movePool: uniqueAllMoves,
     currentHp: calculatedStats.hp, 
     maxHp: calculatedStats.hp,
@@ -2985,7 +3003,7 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
         const movesToLearn = p.movePool.filter(m => m.level === p.level);
         
         for (const m of movesToLearn) {
-            if (p.moves.some(existing => existing.name === m.name)) continue;
+            if (p.moves.some(existing => normalizeMoveNameKey(existing.name) === normalizeMoveNameKey(m.name))) continue;
             
             try {
                 const mData = await fetchJson(m.url);
@@ -3008,6 +3026,7 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
                     p.moves.shift(); 
                     p.moves.push(newMove);
                 }
+                p.moves = dedupeMoveSet(p.moves, 4);
                 learnedMoves.push(newMove.name);
             } catch (e) {
                 console.error("Failed to learn move", m.name, e);

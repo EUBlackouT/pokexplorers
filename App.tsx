@@ -1222,6 +1222,13 @@ export default function App() {
       if (isMultiplayerBattle) {
           const currentActorIndex = forcedActorIndex !== undefined ? forcedActorIndex : battleState.activePlayerIndex;
           const actor = battleState.playerTeam[currentActorIndex];
+          if (!actor || actor.isFainted) {
+              const fallback = battleState.playerTeam.findIndex((p, i) => i < 2 && p && !p.isFainted);
+              if (fallback >= 0) {
+                  setBattleState(prev => ({ ...prev, activePlayerIndex: fallback, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null } }));
+              }
+              return;
+          }
           let speed = actor.stats.speed;
           
           // Speed Stat Stages
@@ -1243,8 +1250,13 @@ export default function App() {
           
           setBattleState(prev => {
               const newPending = [...prev.pendingMoves, action];
-              const livingPlayers = prev.playerTeam.filter(p => !p.isFainted).length;
-              const activePlayerCount = Math.min(2, livingPlayers);
+              // Only ACTIVE field slots (0/1) can act this turn. Counting
+              // bench mons here causes a softlock after one active faints:
+              // queue waits for a second action from a dead slot.
+              const activePlayerCount = Math.max(
+                  1,
+                  prev.playerTeam.slice(0, 2).filter(p => p && !p.isFainted).length
+              );
               
               if (newPending.length >= activePlayerCount) {
                   multiplayer.send({
@@ -1291,6 +1303,13 @@ export default function App() {
       }
       const currentActorIndex = forcedActorIndex !== undefined ? forcedActorIndex : battleState.activePlayerIndex;
       const actor = battleState.playerTeam[currentActorIndex];
+      if (!actor || actor.isFainted) {
+          const fallback = battleState.playerTeam.findIndex((p, i) => i < 2 && p && !p.isFainted);
+          if (fallback >= 0) {
+              setBattleState(prev => ({ ...prev, activePlayerIndex: fallback, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null } }));
+          }
+          return;
+      }
 
       if (switchIndex !== undefined) {
           if (actor.trappedTurns && actor.trappedTurns > 0) {
@@ -1377,8 +1396,13 @@ export default function App() {
       const action = { actorIndex: currentActorIndex, targetIndex, move, item, isPlayer: true, isFusion: isFusionMove, speed, priority, switchIndex };
       setBattleState(prev => {
           const newPending = [...prev.pendingMoves, action];
-          const livingPlayers = prev.playerTeam.filter(p => !p.isFainted).length;
-          const activePlayerCount = Math.min(2, livingPlayers);
+          // Only ACTIVE field slots (0/1) can act this turn. Counting
+          // bench mons here causes a softlock after one active faints:
+          // queue waits for a second action from a dead slot.
+          const activePlayerCount = Math.max(
+              1,
+              prev.playerTeam.slice(0, 2).filter(p => p && !p.isFainted).length
+          );
           
           if (newPending.length >= activePlayerCount) return { ...prev, pendingMoves: newPending, phase: 'execution', activePlayerIndex: 0, ui: { selectionMode: 'MOVE', selectedMove: null, isFusionNext: false } };
           let nextIndex = prev.activePlayerIndex + 1;
@@ -8748,6 +8772,7 @@ export default function App() {
 
     const mustSwitch = tempPTeam.some((p, i) => i < 2 && p.isFainted && tempPTeam.slice(2).some(bp => !bp.isFainted));
     const switchingIdx = tempPTeam.findIndex((p, i) => i < 2 && p.isFainted && tempPTeam.slice(2).some(bp => !bp.isFainted));
+    const firstAliveActiveIdx = tempPTeam.findIndex((p, i) => i < 2 && p && !p.isFainted);
 
     setBattleState(prev => {
         const finalMustSwitch = mustSwitch || prev.mustSwitch;
@@ -8760,7 +8785,7 @@ export default function App() {
             logs: tempLogs.slice(-6), 
             phase: 'player_input', 
             turn: prev.turn + 1, 
-            activePlayerIndex: finalMustSwitch ? finalSwitchingIdx : 0, 
+            activePlayerIndex: finalMustSwitch ? finalSwitchingIdx : (firstAliveActiveIdx >= 0 ? firstAliveActiveIdx : 0), 
             pendingMoves: [], 
             mustSwitch: finalMustSwitch,
             switchingActorIdx: finalSwitchingIdx,
@@ -9012,6 +9037,50 @@ export default function App() {
 
   useEffect(() => { battleStateRef.current = battleState; }, [battleState]);
   useEffect(() => { networkRoleRef.current = networkRole; }, [networkRole]);
+
+  // Player-input sanity guard:
+  // if activePlayerIndex points to a fainted slot (can happen after KO +
+  // async state races), snap to the first living active mon, or force SWITCH
+  // if bench replacement is required.
+  useEffect(() => {
+      if (phase !== GamePhase.BATTLE) return;
+      if (battleState.phase !== 'player_input') return;
+      if (battleState.mustSwitch) return;
+
+      const idx = battleState.activePlayerIndex;
+      const actor = battleState.playerTeam[idx];
+      if (!actor || !actor.isFainted) return;
+
+      const fallback = battleState.playerTeam.findIndex((p, i) => i < 2 && p && !p.isFainted);
+      if (fallback >= 0 && fallback !== idx) {
+          setBattleState(prev => {
+              if (prev.phase !== 'player_input' || prev.mustSwitch) return prev;
+              const stillDead = prev.playerTeam[prev.activePlayerIndex]?.isFainted;
+              if (!stillDead) return prev;
+              return {
+                  ...prev,
+                  activePlayerIndex: fallback,
+                  ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null }
+              };
+          });
+          return;
+      }
+
+      const needsSwitch = battleState.playerTeam.some((p, i) => i < 2 && p.isFainted && battleState.playerTeam.slice(2).some(bp => !bp.isFainted));
+      if (needsSwitch) {
+          const switchIdx = battleState.playerTeam.findIndex((p, i) => i < 2 && p.isFainted && battleState.playerTeam.slice(2).some(bp => !bp.isFainted));
+          setBattleState(prev => {
+              if (prev.phase !== 'player_input') return prev;
+              return {
+                  ...prev,
+                  mustSwitch: true,
+                  switchingActorIdx: switchIdx,
+                  activePlayerIndex: switchIdx >= 0 ? switchIdx : prev.activePlayerIndex,
+                  ui: { ...prev.ui, selectionMode: 'SWITCH', selectedMove: null }
+              };
+          });
+      }
+  }, [phase, battleState.phase, battleState.mustSwitch, battleState.activePlayerIndex, battleState.playerTeam]);
 
   // Announce the daily world event exactly once per session, the first time
   // the player reaches the overworld. Stays sticky for a beat so players can
