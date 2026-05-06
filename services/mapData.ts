@@ -2223,6 +2223,107 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         }
     }
 
+    // ---- P0 VALIDATION / REPAIR LAYER ---------------------------------------
+    // Goals:
+    //  1) Near-spawn chunks should not be empty of trainers.
+    //  2) NPC challenge payloads must be structurally valid before App.tsx
+    //     interaction code touches them.
+    //  3) Keep generation deterministic: all fallback choices derive from hash4.
+    const validationWarn = (msg: string) => {
+        // Keep logs concise and grep-friendly when debugging map generation.
+        console.warn(`[ChunkValidation ${cx},${cy}] ${msg}`);
+    };
+
+    // 1) NPC challenge schema sanitation.
+    const trialTypes = ['normal', 'fire', 'water', 'electric', 'grass', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy'];
+    Object.entries(npcs).forEach(([key, npc], idx) => {
+        if (!npc.challenge) return;
+        const ch = npc.challenge as any;
+        const defaultRewardId = Math.max(1, Math.min(1025, 1 + Math.floor(hash4(cx, cy, 31000 + idx, 0) * 1025)));
+        const defaultRewardLevel = Math.max(5, Math.min(100, levelBase + 2));
+
+        // Shared defaults.
+        if (typeof ch.target !== 'string' || ch.target.trim().length === 0) {
+            ch.target = 'challenge';
+            validationWarn(`NPC "${npc.id}" had missing challenge.target at ${key}; defaulted.`);
+        }
+        if (!Number.isFinite(ch.rewardLevel)) ch.rewardLevel = defaultRewardLevel;
+
+        if (ch.type === 'battle' || ch.type === 'collect' || ch.type === 'explore' || ch.type === 'type_trial') {
+            if (!Number.isFinite(ch.rewardPokemonId) || ch.rewardPokemonId < 1 || ch.rewardPokemonId > 1025) {
+                ch.rewardPokemonId = defaultRewardId;
+                validationWarn(`NPC "${npc.id}" had invalid rewardPokemonId at ${key}; defaulted to ${defaultRewardId}.`);
+            }
+        }
+        if (ch.type === 'type_trial') {
+            if (typeof ch.requiredType !== 'string' || !trialTypes.includes(ch.requiredType)) {
+                ch.requiredType = trialTypes[Math.floor(hash4(cx, cy, 31020 + idx, 0) * trialTypes.length)];
+                validationWarn(`NPC "${npc.id}" had invalid type_trial.requiredType at ${key}; defaulted to ${ch.requiredType}.`);
+            }
+        }
+        if (ch.type === 'speed') {
+            if (!Number.isFinite(ch.timeLimit) || ch.timeLimit <= 0) {
+                ch.timeLimit = 15;
+                validationWarn(`NPC "${npc.id}" had invalid speed.timeLimit at ${key}; defaulted to 15s.`);
+            }
+        }
+    });
+
+    // 2) Early-ring trainer density assertion + deterministic fallback.
+    const earlyBand = dist >= 1 && dist <= 3.5;
+    if (earlyBand && Object.keys(trainers).length === 0) {
+        const archetypes = ROUTE_ARCHETYPES[biome] ?? EMPTY_ARCHETYPES;
+        if (archetypes.length > 0) {
+            const openSpots: Array<{ x: number; y: number }> = [];
+            for (let ty = 3; ty < CHUNK_SIZE - 3; ty++) {
+                for (let tx = 3; tx < CHUNK_SIZE - 3; tx++) {
+                    const tile = layout[ty]?.[tx];
+                    if (tile !== bgTile && tile !== 2 && tile !== 4 && tile !== patchTile) continue;
+                    const key = `${tx},${ty}`;
+                    if (trainers[key] || npcs[key] || interactables[key] || portals[key]) continue;
+                    openSpots.push({ x: tx, y: ty });
+                }
+            }
+            openSpots.sort((a, b) => {
+                const da = Math.abs(a.x - 9.5) + Math.abs(a.y - 9.5);
+                const db = Math.abs(b.x - 9.5) + Math.abs(b.y - 9.5);
+                return da - db;
+            });
+
+            const spot = openSpots[0];
+            if (spot) {
+                const arch = archetypes[Math.floor(hash4(cx, cy, 31100, 0) * archetypes.length)];
+                const name = arch.namePool[Math.floor(hash4(cx, cy, 31101, 0) * arch.namePool.length)];
+                const greetingIdx = Math.floor(hash4(cx, cy, 31102, 0) * arch.greeting.length);
+                const lossIdx = Math.floor(hash4(cx, cy, 31103, 0) * arch.loss.length);
+                const level = Math.max(3, Math.min(100, Math.floor(dist * 0.85) + 3));
+                const team = [
+                    arch.signaturePool[Math.floor(hash4(cx, cy, 31104, 0) * arch.signaturePool.length)],
+                    arch.signaturePool[Math.floor(hash4(cx, cy, 31105, 0) * arch.signaturePool.length)],
+                ];
+                const trainerId = `route_fallback_${cx}_${cy}`;
+                trainers[`${spot.x},${spot.y}`] = {
+                    id: trainerId,
+                    name: `${arch.key[0].toUpperCase()}${arch.key.slice(1)} ${name}`,
+                    sprite: TRAINER_SPRITES[arch.spriteKey],
+                    team,
+                    level,
+                    reward: Math.floor(350 + dist * 10),
+                    dialogue: arch.greeting[greetingIdx],
+                    winDialogue: arch.loss[lossIdx],
+                    archetype: arch.key,
+                    tier: 'rookie',
+                };
+                if (layout[spot.y][spot.x] !== 3 && layout[spot.y][spot.x] !== 25) layout[spot.y][spot.x] = 4;
+                validationWarn(`Injected deterministic fallback trainer (${trainerId}) to satisfy early-band density.`);
+            } else {
+                validationWarn('Early-band chunk had no valid open tile for fallback trainer injection.');
+            }
+        } else {
+            validationWarn(`No route archetypes for biome "${biome}" while validating early-band trainer density.`);
+        }
+    }
+
     // directly above them is also a no-prop zone.
     const propTiles = new Set([97, 98, 99]);
     const clearPropAt = (px: number, py: number) => {
