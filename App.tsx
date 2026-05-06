@@ -2041,18 +2041,25 @@ export default function App() {
                       setDialogue([
                           `CHALLENGE: ${npc.challenge.type.toUpperCase()} ${npc.challenge.target}`,
                           npc.dialogue[0],
-                          "Would you like to accept? (Press Enter to continue)"
+                          "Challenge accepted. Stay sharp."
                       ]);
                       
-                      // For now, let's simplify: if it's a battle challenge, start battle.
-                      // If it's collect, check inventory.
+                      // Challenge dispatch:
+                      // - battle: spin up a trainer fight using rewardPokemonId (or
+                      //   fallback parse from target text if present)
+                      // - speed/stealth: start a live challenge state machine
+                      // - type_trial/collect/explore: immediate gate/reward checks
                       if (npc.challenge.type === 'battle') {
+                          const parsedTarget = parseInt(String(npc.challenge.target || ''), 10);
+                          const speciesId = npc.challenge.rewardPokemonId
+                              || (Number.isFinite(parsedTarget) ? parsedTarget : (16 + Math.floor(Math.random() * 120)));
+                          const challengeLevel = Math.max(5, npc.challenge.rewardLevel || Math.floor((playerState.team[0]?.level || 5) + 2));
                           startBattle(1, true, true, {
                               id: npc.id,
                               name: npc.name,
                               sprite: npc.sprite,
-                              level: 15,
-                              team: [npc.challenge.target as any],
+                              level: challengeLevel,
+                              team: [speciesId],
                               isGymLeader: false,
                               reward: 500,
                               dialogue: "Let's see what you've got!",
@@ -2083,6 +2090,34 @@ export default function App() {
                           } else {
                               setDialogue([`I only speak to those who master the ${requiredType.toUpperCase()} type.`, "Come back with a team of only that type!"]);
                           }
+                      } else if (npc.challenge.type === 'explore') {
+                          if (playerState.storyFlags.includes(challengeKey)) {
+                              setDialogue(["You've already solved this expedition challenge.", "Keep exploring, scout."]);
+                          } else {
+                              let rewardMon = npc.challenge.reward;
+                              if (!rewardMon && npc.challenge.rewardPokemonId) {
+                                  try {
+                                      rewardMon = await fetchPokemon(
+                                          npc.challenge.rewardPokemonId,
+                                          npc.challenge.rewardLevel || Math.max(8, (playerState.team[0]?.level || 5) + 1),
+                                          false,
+                                      );
+                                  } catch {
+                                      rewardMon = undefined;
+                                  }
+                              }
+                              setPlayerState(prev => ({
+                                  ...prev,
+                                  team: rewardMon ? [...prev.team, rewardMon] : prev.team,
+                                  storyFlags: [...prev.storyFlags, challengeKey]
+                              }));
+                              setDialogue([
+                                  "Excellent scouting work.",
+                                  rewardMon
+                                      ? `Take this ${rewardMon.name} as expedition support.`
+                                      : "No direct reward this time -- but your reputation grows.",
+                              ]);
+                          }
                       } else if (npc.challenge.type === 'collect') {
                           if (npc.name === 'Trader') {
                               const lead = playerState.team[0];
@@ -2111,12 +2146,27 @@ export default function App() {
                               }));
                               return;
                           }
-                          // Check if player has the item (e.g. potions)
+                          // Default collect challenge: 5 potions for a reward.
                           if (playerState.inventory.potions >= 5) {
-                              setDialogue(["Amazing! You collected enough items.", `Here is your reward: ${npc.challenge.reward.name}!`]);
+                              let rewardMon = npc.challenge.reward;
+                              if (!rewardMon && npc.challenge.rewardPokemonId) {
+                                  try {
+                                      rewardMon = await fetchPokemon(
+                                          npc.challenge.rewardPokemonId,
+                                          npc.challenge.rewardLevel || Math.max(8, (playerState.team[0]?.level || 5)),
+                                          false,
+                                      );
+                                  } catch {
+                                      rewardMon = undefined;
+                                  }
+                              }
+                              setDialogue([
+                                  "Amazing! You collected enough items.",
+                                  rewardMon ? `Here is your reward: ${rewardMon.name}!` : "Here's your thanks, explorer."
+                              ]);
                               setPlayerState(prev => ({
                                   ...prev,
-                                  team: [...prev.team, npc.challenge!.reward],
+                                  team: rewardMon ? [...prev.team, rewardMon] : prev.team,
                                   inventory: { ...prev.inventory, potions: prev.inventory.potions - 5 },
                                   storyFlags: [...prev.storyFlags, challengeKey]
                               }));

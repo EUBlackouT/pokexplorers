@@ -513,6 +513,178 @@ const ROUTE_ARCHETYPES: Record<string, TrainerArchetype[]> = {
 /** Used when a biome has no archetype entry (e.g. center/pallet) -- return []. */
 const EMPTY_ARCHETYPES: TrainerArchetype[] = [];
 
+interface AmbientNpcArchetype {
+    key: string;
+    spriteKeys: Array<keyof typeof TRAINER_SPRITES>;
+    names: string[];
+    lines: string[];
+    challengeTypes: Array<'battle' | 'collect' | 'explore' | 'type_trial'>;
+}
+
+const AMBIENT_NPC_BY_BIOME: Record<string, AmbientNpcArchetype[]> = {
+    forest: [
+        {
+            key: 'ranger',
+            spriteKeys: ['ranger', 'backpacker', 'artist'],
+            names: ['Ranger Mira', 'Scout Hale', 'Trail Guide Nori', 'Pathfinder Oren'],
+            lines: [
+                'Routes shift after storms -- keep checking signposts.',
+                'Wild tracks here are fresh. Keep your lead healthy.',
+                'I map safe camps. You map victories.',
+            ],
+            challengeTypes: ['collect', 'explore'],
+        },
+        {
+            key: 'collector',
+            spriteKeys: ['collector', 'pokefan', 'lady'],
+            names: ['Collector Vio', 'Archivist Lyra', 'Field Curator Mox'],
+            lines: [
+                'I catalogue rare finds from every biome.',
+                'Bring me supplies and I will return the favor.',
+                'Knowledge is loot that never runs out.',
+            ],
+            challengeTypes: ['collect', 'type_trial'],
+        },
+    ],
+    lake: [
+        {
+            key: 'angler',
+            spriteKeys: ['fisherman', 'swimmer', 'sailor'],
+            names: ['Angler Boone', 'Captain Rhea', 'Diver Finn'],
+            lines: [
+                'Currents changed this morning. Encounters did too.',
+                'Water routes reward patience and pressure.',
+                'Storm clouds? Perfect weather for a challenge.',
+            ],
+            challengeTypes: ['battle', 'collect'],
+        },
+    ],
+    desert: [
+        {
+            key: 'survivalist',
+            spriteKeys: ['worker', 'hiker', 'ruinmaniac'],
+            names: ['Survivalist Kade', 'Dune Walker Sia', 'Relic Scout Bran'],
+            lines: [
+                'In the dunes, planning matters more than power.',
+                'Sand erases footprints -- but not mistakes.',
+                'Keep water and potions stocked before nightfall.',
+            ],
+            challengeTypes: ['collect', 'battle'],
+        },
+    ],
+    snow: [
+        {
+            key: 'patrol',
+            spriteKeys: ['skier', 'snowboarder', 'boarder'],
+            names: ['Patrol Ilya', 'Slope Medic Ren', 'Ice Scout Vale'],
+            lines: [
+                'Blizzards hide danger floors. Move carefully.',
+                'Cold routes punish unprepared teams.',
+                'A quick challenge keeps the blood warm.',
+            ],
+            challengeTypes: ['battle', 'explore'],
+        },
+    ],
+    canyon: [
+        {
+            key: 'cliffguard',
+            spriteKeys: ['hiker', 'worker', 'dragontamer'],
+            names: ['Cliffguard Tor', 'Ridge Marshal Bea', 'Outrider Pax'],
+            lines: [
+                'One wrong step and the canyon decides for you.',
+                'Rock paths reward bulky leads and smart switches.',
+                'Face me if you want to pass this ridge.',
+            ],
+            challengeTypes: ['battle', 'type_trial'],
+        },
+    ],
+    town: [
+        {
+            key: 'guild',
+            spriteKeys: ['gentleman', 'lady', 'waiter', 'waitress', 'socialite', 'policeman', 'doctor'],
+            names: ['Guild Courier Ana', 'City Clerk Otto', 'Trainer Liaison Vee', 'Dispatch Officer Quin'],
+            lines: [
+                'Guild contracts rotate every morning.',
+                'Strong trainers help keep the roads open.',
+                'Need a side challenge? I have one ready.',
+            ],
+            challengeTypes: ['collect', 'explore', 'type_trial'],
+        },
+    ],
+    cave: [
+        {
+            key: 'spelunker',
+            spriteKeys: ['supernerd', 'scientist', 'hexmaniac', 'channeler'],
+            names: ['Spelunker Tess', 'Cave Analyst Rio', 'Echo Seer Iona'],
+            lines: [
+                'Echoes here can warn you before battles.',
+                'Crystals react to strong teams.',
+                'Deep routes hide rewards for careful explorers.',
+            ],
+            challengeTypes: ['explore', 'battle'],
+        },
+    ],
+    rift: [
+        {
+            key: 'riftwatch',
+            spriteKeys: ['expert', 'veteran', 'cynthia', 'steven', 'lance'],
+            names: ['Riftwatch Orion', 'Warden Selene', 'Gatekeeper Voss'],
+            lines: [
+                'The Rift bends weak plans into losses.',
+                'Only disciplined teams survive this far.',
+                'Prove your control and claim your reward.',
+            ],
+            challengeTypes: ['battle', 'type_trial', 'explore'],
+        },
+    ],
+};
+
+const pickAmbientNpc = (
+    cx: number,
+    cy: number,
+    biome: string,
+    idx: number,
+    levelBase: number,
+): NPCData => {
+    const list = AMBIENT_NPC_BY_BIOME[biome] ?? AMBIENT_NPC_BY_BIOME.forest;
+    const a = list[Math.floor(hash4(cx, cy, 23000 + idx, 0) * list.length)];
+    const name = a.names[Math.floor(hash4(cx, cy, 23001 + idx, 0) * a.names.length)];
+    const spriteKey = a.spriteKeys[Math.floor(hash4(cx, cy, 23002 + idx, 0) * a.spriteKeys.length)];
+    const lineA = a.lines[Math.floor(hash4(cx, cy, 23003 + idx, 0) * a.lines.length)];
+    const lineB = a.lines[Math.floor(hash4(cx, cy, 23004 + idx, 0) * a.lines.length)];
+    const challengeType = a.challengeTypes[Math.floor(hash4(cx, cy, 23005 + idx, 0) * a.challengeTypes.length)];
+
+    const npc: NPCData = {
+        id: `ambient_${a.key}_${cx}_${cy}_${idx}`,
+        name,
+        sprite: TRAINER_SPRITES[spriteKey],
+        dialogue: [lineA, lineB, `("${biome.toUpperCase()} route report logged.")`],
+        facing: ['up', 'down', 'left', 'right'][Math.floor(hash4(cx, cy, 23006 + idx, 0) * 4)] as any,
+    };
+
+    // Keep rewards modest and route-scaled.
+    const rewardId = 1 + Math.floor(hash4(cx, cy, 23007 + idx, 0) * 251);
+    const rewardLevel = Math.max(5, Math.min(80, levelBase + 2));
+
+    if (challengeType === 'battle') {
+        npc.challenge = { type: 'battle', target: 'duel', rewardPokemonId: rewardId, rewardLevel };
+        npc.dialogue.push('Challenge duel accepted?');
+    } else if (challengeType === 'collect') {
+        npc.challenge = { type: 'collect', target: '5 potions', rewardPokemonId: rewardId, rewardLevel };
+        npc.dialogue.push('Bring me 5 Potions and I will support your run.');
+    } else if (challengeType === 'type_trial') {
+        const reqTypes = ['fire', 'water', 'grass', 'electric', 'rock', 'ghost', 'steel', 'psychic'];
+        const requiredType = reqTypes[Math.floor(hash4(cx, cy, 23008 + idx, 0) * reqTypes.length)];
+        npc.challenge = { type: 'type_trial', target: requiredType, requiredType, rewardPokemonId: rewardId, rewardLevel };
+        npc.dialogue.push(`Only ${requiredType.toUpperCase()} specialists pass my trial.`);
+    } else {
+        npc.challenge = { type: 'explore', target: 'field report', rewardPokemonId: rewardId, rewardLevel };
+        npc.dialogue.push('Return after proving your route knowledge.');
+    }
+
+    return npc;
+};
+
 /**
  * Decides the route-trainer layout for a given chunk. Deterministic on
  * (cx,cy). Returns an array of 0, 1, or 2 placements with all team /
@@ -1592,6 +1764,27 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
             ];
             layout[spot.y][spot.x] = 53; // Signpost
             interactables[`${spot.x},${spot.y}`] = { type: 'object', text: hints[rng.nextInt(0, hints.length - 1)] };
+        }
+    }
+
+    // Ambient NPC pass --------------------------------------------------------
+    // These are non-trainer world actors (scouts, couriers, anglers, etc.)
+    // pulled from a wider sprite/name pool than the old handful of static
+    // NPCs. Most ship with a lightweight challenge hook so they "do stuff"
+    // instead of only repeating flavor text.
+    if (dist > 1) {
+        const ambientChance = biome === 'town' ? 0.42 : 0.30;
+        if (rng.next() < ambientChance) {
+            const count =
+                (biome === 'town' ? 1 : 0) +
+                (dist > 18 ? 1 : 0) +
+                (rng.next() < 0.30 ? 1 : 0);
+            const npcCount = Math.max(1, Math.min(3, count || 1));
+            for (let i = 0; i < npcCount; i++) {
+                const spot = tryPlace(isOpen);
+                if (!spot) continue;
+                npcs[`${spot.x},${spot.y}`] = pickAmbientNpc(cx, cy, biome, i, levelBase);
+            }
         }
     }
 
