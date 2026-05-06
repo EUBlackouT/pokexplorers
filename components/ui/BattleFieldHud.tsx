@@ -35,6 +35,19 @@ interface Props {
     bs: BattleState;
 }
 
+const useLowMotionMode = (): boolean => {
+    const [lowMotion, setLowMotion] = useState(false);
+    useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+        const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const update = () => setLowMotion(media.matches);
+        update();
+        media.addEventListener?.('change', update);
+        return () => media.removeEventListener?.('change', update);
+    }, []);
+    return lowMotion;
+};
+
 type ChipColor =
     | 'sun' | 'rain' | 'sand' | 'hail' | 'snow' | 'electric' | 'ash' | 'grass'
     | 'electricTerrain' | 'grassyTerrain' | 'mistyTerrain' | 'psychicTerrain'
@@ -606,18 +619,34 @@ export const BattleFieldHud: React.FC<Props> = ({ bs }) => {
     const playerAv    = !!(bs.auroraVeilTurns && bs.auroraVeilTurns > 0);
     const enemyAv     = !!(bs.enemyAuroraVeilTurns && bs.enemyAuroraVeilTurns > 0);
     const weather = bs.weather;
+    const lowMotionMode = useLowMotionMode();
 
     return (
         <>
             {/* ---------- Ambient layer ---------- */}
-            {weather === 'rain' && <RainAmbient />}
-            {weather === 'sun' && <SunAmbient />}
-            {weather === 'sand' && <SandAmbient />}
-            {weather === 'hail' && <SnowAmbient icy />}
-            {weather === 'snow' && <SnowAmbient />}
-            {weather === 'electric' && <ElectricSquallAmbient />}
-            {weather === 'ashstorm' && <AshstormAmbient />}
-            {weather === 'grass' && <BloomAmbient />}
+            {!lowMotionMode && weather === 'rain' && <RainAmbient />}
+            {!lowMotionMode && weather === 'sun' && <SunAmbient />}
+            {!lowMotionMode && weather === 'sand' && <SandAmbient />}
+            {!lowMotionMode && weather === 'hail' && <SnowAmbient icy />}
+            {!lowMotionMode && weather === 'snow' && <SnowAmbient />}
+            {!lowMotionMode && weather === 'electric' && <ElectricSquallAmbient />}
+            {!lowMotionMode && weather === 'ashstorm' && <AshstormAmbient />}
+            {!lowMotionMode && weather === 'grass' && <BloomAmbient />}
+            {lowMotionMode && weather !== 'none' && (
+                <div
+                    className="absolute inset-0 pointer-events-none z-[6]"
+                    style={{
+                        background:
+                            weather === 'rain' ? 'linear-gradient(180deg, rgba(14,116,144,0.15), rgba(15,23,42,0.04))' :
+                            weather === 'sun' ? 'radial-gradient(circle at 70% 15%, rgba(251,191,36,0.28) 0%, rgba(251,191,36,0) 58%)' :
+                            weather === 'sand' ? 'linear-gradient(180deg, rgba(180,83,9,0.18), rgba(120,53,15,0.06))' :
+                            weather === 'hail' || weather === 'snow' ? 'linear-gradient(180deg, rgba(186,230,253,0.16), rgba(226,232,240,0.04))' :
+                            weather === 'electric' ? 'radial-gradient(circle at 30% 20%, rgba(250,204,21,0.2) 0%, rgba(250,204,21,0) 50%)' :
+                            weather === 'ashstorm' ? 'linear-gradient(180deg, rgba(63,63,70,0.2), rgba(24,24,27,0.08))' :
+                            'radial-gradient(circle at 50% 80%, rgba(74,222,128,0.2) 0%, rgba(34,197,94,0) 58%)',
+                    }}
+                />
+            )}
             <TrickRoomAmbient active={trickRoomOn} />
             {gravityOn && <GravityAmbient />}
             {playerTw && <TailwindStreaks side="player" />}

@@ -60,7 +60,6 @@ interface Props {
     remotePlayers?: Map<string, any>;
     storyFlags?: string[];
     badges?: number;
-    isScanning?: boolean;
     /** Aura Sight talent -- amplifies alpha/anomaly tile glow. */
     auraSight?: boolean;
     /** Local player is holding Shift -- render the running sprite
@@ -297,10 +296,11 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
 };
 
 
-export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, customLayout, myPlayerId, networkRole = null, onInteract, onChallenge, remotePlayers = new Map(), storyFlags = [], badges = 0, isScanning = false, auraSight = false, isRunning = false }) => {
+export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, customLayout, myPlayerId, networkRole = null, onInteract, onChallenge, remotePlayers = new Map(), storyFlags = [], badges = 0, auraSight = false, isRunning = false }) => {
     const [timeOfDay, setTimeOfDay] = useState<'day' | 'sunset' | 'night'>('day');
     const [weather, setWeather] = useState<'none' | 'rain' | 'snow' | 'sandstorm'>('none');
     const containerRef = useRef<HTMLDivElement>(null);
+    const spritePrefetchedRef = useRef<Set<string>>(new Set());
     const TILE_SIZE = 64;
     const [cameraOffset, setCameraOffset] = useState({ x: 0, y: 0 });
 
@@ -391,6 +391,22 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
     }
 
     const layout = currentMap ? (customLayout || currentMap.layout) : null;
+
+    useEffect(() => {
+        if (!currentMap) return;
+        const urls = [
+            ...Object.values(currentMap.trainers || {}).map((t: any) => t?.sprite),
+            ...Object.values(currentMap.npcs || {}).map((n: any) => n?.sprite),
+        ].filter((u): u is string => typeof u === 'string' && u.length > 2 && /^https?:\/\//.test(u));
+        urls.forEach((url) => {
+            if (spritePrefetchedRef.current.has(url)) return;
+            spritePrefetchedRef.current.add(url);
+            const img = new Image();
+            img.decoding = 'async';
+            img.referrerPolicy = 'no-referrer';
+            img.src = url;
+        });
+    }, [currentMap, mapId]);
 
     const [showInteractPrompt, setShowInteractPrompt] = useState(false);
     const [interactPos, setInteractPos] = useState<Coordinate | null>(null);
@@ -515,14 +531,6 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
         const dy = Math.abs(y - myPos.y);
         const isAdjacent = (dx + dy === 1);
 
-        if (isScanning) {
-            const isTallGrass = effectiveTile === 2;
-            const isItem = effectiveTile === 12;
-            if (isTallGrass || isItem) {
-                className += " scan-highlight ";
-            }
-        }
-
         if (trainer) {
              content = (
                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 flex flex-col items-center z-20 pointer-events-auto cursor-pointer" style={{ width: TILE_SIZE * 1.5 }} onClick={() => onInteract?.(x, y)}>
@@ -534,13 +542,20 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                          {trainer.name}
                          <span className="ml-1 text-yellow-400 font-bold">Lv.{trainer.level}</span>
                      </div>
-                     <img 
-                        src={trainer.sprite || 'https://play.pokemonshowdown.com/sprites/trainers/red.png'} 
-                        className="w-20 h-20 object-contain drop-shadow-xl scale-110 -translate-y-2" 
-                        alt="Trainer" 
-                        referrerPolicy="no-referrer" 
-                        onError={(e) => { (e.target as HTMLImageElement).src = 'https://play.pokemonshowdown.com/sprites/trainers/blue.png'; }}
-                     />
+                    <div className="relative w-20 h-20 -translate-y-2">
+                        <div className="absolute inset-0 rounded-full bg-indigo-900/70 border border-indigo-300/40 flex items-center justify-center text-[10px] font-bold text-indigo-100">
+                            NPC
+                        </div>
+                        <img
+                           src={trainer.sprite || 'https://play.pokemonshowdown.com/sprites/trainers/red.png'}
+                           className="relative w-20 h-20 object-contain drop-shadow-xl scale-110"
+                           alt="Trainer"
+                           loading="eager"
+                           decoding="async"
+                           referrerPolicy="no-referrer"
+                           onError={(e) => { (e.target as HTMLImageElement).src = 'https://play.pokemonshowdown.com/sprites/trainers/blue.png'; }}
+                        />
+                    </div>
                  </div>
              );
         } else if (npc) {
@@ -553,13 +568,20 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                      <div className="bg-black/70 text-white text-[10px] px-2 py-0.5 rounded-full mb-1 whitespace-nowrap border border-white/30 shadow-lg">
                          {npc.name}
                      </div>
-                     <img 
-                        src={npc.sprite && npc.sprite.length > 2 ? npc.sprite : 'https://play.pokemonshowdown.com/sprites/trainers/lass.png'} 
-                        className="w-20 h-20 object-contain drop-shadow-xl scale-110 -translate-y-2" 
-                        alt="NPC" 
-                        referrerPolicy="no-referrer" 
-                        onError={(e) => { (e.target as HTMLImageElement).src = 'https://play.pokemonshowdown.com/sprites/trainers/beauty.png'; }}
-                     />
+                    <div className="relative w-20 h-20 -translate-y-2">
+                        <div className="absolute inset-0 rounded-full bg-indigo-900/70 border border-indigo-300/40 flex items-center justify-center text-[10px] font-bold text-indigo-100">
+                            NPC
+                        </div>
+                        <img
+                           src={npc.sprite && npc.sprite.length > 2 ? npc.sprite : 'https://play.pokemonshowdown.com/sprites/trainers/lass.png'}
+                           className="relative w-20 h-20 object-contain drop-shadow-xl scale-110"
+                           alt="NPC"
+                           loading="eager"
+                           decoding="async"
+                           referrerPolicy="no-referrer"
+                           onError={(e) => { (e.target as HTMLImageElement).src = 'https://play.pokemonshowdown.com/sprites/trainers/beauty.png'; }}
+                        />
+                    </div>
                  </div>
              );
         }
@@ -2005,23 +2027,6 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 }
                 .animate-walk { animation: walk 0.3s infinite ease-in-out; }
                 
-                .scan-highlight {
-                    position: relative;
-                }
-                .scan-highlight::after {
-                    content: '';
-                    position: absolute;
-                    inset: 0;
-                    background: radial-gradient(circle, rgba(255,255,255,0.4) 0%, transparent 70%);
-                    animation: scan-pulse 1s infinite alternate;
-                    z-index: 20;
-                    pointer-events: none;
-                }
-                @keyframes scan-pulse {
-                    from { opacity: 0.3; transform: scale(0.9); }
-                    to { opacity: 0.8; transform: scale(1.1); }
-                }
-
                 /* =========================================================
                  * Overworld visual upgrade pack (v2)
                  *

@@ -733,6 +733,7 @@ export interface PlayerGlobalState {
         visitedBiomes: string[];      // For first-time biome lore toasts
         riftStabilityCleared?: boolean;
     };
+    routeState?: RouteState;
 }
 
 export interface GymMonLoadout {
@@ -797,6 +798,260 @@ export interface NPCData {
     };
 }
 
+export type ChunkRole =
+    | 'breather'
+    | 'temptation'
+    | 'obstacle'
+    | 'threat'
+    | 'mystery'
+    | 'consequence'
+    | 'setpiece';
+
+export type IncidentChallengeType = 'battle' | 'collect' | 'explore' | 'speed' | 'stealth' | 'type_trial';
+export type BiomeTag = 'forest' | 'town' | 'lake' | 'desert' | 'canyon' | 'snow' | 'cave' | 'rift' | 'mountain' | 'swamp' | 'coast' | 'urban' | 'haunted';
+export type IncidentFamily =
+    | 'pokemon_ecology'
+    | 'environment'
+    | 'human_trouble'
+    | 'mystery'
+    | 'rival'
+    | 'faction'
+    | 'companion'
+    | 'poi'
+    | 'economy'
+    | 'setpiece';
+export type RouteArcStage = 'rumor' | 'trail' | 'complication' | 'choice' | 'payoff' | 'aftermath';
+export type RouteOwnership =
+    | 'neutral'
+    | 'wild_controlled'
+    | 'ranger_protected'
+    | 'poacher_controlled'
+    | 'merchant_safe'
+    | 'trainer_guild'
+    | 'cursed'
+    | 'rival_influenced'
+    | 'player_stabilized';
+export type RouteNpcRole =
+    | 'map_scout'
+    | 'field_medic'
+    | 'rumor_hunter'
+    | 'ranger'
+    | 'black_market_trader'
+    | 'move_hermit'
+    | 'route_contractor'
+    | 'weather_watcher'
+    | 'lost_trainer'
+    | 'merchant'
+    | 'rival_witness'
+    | 'faction_patrol';
+export type RoutePOIKind =
+    | 'camp'
+    | 'shrine'
+    | 'outpost'
+    | 'cave'
+    | 'dungeon'
+    | 'ruins'
+    | 'nest'
+    | 'hideout'
+    | 'bridge'
+    | 'market';
+export type RouteCompanionEffect =
+    | { type: 'reveal_next_chunk_role' }
+    | { type: 'reduce_ambush_chance'; amount: number }
+    | { type: 'post_battle_heal'; amountPercent: number }
+    | { type: 'increase_rare_pokemon_chance'; amount: number }
+    | { type: 'discount_shops'; amount: number }
+    | { type: 'trap_warning' }
+    | { type: 'increase_stealth_success'; amount: number }
+    | { type: 'extra_route_choice' };
+
+export interface RouteCompanion {
+    id: string;
+    name: string;
+    role: RouteNpcRole;
+    expiresAfterChunks: number;
+    sourceIncidentId: string;
+    effects: RouteCompanionEffect[];
+    leaveConditions?: string[];
+}
+
+export interface IncidentReward {
+    money?: number;
+    discoveryPoints?: number;
+    routeIntel?: number;
+    tempBuff?: string;
+    mapRevealRadius?: number;
+    safeCampUnlock?: boolean;
+    routeSafehouseUnlocked?: boolean;
+    factionReputation?: Record<string, number>;
+    routeControl?: number;
+    shortcutUnlock?: boolean;
+    rareEncounterAccess?: string;
+    moveTutorAccess?: string;
+    craftingMaterials?: number;
+    futureDiscountPct?: number;
+    companionBuff?: string;
+    rewardPokemonId?: number;
+    rewardLevel?: number;
+    startContract?: RouteContract;
+    joinCompanion?: RouteCompanion;
+    poiUnlock?: RoutePOIKind;
+    ownershipChange?: RouteOwnership;
+    routeBuff?: string;
+}
+
+export interface IncidentPenalty {
+    moneyLoss?: number;
+    tensionDelta?: number;
+    curiosityDelta?: number;
+    addFlags?: string[];
+}
+
+export interface IncidentOutcome {
+    narrative: string[];
+    challengeType?: IncidentChallengeType;
+    challengeTarget?: string;
+    challengeTimeLimit?: number;
+    challengeRequiredType?: string;
+    challengeRewardPokemonId?: number;
+    challengeRewardLevel?: number;
+    rewards?: IncidentReward;
+    penalties?: IncidentPenalty;
+    addFlags?: string[];
+    removeFlags?: string[];
+    setRouteFlags?: string[];
+    clearRouteFlags?: string[];
+    tensionDelta?: number;
+    curiosityDelta?: number;
+    factionReputationDelta?: Record<string, number>;
+    followUpIncidentIds?: string[];
+    startRouteArcId?: string;
+    advanceRouteArcId?: string;
+    completeRouteArcId?: string;
+    failRouteArcId?: string;
+    queueEchoIncidentId?: string;
+    echoDelayChunks?: number;
+}
+
+export interface IncidentChoice {
+    id: string;
+    label: string;
+    hint?: string;
+    outcome: IncidentOutcome;
+    failureOutcome?: IncidentOutcome;
+}
+
+export interface RouteIncident {
+    id: string;
+    title: string;
+    biomeTags: BiomeTag[];
+    family: IncidentFamily;
+    chunkRoles: ChunkRole[];
+    rarity: number;
+    requirements?: string[];
+    blockedFlags?: string[];
+    minTension?: number;
+    maxTension?: number;
+    minCuriosity?: number;
+    maxCuriosity?: number;
+    signalText: string[];
+    choices: IncidentChoice[];
+    followUp?: {
+        arcId?: string;
+        possibleNextIncidentIds?: string[];
+        echoChance?: number;
+        minChunksLater?: number;
+        maxChunksLater?: number;
+        failureFlagIfIgnored?: string;
+    };
+}
+
+export interface RoutePreview {
+    mood: string;
+    dangerHint: string;
+    rewardHint: string;
+    routeOptions: {
+        main: string;
+        side: string;
+        strange: string;
+    };
+    knownModifiers: string[];
+    tensionLabel?: 'Calm' | 'Watchful' | 'Risky' | 'Dangerous' | 'Critical';
+    curiosityLabel?: 'Quiet' | 'Hints Nearby' | 'Strange Signs' | 'Mystery Building' | 'Discovery Imminent';
+    companionHint?: string;
+}
+
+export interface RouteArc {
+    id: string;
+    title: string;
+    biomeTags: BiomeTag[];
+    currentStage: RouteArcStage;
+    startedAtChunkId: string;
+    expiresAfterChunks?: number;
+    stageIndex: number;
+    maxStages: number;
+    flags: string[];
+    relatedFaction?: string;
+    relatedIncidentIds: string[];
+    payoffIncidentId?: string;
+    failed?: boolean;
+    completed?: boolean;
+}
+
+export interface RoutePacingProfile {
+    desiredIntensity: 'calm' | 'normal' | 'tense' | 'chaotic';
+    recentDangerCount: number;
+    recentRewardCount: number;
+    recentMysteryCount: number;
+    recentBattleIncidentCount: number;
+    chunksSinceMajorIncident: number;
+    chunksSinceBreather: number;
+    forceBreatherSoon?: boolean;
+    forcePayoffSoon?: boolean;
+}
+
+export interface RouteContract {
+    id: string;
+    title: string;
+    description: string;
+    sourceNpcRole?: RouteNpcRole;
+    expiresAfterChunks: number;
+    progress: number;
+    target: number;
+    successRewards: IncidentReward[];
+    failurePenalty?: IncidentPenalty[];
+    relatedFlags?: string[];
+}
+
+export interface RouteState {
+    routeTension: number;
+    routeCuriosity: number;
+    routeFlags: string[];
+    factionReputation: Record<string, number>;
+    chunkMemoryStates: Record<string, string[]>;
+    routeIntel: number;
+    routeControl: number;
+    activeRouteArcs: RouteArc[];
+    completedRouteArcs: string[];
+    failedRouteArcs: string[];
+    recentIncidentIds: string[];
+    recentChunkRoles: ChunkRole[];
+    routeStability?: number;
+    queuedEchoes: {
+        incidentId: string;
+        triggerAfterChunk: number;
+        expiresAfterChunk?: number;
+        sourceIncidentId?: string;
+        sourceFlag?: string;
+    }[];
+    pacing: RoutePacingProfile;
+    routeOwnershipByRegion: Record<string, RouteOwnership>;
+    activeCompanions: RouteCompanion[];
+    activeContracts: RouteContract[];
+    completedContracts: string[];
+    failedContracts: string[];
+}
+
 export interface InteractableData {
     // 'gym_compass' is handled specially by the interaction dispatcher in
     // App.tsx -- its `text` is ignored and instead freshly computed from the
@@ -829,4 +1084,7 @@ export interface Chunk extends MapZone {
     y: number;
     /** Tags describing landmark POIs present in this chunk (e.g., 'graveyard', 'shipwreck'). */
     poiTags?: string[];
+    chunkRole?: ChunkRole;
+    routePreview?: RoutePreview;
+    routeIncident?: RouteIncident;
 }

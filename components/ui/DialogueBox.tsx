@@ -95,6 +95,7 @@ export const DialogueBox: React.FC<DialogueBoxProps> = ({ dialogue, onAdvance, o
     }, [choices, highlight, onChoice]);
 
     if (!dialogue) return null;
+    const hasChoices = !!choices && choices.length > 0;
 
     return (
         <AnimatePresence>
@@ -104,11 +105,11 @@ export const DialogueBox: React.FC<DialogueBoxProps> = ({ dialogue, onAdvance, o
                 animate={{ y: 0, opacity: 1 }}
                 exit={{ y: 40, opacity: 0 }}
                 transition={{ duration: 0.15 }}
-                className="absolute bottom-6 left-6 right-6 bg-blue-900/95 border-4 border-white p-6 rounded-2xl z-[60] text-white shadow-2xl"
-                onClick={() => { if (!choices) onAdvance(); }}
+                className="absolute bottom-4 md:bottom-6 left-3 md:left-6 right-3 md:right-6 bg-gradient-to-br from-slate-950/96 via-indigo-950/94 to-blue-950/96 border-2 border-indigo-200/70 p-4 md:p-5 rounded-xl z-[60] text-white shadow-2xl backdrop-blur-md"
+                onClick={() => { if (!hasChoices) onAdvance(); }}
             >
                 {dialogue.speaker && (
-                    <div className="absolute -top-4 left-6 px-3 py-1 bg-yellow-400 text-blue-950 text-xs font-black tracking-wide rounded-md border-2 border-white shadow-md uppercase">
+                    <div className="absolute -top-3 left-6 px-3 py-1 bg-yellow-300 text-blue-950 text-[10px] font-black tracking-wide rounded-md border border-white/80 shadow-md uppercase">
                         {dialogue.speaker}
                     </div>
                 )}
@@ -123,15 +124,15 @@ export const DialogueBox: React.FC<DialogueBoxProps> = ({ dialogue, onAdvance, o
                             />
                         </div>
                     )}
-                    <div className="flex-1">
-                        <div className="text-base leading-relaxed">
+                    <div className="flex-1 min-w-0">
+                        <div className="text-[14px] md:text-[16px] leading-relaxed md:leading-loose max-h-40 md:max-h-48 overflow-y-auto pr-1">
                             {dialogue.lines.map((l, i) => (
-                                <p key={i} className={i > 0 ? 'mt-1' : ''}>{l}</p>
+                                <p key={i} className={i > 0 ? 'mt-1.5' : ''}>{l}</p>
                             ))}
                         </div>
-                        {choices && choices.length > 0 ? (
+                        {hasChoices ? (
                             <ChoiceRow
-                                choices={choices}
+                                choices={choices!}
                                 highlight={highlight}
                                 onPick={(c, i) => {
                                     if (c.disabled) return;
@@ -139,12 +140,13 @@ export const DialogueBox: React.FC<DialogueBoxProps> = ({ dialogue, onAdvance, o
                                     onChoice(c.id);
                                 }}
                                 onHover={(i) => {
-                                    if (!choices[i].disabled) setHighlight(i);
+                                    if (!choices![i].disabled) setHighlight(i);
                                 }}
                             />
                         ) : (
-                            <div className="text-xs text-yellow-400 mt-3 font-bold animate-pulse select-none">
-                                Press Enter to continue
+                            <div className="text-[11px] md:text-xs text-indigo-100/90 mt-3 font-semibold select-none flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded bg-indigo-400/20 border border-indigo-200/40">Enter / E / Space</span>
+                                <span>Continue</span>
                             </div>
                         )}
                     </div>
@@ -171,16 +173,16 @@ const ChoiceRow: React.FC<{
                         onMouseEnter={() => onHover(i)}
                         disabled={c.disabled}
                         className={[
-                            "px-4 py-2 rounded-lg border-2 font-bold text-sm transition-all flex flex-col items-start min-w-[140px]",
+                            "px-4 py-2.5 rounded-lg border font-bold text-sm transition-all flex flex-col items-start min-w-[150px]",
                             c.disabled
-                                ? "bg-slate-700/60 border-slate-500 text-slate-400 cursor-not-allowed opacity-60"
+                                ? "bg-slate-700/50 border-slate-400/40 text-slate-400 cursor-not-allowed opacity-60"
                                 : isHi
-                                    ? "bg-yellow-300 border-yellow-100 text-blue-950 shadow-lg scale-105"
-                                    : "bg-blue-700 border-blue-300 text-white hover:bg-blue-600",
+                                    ? "bg-amber-200 border-amber-100 text-slate-950 shadow-lg scale-105"
+                                    : "bg-indigo-800/90 border-indigo-300/50 text-white hover:bg-indigo-700",
                         ].join(' ')}
                     >
                         <span className="leading-tight">{c.label}</span>
-                        {c.hint && <span className={`text-[10px] mt-0.5 font-normal ${isHi ? 'text-blue-900/80' : 'text-blue-200/80'}`}>{c.hint}</span>}
+                        {c.hint && <span className={`text-[11px] mt-1 font-normal leading-snug ${isHi ? 'text-slate-800/80' : 'text-indigo-100/80'}`}>{c.hint}</span>}
                     </button>
                 );
             })}

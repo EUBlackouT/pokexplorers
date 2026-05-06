@@ -3113,6 +3113,22 @@ export const getTrainerTeam = async (
     return team;
 };
 
+export const getIncidentBattleSpecies = (incidentId: string, biome: string, fallbackSpecies?: number): number[] => {
+    const pool = BIOME_POOLS[biome] || BIOME_POOLS.forest;
+    const safePool = pool.length > 0 ? pool : BIOME_POOLS.forest;
+    const hash = (text: string, salt: number) => {
+        let h = salt;
+        for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+        return Math.abs(h);
+    };
+    const pick = (salt: number) => safePool[hash(incidentId, salt) % safePool.length];
+    const first = fallbackSpecies && Number.isFinite(fallbackSpecies) ? fallbackSpecies : pick(101);
+    const second = pick(211);
+    const third = pick(307);
+    const uniq = Array.from(new Set([first, second, third].filter(n => Number.isFinite(n))));
+    return uniq.slice(0, 3);
+};
+
 export const getStarters = async (unlockedPacks: string[] = [], shinyBoost: number = 0): Promise<Pokemon[]> => {
     const choices = new Set<number>();
     // Starters should ONLY be base forms from the early pool

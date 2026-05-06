@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName, DialoguePayload, DialogueChoice } from './types';
+import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName, DialoguePayload, DialogueChoice, IncidentOutcome } from './types';
 import { NEW_ABILITIES } from './data/abilities';
 import { NEW_MOVES } from './data/moves';
 import { getFusionMove } from './data/fusionChart';
@@ -23,9 +23,10 @@ import {
     getEvolutionTarget,
     TYPE_COLORS,
     getEffectiveDefensiveTypes,
+    getIncidentBattleSpecies,
 } from './services/pokeService';
 import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, transitionFromBattleMusic, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx, type BattleMusicExitOutcome } from './services/soundService';
-import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE, WORLD_MAX_DIST, getNextGymTarget, compassDirectionName, getGrassAura, getChunkOutbreak } from './services/mapData';
+import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE, WORLD_MAX_DIST, getNextGymTarget, compassDirectionName, getGrassAura, getChunkOutbreak, formatRouteMemory } from './services/mapData';
 import { resolveInterior, InteriorKind } from './services/interiors';
 import { applyBountyEvent, rollBounties } from './data/bounties';
 import { ITEMS } from './services/itemData';
@@ -77,6 +78,7 @@ import { LeaderboardScreen } from './components/screens/LeaderboardScreen';
 import { submitScore as submitExplorerScore, getSession as warmLeaderboardSession, getLastSubmittedName as getExplorerName } from './utils/leaderboard';
 import { BIOME_LORE } from './data/biomeLore';
 import { getHourlyMerchantChunk, getRoamingLegendary } from './utils/worldEvents';
+import { trackChunkVisit, trackTrainerEngagement, trackChallengeAccepted, trackChallengeCompleted, trackChallengeFailed } from './utils/telemetry';
 import { BattlePopupLayer } from './components/ui/BattlePopupLayer';
 import { BattleBuffFx } from './components/ui/BattleBuffFx';
 import { StatStageStrip } from './components/ui/StatStageStrip';
@@ -121,6 +123,108 @@ const isDynamicMap = (mapId: string): boolean =>
 
 const lookupMap = (mapId: string, loadedChunks: Record<string, any>): any =>
     isDynamicMap(mapId) ? loadedChunks[mapId] : MAPS[mapId];
+
+const createDefaultRouteState = () => ({
+    routeTension: 0,
+    routeCuriosity: 0,
+    routeFlags: [] as string[],
+    factionReputation: {} as Record<string, number>,
+    chunkMemoryStates: {} as Record<string, string[]>,
+    routeIntel: 0,
+    routeControl: 0,
+    activeRouteArcs: [] as any[],
+    completedRouteArcs: [] as string[],
+    failedRouteArcs: [] as string[],
+    recentIncidentIds: [] as string[],
+    recentChunkRoles: [] as any[],
+    routeStability: 5,
+    queuedEchoes: [] as Array<{ incidentId: string; triggerAfterChunk: number; expiresAfterChunk?: number; sourceIncidentId?: string; sourceFlag?: string }>,
+    pacing: {
+        desiredIntensity: 'normal' as const,
+        recentDangerCount: 0,
+        recentRewardCount: 0,
+        recentMysteryCount: 0,
+        recentBattleIncidentCount: 0,
+        chunksSinceMajorIncident: 0,
+        chunksSinceBreather: 0,
+        forceBreatherSoon: false,
+        forcePayoffSoon: false,
+    },
+    routeOwnershipByRegion: {} as Record<string, any>,
+    activeCompanions: [] as any[],
+    activeContracts: [] as any[],
+    completedContracts: [] as string[],
+    failedContracts: [] as string[],
+});
+
+const normalizeRouteState = (input: any) => {
+    const d = createDefaultRouteState();
+    const src = input || {};
+    return {
+        ...d,
+        ...src,
+        routeFlags: Array.isArray(src.routeFlags) ? src.routeFlags : d.routeFlags,
+        factionReputation: typeof src.factionReputation === 'object' && src.factionReputation ? src.factionReputation : d.factionReputation,
+        chunkMemoryStates: typeof src.chunkMemoryStates === 'object' && src.chunkMemoryStates ? src.chunkMemoryStates : d.chunkMemoryStates,
+        activeRouteArcs: Array.isArray(src.activeRouteArcs) ? src.activeRouteArcs : d.activeRouteArcs,
+        completedRouteArcs: Array.isArray(src.completedRouteArcs) ? src.completedRouteArcs : d.completedRouteArcs,
+        failedRouteArcs: Array.isArray(src.failedRouteArcs) ? src.failedRouteArcs : d.failedRouteArcs,
+        recentIncidentIds: Array.isArray(src.recentIncidentIds) ? src.recentIncidentIds : d.recentIncidentIds,
+        recentChunkRoles: Array.isArray(src.recentChunkRoles) ? src.recentChunkRoles : d.recentChunkRoles,
+        queuedEchoes: Array.isArray(src.queuedEchoes) ? src.queuedEchoes : d.queuedEchoes,
+        routeOwnershipByRegion: typeof src.routeOwnershipByRegion === 'object' && src.routeOwnershipByRegion ? src.routeOwnershipByRegion : d.routeOwnershipByRegion,
+        activeCompanions: Array.isArray(src.activeCompanions) ? src.activeCompanions : d.activeCompanions,
+        activeContracts: Array.isArray(src.activeContracts) ? src.activeContracts : d.activeContracts,
+        completedContracts: Array.isArray(src.completedContracts) ? src.completedContracts : d.completedContracts,
+        failedContracts: Array.isArray(src.failedContracts) ? src.failedContracts : d.failedContracts,
+        pacing: { ...d.pacing, ...(src.pacing || {}) },
+    };
+};
+
+const tensionTierLabel = (tension: number): string =>
+    tension <= 1 ? 'Calm'
+        : tension <= 3 ? 'Watchful'
+        : tension <= 5 ? 'Risky'
+        : tension <= 7 ? 'Dangerous'
+        : 'Critical';
+
+const curiosityTierLabel = (curiosity: number): string =>
+    curiosity <= 1 ? 'Quiet'
+        : curiosity <= 3 ? 'Hints Nearby'
+        : curiosity <= 5 ? 'Strange Signs'
+        : curiosity <= 7 ? 'Mystery Building'
+        : 'Discovery Imminent';
+
+const logRoutePlaytest = (event: string, payload: Record<string, any>) => {
+    if (!(import.meta as any).env?.DEV) return;
+    console.info('[route-playtest]', event, payload);
+};
+
+const compactRouteMood = (mood: string | undefined): string => {
+    if (!mood) return 'Unknown Route';
+    const [biome, role] = mood.split('|').map((s) => s.trim());
+    if (!biome || !role) return mood;
+    return `${biome[0]}${biome.slice(1).toLowerCase()} • ${role[0]}${role.slice(1).toLowerCase()}`;
+};
+
+const DIALOGUE_MIN_READ_MS = 900;
+const TOAST_SPAM_WINDOW_MS = 1400;
+const MAX_VISIBLE_TOASTS = 3;
+
+const rivalDirectionHint = (chunkPos: { x: number; y: number }, badges: number): string => {
+    const dirs = ['NORTH', 'NORTHEAST', 'EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST'];
+    const idx = Math.abs(((chunkPos.x * 31) + (chunkPos.y * 17) + (badges * 13)) % dirs.length);
+    return `Trail clue: tracks point ${dirs[idx]}. Keep moving for a follow-up event soon.`;
+};
+
+const seededUnitFloat = (seed: string): number => {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < seed.length; i++) {
+        h ^= seed.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return (h % 10000) / 10000;
+};
 
 /**
  * RIVAL MILESTONES ------------------------------------------------------
@@ -238,6 +342,7 @@ export default function App() {
           badgesEarned: 0,
           perks: []
       },
+      routeState: createDefaultRouteState(),
       lifetime: {
           shiniesCaught: 0,
           trainersDefeated: 0,
@@ -347,20 +452,259 @@ export default function App() {
       });
       return id === 'yes';
   }, [askDialogue]);
+
+  useEffect(() => {
+      if (dialogueRaw) dialogueOpenedAtRef.current = Date.now();
+  }, [dialogueRaw]);
+
+  const closeDialogue = useCallback((choiceId: string | null = null) => {
+      if (choiceId === null && Date.now() - dialogueOpenedAtRef.current < DIALOGUE_MIN_READ_MS) return;
+      const r = dialogueRaw?.resolve;
+      setDialogueRaw(null);
+      r?.(choiceId);
+  }, [dialogueRaw]);
+
+  const applyIncidentOutcome = async (
+      outcome: IncidentOutcome,
+      incidentKey: string,
+      incidentTitle: string,
+      failureOutcome?: IncidentOutcome,
+  ): Promise<boolean> => {
+      if (!outcome) return false;
+      const preRouteState = normalizeRouteState(playerState.routeState);
+      logRoutePlaytest('incident_outcome', {
+          lane: (preRouteState.routeFlags || []).find((f: string) => /^lane_/.test(f)) || 'lane_main',
+          incidentKey,
+          incidentTitle,
+          challengeType: outcome.challengeType || 'none',
+          incidentFamily: loadedChunks[playerState.mapId]?.routeIncident?.family || 'unknown',
+          tension: tensionTierLabel(preRouteState.routeTension),
+          curiosity: curiosityTierLabel(preRouteState.routeCuriosity),
+          arcStarted: outcome.startRouteArcId || null,
+          arcAdvanced: outcome.advanceRouteArcId || null,
+          arcCompleted: outcome.completeRouteArcId || null,
+          arcFailed: outcome.failRouteArcId || null,
+          echoQueued: outcome.queueEchoIncidentId || null,
+          companionAppeared: !!outcome.rewards?.joinCompanion,
+          contractAppeared: !!outcome.rewards?.startContract,
+          setpiece: loadedChunks[playerState.mapId]?.chunkRole === 'setpiece',
+      });
+
+      const applyStateEffects = () => {
+          setPlayerState(prev => {
+              const routeState = normalizeRouteState(prev.routeState);
+              const factionRep = { ...(routeState.factionReputation || {}) };
+              Object.entries(outcome.factionReputationDelta || {}).forEach(([k, v]) => {
+                  factionRep[k] = (factionRep[k] || 0) + (v || 0);
+              });
+              Object.entries(outcome.rewards?.factionReputation || {}).forEach(([k, v]) => {
+                  factionRep[k] = (factionRep[k] || 0) + (v || 0);
+              });
+              const routeFlagSet = new Set<string>(routeState.routeFlags || []);
+              (outcome.setRouteFlags || []).forEach(f => routeFlagSet.add(f));
+              (outcome.addFlags || []).forEach(f => routeFlagSet.add(f));
+              (outcome.clearRouteFlags || []).forEach(f => routeFlagSet.delete(f));
+              const storyFlagSet = new Set<string>(prev.storyFlags || []);
+              storyFlagSet.add(`incident_done_${incidentKey}`);
+              (outcome.addFlags || []).forEach(f => storyFlagSet.add(f));
+              (outcome.penalties?.addFlags || []).forEach(f => storyFlagSet.add(f));
+              (outcome.removeFlags || []).forEach(f => storyFlagSet.delete(f));
+              const memory = { ...(routeState.chunkMemoryStates || {}) };
+              const chunkMem = memory[prev.mapId] ? [...memory[prev.mapId]] : [];
+              chunkMem.push(`${incidentTitle}:${incidentKey}`);
+              memory[prev.mapId] = chunkMem.slice(-3);
+              const rewards = outcome.rewards || {};
+              const penalties = outcome.penalties || {};
+              const activeArcs = [...(routeState.activeRouteArcs || [])];
+              if (outcome.startRouteArcId && !activeArcs.some(a => a.id === outcome.startRouteArcId) && activeArcs.length < (prev.run.maxDistanceReached <= 20 ? 2 : 3)) {
+                  activeArcs.push({
+                      id: outcome.startRouteArcId,
+                      title: outcome.startRouteArcId.replace(/-/g, ' '),
+                      biomeTags: [(loadedChunks[prev.mapId]?.biome || 'forest') as any],
+                      currentStage: 'rumor',
+                      startedAtChunkId: prev.mapId,
+                      expiresAfterChunks: 5,
+                      stageIndex: 0,
+                      maxStages: 5,
+                      flags: [],
+                      relatedIncidentIds: [incidentKey],
+                  } as any);
+              }
+              const advanceArc = (arcId?: string, mode: 'advance' | 'complete' | 'fail' = 'advance') => {
+                  if (!arcId) return;
+                  const idx = activeArcs.findIndex(a => a.id === arcId);
+                  if (idx < 0) return;
+                  const cur = { ...activeArcs[idx] } as any;
+                  if (mode === 'advance') {
+                      cur.stageIndex = Math.min(cur.maxStages - 1, (cur.stageIndex || 0) + 1);
+                      const stages = ['rumor', 'trail', 'complication', 'choice', 'payoff', 'aftermath'];
+                      cur.currentStage = stages[Math.min(stages.length - 1, cur.stageIndex)] as any;
+                  } else if (mode === 'complete') {
+                      cur.completed = true;
+                  } else {
+                      cur.failed = true;
+                  }
+                  activeArcs[idx] = cur;
+              };
+              advanceArc(outcome.advanceRouteArcId, 'advance');
+              advanceArc(outcome.completeRouteArcId, 'complete');
+              advanceArc(outcome.failRouteArcId, 'fail');
+              const completedArcs = [...(routeState.completedRouteArcs || []), ...activeArcs.filter(a => (a as any).completed).map(a => a.id)];
+              const failedArcs = [...(routeState.failedRouteArcs || []), ...activeArcs.filter(a => (a as any).failed).map(a => a.id)];
+              const unresolvedArcs = activeArcs.filter(a => !(a as any).completed && !(a as any).failed);
+
+              const queuedEchoes = [...(routeState.queuedEchoes || [])];
+              if (outcome.queueEchoIncidentId) {
+                  const nextEcho = {
+                      incidentId: outcome.queueEchoIncidentId,
+                      triggerAfterChunk: prev.run.maxDistanceReached + (outcome.echoDelayChunks || 2),
+                      expiresAfterChunk: prev.run.maxDistanceReached + (outcome.echoDelayChunks || 2) + 4,
+                      sourceIncidentId: incidentKey,
+                  };
+                  const duplicate = queuedEchoes.find((e) => e.incidentId === nextEcho.incidentId && Math.abs((e.triggerAfterChunk || 0) - nextEcho.triggerAfterChunk) <= 2);
+                  if (!duplicate) queuedEchoes.push(nextEcho);
+              }
+              const normalizedEchoes = queuedEchoes
+                  .sort((a, b) => (a.triggerAfterChunk || 0) - (b.triggerAfterChunk || 0))
+                  .slice(0, 8);
+
+              const companions = [...(routeState.activeCompanions || [])];
+              if (rewards.joinCompanion) {
+                  if (companions.length < (prev.run.maxDistanceReached <= 20 ? 1 : 2)) companions.push(rewards.joinCompanion as any);
+              }
+              const contracts = [...(routeState.activeContracts || [])];
+              if (rewards.startContract) contracts.push(rewards.startContract as any);
+
+              const regionKey = `${Math.floor(prev.chunkPos.x / 5)},${Math.floor(prev.chunkPos.y / 5)}`;
+              const ownershipByRegion = { ...(routeState.routeOwnershipByRegion || {}) };
+              if (rewards.ownershipChange) ownershipByRegion[regionKey] = rewards.ownershipChange;
+              else if ((outcome.setRouteFlags || []).includes('helpedMerchant')) ownershipByRegion[regionKey] = 'merchant_safe';
+              else if ((outcome.setRouteFlags || []).includes('angeredPoachers')) ownershipByRegion[regionKey] = 'poacher_controlled';
+              else if ((outcome.setRouteFlags || []).includes('rivalAhead')) ownershipByRegion[regionKey] = 'rival_influenced';
+
+              const updatedIncidentHistory = [...(routeState.recentIncidentIds || []), incidentKey].slice(-6);
+              return {
+                  ...prev,
+                  money: Math.max(0, prev.money + (rewards.money || 0) - (penalties.moneyLoss || 0)),
+                  discoveryPoints: prev.discoveryPoints + (rewards.discoveryPoints || 0),
+                  storyFlags: Array.from(storyFlagSet),
+                  routeState: {
+                      ...routeState,
+                      routeTension: Math.max(0, Math.min(10, routeState.routeTension + (outcome.tensionDelta || 0) + (penalties.tensionDelta || 0))),
+                      routeCuriosity: Math.max(0, Math.min(10, routeState.routeCuriosity + (outcome.curiosityDelta || 0) + (penalties.curiosityDelta || 0))),
+                      routeFlags: Array.from(routeFlagSet),
+                      factionReputation: factionRep,
+                      chunkMemoryStates: memory,
+                      routeIntel: routeState.routeIntel + (rewards.routeIntel || 0),
+                      routeControl: routeState.routeControl + (rewards.routeControl || 0),
+                      activeRouteArcs: unresolvedArcs as any,
+                      completedRouteArcs: Array.from(new Set(completedArcs)),
+                      failedRouteArcs: Array.from(new Set(failedArcs)),
+                      recentIncidentIds: updatedIncidentHistory,
+                      recentChunkRoles: routeState.recentChunkRoles || [],
+                      queuedEchoes: normalizedEchoes,
+                      routeOwnershipByRegion: ownershipByRegion,
+                      activeCompanions: companions as any,
+                      activeContracts: contracts as any,
+                      completedContracts: routeState.completedContracts || [],
+                      failedContracts: routeState.failedContracts || [],
+                      pacing: routeState.pacing || createDefaultRouteState().pacing,
+                  },
+              };
+          });
+      };
+
+      if (outcome.challengeType === 'speed' || outcome.challengeType === 'stealth') {
+          pendingIncidentChallengeRef.current = {
+              key: incidentKey,
+              success: { ...outcome, challengeType: undefined },
+              failure: failureOutcome,
+          };
+          setChallengeState({
+              type: outcome.challengeType,
+              isActive: true,
+              endTime: outcome.challengeType === 'speed' ? Date.now() + (outcome.challengeTimeLimit || 15) * 1000 : undefined,
+              npcId: `incident:${incidentKey}`,
+          });
+          setDialogue(outcome.narrative);
+          return true;
+      }
+
+      if (outcome.challengeType === 'collect' && playerState.inventory.potions < 3) {
+          setDialogue(["You're short on supplies for this route task.", "You need at least 3 Potions to commit."]);
+          if (failureOutcome) await applyIncidentOutcome(failureOutcome, incidentKey, incidentTitle);
+          return false;
+      }
+      if (outcome.challengeType === 'type_trial') {
+          const req = outcome.challengeRequiredType || 'normal';
+          const valid = playerState.team.length > 0 && playerState.team.every(p => p.types.some(t => t.toLowerCase() === req.toLowerCase()));
+          if (!valid) {
+              setDialogue([`The trial rejects your team alignment (${req.toUpperCase()} required).`]);
+              if (failureOutcome) await applyIncidentOutcome(failureOutcome, incidentKey, incidentTitle);
+              return false;
+          }
+      }
+
+      if (outcome.challengeType === 'battle') {
+          const speciesId = outcome.challengeRewardPokemonId || 25;
+          const challengeLevel = Math.max(5, outcome.challengeRewardLevel || Math.floor((playerState.team[0]?.level || 5) + 2));
+          const incidentBiome = loadedChunks[playerState.mapId]?.biome || 'forest';
+          const incidentTeam = getIncidentBattleSpecies(incidentKey, incidentBiome, speciesId);
+          startBattle(1, true, true, {
+              id: `incident_${incidentKey}`,
+              name: incidentTitle,
+              sprite: 'https://play.pokemonshowdown.com/sprites/trainers/ranger.png',
+              level: challengeLevel,
+              team: incidentTeam,
+              isGymLeader: false,
+              reward: 500,
+              dialogue: 'Incident escalation!',
+              winDialogue: 'Route stabilized.',
+          });
+      }
+
+      if (outcome.challengeType === 'collect') {
+          setPlayerState(prev => ({ ...prev, inventory: { ...prev.inventory, potions: Math.max(0, prev.inventory.potions - 3) } }));
+      }
+
+      if (outcome.rewards?.rewardPokemonId) {
+          try {
+              const rewardMon = await fetchPokemon(
+                  outcome.rewards.rewardPokemonId,
+                  outcome.rewards.rewardLevel || Math.max(8, playerState.team[0]?.level || 5),
+                  false,
+              );
+              setPlayerState(prev => ({ ...prev, team: [...prev.team, rewardMon] }));
+          } catch {
+              // Ignore optional reward hydration failures.
+          }
+      }
+
+      applyStateEffects();
+      setDialogue(outcome.narrative);
+      return true;
+  };
   // Rift Transform (Tera / Mega / Z) picker modal state. Null while
   // closed; when set, the in-battle overlay shows the option chooser
   // for the currently active player mon.
   const [transformPicker, setTransformPicker] = useState<null | 'root' | 'tera'>(null);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const toastLastShownRef = useRef<Record<string, number>>({});
   const showToast = useCallback((message: string, tier: ToastTier = 'info', opts: { kicker?: string; ttl?: number } = {}) => {
-    setToasts((prev) => [...prev, makeToast(message, tier, opts)]);
+    const key = `${opts.kicker || ''}|${message}`;
+    const now = Date.now();
+    const last = toastLastShownRef.current[key] || 0;
+    if (now - last < TOAST_SPAM_WINDOW_MS) return;
+    toastLastShownRef.current[key] = now;
+    setToasts((prev) => {
+      const deduped = prev.filter((t) => !(t.message === message && t.kicker === opts.kicker));
+      return [...deduped, makeToast(message, tier, opts)].slice(-MAX_VISIBLE_TOASTS);
+    });
   }, []);
   const expireToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
   const dailyEventShown = useRef(false);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanCooldown, setScanCooldown] = useState(0);
   // Shift-to-run: UI re-renders for the sprite sheet / tween swap.
   const [isRunning, setIsRunning] = useState(false);
   // Movement debounce. Keydown fires at the OS autorepeat rate (~30/s
@@ -442,6 +786,7 @@ export default function App() {
       const migrated: PlayerGlobalState = backfillLegacyGymIds({
           ...file.player,
           meta: migrateMeta(file.player.meta),
+          routeState: normalizeRouteState((file.player as any).routeState),
       });
       setPlayerState(migrated);
       setPhase(GamePhase.OVERWORLD);
@@ -469,6 +814,7 @@ export default function App() {
       const migrated: PlayerGlobalState = backfillLegacyGymIds({
           ...file.player,
           meta: migrateMeta(file.player.meta),
+          routeState: normalizeRouteState((file.player as any).routeState),
       });
       setPlayerState(migrated);
       refreshSaveMeta();
@@ -593,6 +939,11 @@ export default function App() {
       npcId?: string;
       isActive: boolean;
   }>({ type: 'none', isActive: false });
+  const pendingIncidentChallengeRef = useRef<null | {
+      key: string;
+      success?: IncidentOutcome;
+      failure?: IncidentOutcome;
+  }>(null);
 
   const battleStateRef = useRef<BattleState | null>(null);
   const networkRoleRef = useRef<'none' | 'host' | 'client'>('none');
@@ -614,6 +965,10 @@ export default function App() {
   // Remembers which outbreak chunks we've already shown the intro
   // toast for, so chunk re-entry isn't spammy. String key = "cx,cy".
   const seenOutbreakChunksRef = useRef<Set<string>>(new Set());
+  const lastRoutePreviewChunkRef = useRef<string>('');
+  const lastIncidentPromptChunkRef = useRef<string>('');
+  const lastLanePromptDistanceRef = useRef<number>(-999);
+  const dialogueOpenedAtRef = useRef<number>(0);
   // Gauntlet queue: after a trainer-battle victory, if the defeated
   // trainer had a `gauntletNextTrainerId`, we stash the next
   // TrainerData here. The effect below watches (phase, dialogue) and
@@ -826,88 +1181,6 @@ export default function App() {
       });
       playLevelUpSfx();
   };
-
-
-
-
-  function handleScan() {
-    if (scanCooldown > 0) return;
-    setIsScanning(true);
-    setScanCooldown(15); // 15s cooldown
-    setTimeout(() => setIsScanning(false), 5000); // 5s duration
-    playSound('https://www.soundjay.com/button/sounds/button-16.mp3'); // Scan sound
-    
-    // Discovery Reward: Finding hidden items or points
-    const roll = Math.random();
-    if (roll < 0.7) { // Increased probability from 0.6 to 0.7
-        const isRare = Math.random() < 0.1; // 10% chance for rare treasure
-        const bonusMoney = isRare ? (Math.floor(Math.random() * 20000) + 15000) : (Math.floor(Math.random() * 10000) + 5000);
-        const bonusPoints = isRare ? (Math.floor(Math.random() * 50) + 30) : (Math.floor(Math.random() * 20) + 10);
-        const hasItem = Math.random() < 0.8;
-        
-        let itemMsg = "";
-        let itemToGive: keyof typeof playerState.inventory | 'capturePermits' | 'riftEssence' | null = null;
-        let countToGive = 0;
-
-        if (hasItem) {
-            const itemRoll = Math.random();
-            
-            if (itemRoll < 0.1) {
-                itemToGive = 'rare_candy';
-                countToGive = isRare ? 5 : 2;
-            } else if (itemRoll < 0.3) {
-                itemToGive = 'revives';
-                countToGive = isRare ? 8 : 3;
-            } else if (itemRoll < 0.6) {
-                itemToGive = 'capturePermits';
-                countToGive = isRare ? 3 : 1;
-            } else {
-                itemToGive = 'riftEssence';
-                countToGive = isRare ? 25 : 10;
-            }
-
-            if (itemToGive === 'capturePermits') {
-                itemMsg = ` and ${countToGive} CAPTURE PERMITS`;
-            } else if (itemToGive === 'riftEssence') {
-                itemMsg = ` and ${countToGive} RIFT ESSENCE`;
-            } else {
-                itemMsg = ` and ${countToGive} ${itemToGive.toUpperCase()}`;
-            }
-        }
-
-        setPlayerState(prev => {
-            const newInventory = { ...prev.inventory };
-            let newRiftEssence = prev.meta.riftEssence;
-            let newPermits = prev.run.capturePermits;
-
-            if (itemToGive === 'capturePermits') {
-                newPermits += countToGive;
-            } else if (itemToGive === 'riftEssence') {
-                newRiftEssence += countToGive;
-            } else if (itemToGive) {
-                newInventory[itemToGive] = (newInventory[itemToGive] || 0) + countToGive;
-            }
-            
-            return { 
-                ...prev, 
-                money: prev.money + bonusMoney, 
-                discoveryPoints: prev.discoveryPoints + bonusPoints,
-                inventory: newInventory,
-                meta: { ...prev.meta, riftEssence: newRiftEssence },
-                run: { ...prev.run, capturePermits: newPermits },
-                nextEncounterRare: isRare ? true : prev.nextEncounterRare
-            };
-        });
-        const prefix = isRare ? "RARE DISCOVERY! " : "Scan complete! ";
-        const rareMsg = isRare ? " A rare aura has been detected!" : "";
-        setDialogue([prefix, `Found hidden cache: $${bonusMoney}, ${bonusPoints} Discovery Points${itemMsg}!${rareMsg}`]);
-    } else {
-        setDialogue(["Scan complete.", "No hidden treasures detected in the immediate vicinity."]);
-    }
-  };
-
-
-
   function startMultiplayerBattle(id: string, oppId: string, oppInfo: any, isLead: boolean) {
     setBattleId(id);
     setOpponentId(oppId);
@@ -2043,6 +2316,7 @@ export default function App() {
                           npc.dialogue[0],
                           "Challenge accepted. Stay sharp."
                       ]);
+                      trackChallengeAccepted(npc.challenge.type);
                       
                       // Challenge dispatch:
                       // - battle: spin up a trainer fight using rewardPokemonId (or
@@ -2085,9 +2359,11 @@ export default function App() {
                           const requiredType = npc.challenge.requiredType || 'normal';
                           const allMatch = playerState.team.every(p => p.types.includes(requiredType));
                           if (allMatch) {
+                              trackChallengeCompleted('type_trial');
                               setDialogue([`You have mastered the ${requiredType.toUpperCase()} type!`, "Take this reward."]);
                               setPlayerState(prev => ({ ...prev, storyFlags: [...prev.storyFlags, challengeKey] }));
                           } else {
+                              trackChallengeFailed('type_trial');
                               setDialogue([`I only speak to those who master the ${requiredType.toUpperCase()} type.`, "Come back with a team of only that type!"]);
                           }
                       } else if (npc.challenge.type === 'explore') {
@@ -2111,6 +2387,7 @@ export default function App() {
                                   team: rewardMon ? [...prev.team, rewardMon] : prev.team,
                                   storyFlags: [...prev.storyFlags, challengeKey]
                               }));
+                              trackChallengeCompleted('explore');
                               setDialogue([
                                   "Excellent scouting work.",
                                   rewardMon
@@ -2144,6 +2421,7 @@ export default function App() {
                                   team: [reward, ...prev.team.slice(1)],
                                   storyFlags: [...prev.storyFlags, challengeKey]
                               }));
+                              trackChallengeCompleted('collect');
                               return;
                           }
                           // Default collect challenge: 5 potions for a reward.
@@ -2170,7 +2448,9 @@ export default function App() {
                                   inventory: { ...prev.inventory, potions: prev.inventory.potions - 5 },
                                   storyFlags: [...prev.storyFlags, challengeKey]
                               }));
+                              trackChallengeCompleted('collect');
                           } else {
+                              trackChallengeFailed('collect');
                               setDialogue(["I need 5 Potions to see if you're worthy.", "Come back when you have them!"]);
                           }
                       }
@@ -2277,7 +2557,7 @@ export default function App() {
           currentMap = loadedChunks[playerState.mapId];
           if (!currentMap) {
               const [,cx,cy] = playerState.mapId.split('_');
-              currentMap = generateChunk(parseInt(cx), parseInt(cy), getKeystoneLevel(playerState.meta, 'rift_stability'));
+              currentMap = generateChunk(parseInt(cx), parseInt(cy), getKeystoneLevel(playerState.meta, 'rift_stability'), playerState.routeState);
               setLoadedChunks(prev => ({ ...prev, [currentMap.id]: currentMap }));
           }
       } else if (playerState.mapId.startsWith('interior:') || playerState.mapId.startsWith('puzzle_')) {
@@ -2372,6 +2652,78 @@ export default function App() {
               }
 
               const nextChunkId = `chunk_${ncx}_${ncy}`;
+              const baseRouteState = normalizeRouteState(playerState.routeState);
+              const provisionalChunk = loadedChunks[nextChunkId]
+                  ?? generateChunk(ncx, ncy, getKeystoneLevel(playerState.meta, 'rift_stability'), baseRouteState);
+              let laneChoice: 'main' | 'side' | 'strange' = 'main';
+              let laneTensionDelta = 0;
+              let laneCuriosityDelta = 0;
+              const laneRoll = Math.abs(Math.sin((ncx + 11) * 12.9898 + (ncy + 7) * 78.233 + distFloor * 0.33)) % 1;
+              const chunksSinceLanePrompt = distFloor - lastLanePromptDistanceRef.current;
+              const chunkFeelsMeaningful = !!provisionalChunk?.routeIncident
+                  || provisionalChunk?.chunkRole === 'mystery'
+                  || provisionalChunk?.chunkRole === 'setpiece'
+                  || provisionalChunk?.chunkRole === 'consequence';
+              const allowLaneChoice = playerNum === 1
+                  && distFloor > 1
+                  && chunksSinceLanePrompt >= 3
+                  && chunkFeelsMeaningful
+                  && (laneRoll > 0.55 || baseRouteState.routeCuriosity >= 5);
+              if (allowLaneChoice && !dialogue) {
+                  lastLanePromptDistanceRef.current = distFloor;
+                  const preview = provisionalChunk?.routePreview;
+                  const lanePick = await askDialogue({
+                      speaker: 'Route Director',
+                      lines: [
+                          `Area: ${nextChunkId.replace('chunk_', '').replace('_', ',')} • ${(provisionalChunk?.biome || 'frontier').toUpperCase()}`,
+                          `Mood: ${compactRouteMood(preview?.mood)}`,
+                          `Danger: ${preview?.dangerHint || 'Unknown'}`,
+                          `Opportunity: ${preview?.rewardHint || 'Unknown'}`,
+                          `State: ${preview?.tensionLabel || 'Watchful'} / ${preview?.curiosityLabel || 'Hints Nearby'}`,
+                          preview?.companionHint ? `Companion: ${preview.companionHint}` : 'Companion: none',
+                      ],
+                      choices: [
+                          { id: 'main', label: 'Main Road', hint: preview?.routeOptions?.main || 'Stable route, lower variance' },
+                          { id: 'side', label: 'Side Path', hint: preview?.routeOptions?.side || 'Higher payoff, more pressure' },
+                          { id: 'strange', label: 'Strange Path', hint: preview?.routeOptions?.strange || 'Mystery route, volatile outcomes' },
+                      ],
+                  });
+                  if (lanePick === 'side' || lanePick === 'strange' || lanePick === 'main') laneChoice = lanePick;
+              }
+              if (laneChoice === 'main') { laneTensionDelta = -1; laneCuriosityDelta = 0; }
+              else if (laneChoice === 'side') { laneTensionDelta = 1; laneCuriosityDelta = 1; }
+              else { laneTensionDelta = 2; laneCuriosityDelta = 2; }
+              const laneAdjustedState = {
+                  ...baseRouteState,
+                  routeFlags: [
+                      ...baseRouteState.routeFlags.filter(f => !/^lane_/.test(f)),
+                      `lane_${laneChoice}`,
+                  ],
+                  routeTension: Math.max(0, Math.min(10, baseRouteState.routeTension + laneTensionDelta)),
+                  routeCuriosity: Math.max(0, Math.min(10, baseRouteState.routeCuriosity + laneCuriosityDelta)),
+              };
+              const nextChunkData = loadedChunks[nextChunkId]
+                  ?? generateChunk(ncx, ncy, getKeystoneLevel(playerState.meta, 'rift_stability'), laneAdjustedState);
+              const stackedRiskFlags = laneAdjustedState.routeFlags.filter((f: string) => ['angeredPoachers', 'factionAlerted', 'ignoredDistressCall'].includes(f));
+              const echoTriggered = !!(laneAdjustedState.queuedEchoes || []).find((e: any) =>
+                  e.triggerAfterChunk <= distFloor
+                  && (!e.expiresAfterChunk || e.expiresAfterChunk >= distFloor)
+                  && e.incidentId === nextChunkData.routeIncident?.id,
+              );
+              logRoutePlaytest('chunk_transition', {
+                  lane: `lane_${laneChoice}`,
+                  chunkId: nextChunkId,
+                  biome: nextChunkData.biome,
+                  chunkRole: nextChunkData.chunkRole || 'breather',
+                  incidentFamily: nextChunkData.routeIncident?.family || null,
+                  incidentId: nextChunkData.routeIncident?.id || null,
+                  incidentTitle: nextChunkData.routeIncident?.title || null,
+                  tension: tensionTierLabel(laneAdjustedState.routeTension),
+                  curiosity: curiosityTierLabel(laneAdjustedState.routeCuriosity),
+                  setpiece: nextChunkData.chunkRole === 'setpiece',
+                  stackedRisk: stackedRiskFlags.length >= 2,
+                  echoTriggered,
+              });
               
               // Move both players to the new chunk
               // Calculate relative position for the other player
@@ -2442,6 +2794,49 @@ export default function App() {
                       storyFlags: newPerks.length > 0
                           ? [...prev.storyFlags, ...newPerks.map(p => p.flag)]
                           : prev.storyFlags,
+                      routeState: (() => {
+                          const rs = normalizeRouteState(prev.routeState);
+                          const nextRole = (nextChunkData.chunkRole || 'breather') as any;
+                          const advancedArcs = (rs.activeRouteArcs || []).map((a: any) => ({ ...a, stageIndex: (a.stageIndex || 0) + 1 }));
+                          const failedArcIds = advancedArcs.filter((a: any) => a.expiresAfterChunks && a.stageIndex > a.expiresAfterChunks).map((a: any) => a.id);
+                          const liveArcs = advancedArcs.filter((a: any) => !failedArcIds.includes(a.id));
+                          const nextCompanions = (rs.activeCompanions || []).map((c: any) => ({ ...c, expiresAfterChunks: c.expiresAfterChunks - 1 })).filter((c: any) => c.expiresAfterChunks > 0);
+                          const expiredContracts = (rs.activeContracts || []).filter((c: any) => c.expiresAfterChunks <= 1).map((c: any) => c.id);
+                          const nextContracts = (rs.activeContracts || []).map((c: any) => ({ ...c, expiresAfterChunks: c.expiresAfterChunks - 1 })).filter((c: any) => c.expiresAfterChunks > 0);
+                          const nextRecentRoles = [...(rs.recentChunkRoles || []), nextRole].slice(-6);
+                          const nextRecentIncidents = nextChunkData.routeIncident
+                              ? [...(rs.recentIncidentIds || []), nextChunkData.routeIncident.id].slice(-6)
+                              : (rs.recentIncidentIds || []);
+                          const nextQueuedEchoes = (rs.queuedEchoes || []).filter((e: any) => (e.expiresAfterChunk === undefined || e.expiresAfterChunk >= distFloor) && e.triggerAfterChunk > distFloor);
+                          const nextPacing = {
+                              ...rs.pacing,
+                              recentDangerCount: Math.max(0, Math.min(3, (rs.pacing.recentDangerCount || 0) + (nextRole === 'threat' || nextRole === 'setpiece' ? 1 : -1))),
+                              recentRewardCount: Math.max(0, Math.min(3, (rs.pacing.recentRewardCount || 0) + (nextRole === 'temptation' || nextRole === 'breather' ? 1 : -1))),
+                              recentMysteryCount: Math.max(0, Math.min(3, (rs.pacing.recentMysteryCount || 0) + (nextRole === 'mystery' || nextRole === 'setpiece' ? 1 : -1))),
+                              recentBattleIncidentCount: Math.max(0, Math.min(3, (rs.pacing.recentBattleIncidentCount || 0) + (nextChunkData.routeIncident?.choices?.some((c: any) => c.outcome?.challengeType === 'battle') ? 1 : -1))),
+                              chunksSinceMajorIncident: (rs.pacing.chunksSinceMajorIncident || 0) + (nextRole === 'setpiece' || nextRole === 'consequence' ? 0 : 1),
+                              chunksSinceBreather: nextRole === 'breather' ? 0 : (rs.pacing.chunksSinceBreather || 0) + 1,
+                              forceBreatherSoon: nextRole === 'setpiece'
+                                  || ((rs.pacing.recentDangerCount || 0) >= 2)
+                                  || (laneChoice === 'side' && (rs.pacing.recentDangerCount || 0) >= 1 && (nextRole === 'threat' || nextRole === 'consequence')),
+                              forcePayoffSoon: liveArcs.length > 0 && ((rs.pacing.chunksSinceMajorIncident || 0) >= 3),
+                          };
+                          return {
+                              ...rs,
+                              routeTension: Math.max(0, Math.min(10, rs.routeTension + (nextRole === 'threat' ? 1 : nextRole === 'breather' ? -1 : 0) + laneTensionDelta)),
+                              routeCuriosity: Math.max(0, Math.min(10, rs.routeCuriosity + (nextRole === 'mystery' || nextRole === 'setpiece' ? 1 : 0) + laneCuriosityDelta)),
+                              routeFlags: Array.from(new Set([...(rs.routeFlags || []).filter(f => !/^lane_/.test(f)), `lane_${laneChoice}`, ...failedArcIds.map(id => `arc_expired_${id}`)])),
+                              activeRouteArcs: liveArcs,
+                              failedRouteArcs: Array.from(new Set([...(rs.failedRouteArcs || []), ...failedArcIds])),
+                              activeCompanions: nextCompanions,
+                              activeContracts: nextContracts,
+                              failedContracts: Array.from(new Set([...(rs.failedContracts || []), ...expiredContracts])),
+                              recentChunkRoles: nextRecentRoles,
+                              recentIncidentIds: nextRecentIncidents,
+                              queuedEchoes: nextQueuedEchoes,
+                              pacing: nextPacing,
+                          };
+                      })(),
                       run: {
                           ...prev.run,
                           maxDistanceReached: Math.max(prev.run.maxDistanceReached, distFloor),
@@ -2500,8 +2895,7 @@ export default function App() {
               }
 
               if (!loadedChunks[nextChunkId]) {
-                  const nextChunk = generateChunk(ncx, ncy, getKeystoneLevel(playerState.meta, 'rift_stability'));
-                  setLoadedChunks(prev => ({ ...prev, [nextChunkId]: nextChunk }));
+                  setLoadedChunks(prev => ({ ...prev, [nextChunkId]: nextChunkData }));
               }
 
               // Mass Outbreak announcement: fire once per chunk per
@@ -2511,8 +2905,7 @@ export default function App() {
               {
                   const chunkKey = `${ncx},${ncy}`;
                   if (!seenOutbreakChunksRef.current.has(chunkKey)) {
-                      const chunkBiome = loadedChunks[nextChunkId]?.biome
-                          ?? generateChunk(ncx, ncy, getKeystoneLevel(playerState.meta, 'rift_stability')).biome;
+                      const chunkBiome = loadedChunks[nextChunkId]?.biome ?? nextChunkData.biome;
                       const outbreak = getChunkOutbreak(ncx, ncy, chunkBiome);
                       if (outbreak) {
                           const outbreakFlag = `outbreak_token_${ncx}_${ncy}`;
@@ -2553,6 +2946,49 @@ export default function App() {
                   chunkPos: { x: ncx, y: ncy },
                   position: { x: p1x, y: p1y },
                   p2Position: { x: p2x, y: p2y },
+                  routeState: (() => {
+                      const rs = normalizeRouteState(prev.routeState);
+                      const nextRole = (nextChunkData.chunkRole || 'breather') as any;
+                      const advancedArcs = (rs.activeRouteArcs || []).map((a: any) => ({ ...a, stageIndex: (a.stageIndex || 0) + 1 }));
+                      const failedArcIds = advancedArcs.filter((a: any) => a.expiresAfterChunks && a.stageIndex > a.expiresAfterChunks).map((a: any) => a.id);
+                      const liveArcs = advancedArcs.filter((a: any) => !failedArcIds.includes(a.id));
+                      const nextCompanions = (rs.activeCompanions || []).map((c: any) => ({ ...c, expiresAfterChunks: c.expiresAfterChunks - 1 })).filter((c: any) => c.expiresAfterChunks > 0);
+                      const expiredContracts = (rs.activeContracts || []).filter((c: any) => c.expiresAfterChunks <= 1).map((c: any) => c.id);
+                      const nextContracts = (rs.activeContracts || []).map((c: any) => ({ ...c, expiresAfterChunks: c.expiresAfterChunks - 1 })).filter((c: any) => c.expiresAfterChunks > 0);
+                      const nextRecentRoles = [...(rs.recentChunkRoles || []), nextRole].slice(-6);
+                      const nextRecentIncidents = nextChunkData.routeIncident
+                          ? [...(rs.recentIncidentIds || []), nextChunkData.routeIncident.id].slice(-6)
+                          : (rs.recentIncidentIds || []);
+                      const nextQueuedEchoes = (rs.queuedEchoes || []).filter((e: any) => (e.expiresAfterChunk === undefined || e.expiresAfterChunk >= distFloor) && e.triggerAfterChunk > distFloor);
+                      const nextPacing = {
+                          ...rs.pacing,
+                          recentDangerCount: Math.max(0, Math.min(3, (rs.pacing.recentDangerCount || 0) + (nextRole === 'threat' || nextRole === 'setpiece' ? 1 : -1))),
+                          recentRewardCount: Math.max(0, Math.min(3, (rs.pacing.recentRewardCount || 0) + (nextRole === 'temptation' || nextRole === 'breather' ? 1 : -1))),
+                          recentMysteryCount: Math.max(0, Math.min(3, (rs.pacing.recentMysteryCount || 0) + (nextRole === 'mystery' || nextRole === 'setpiece' ? 1 : -1))),
+                          recentBattleIncidentCount: Math.max(0, Math.min(3, (rs.pacing.recentBattleIncidentCount || 0) + (nextChunkData.routeIncident?.choices?.some((c: any) => c.outcome?.challengeType === 'battle') ? 1 : -1))),
+                          chunksSinceMajorIncident: (rs.pacing.chunksSinceMajorIncident || 0) + (nextRole === 'setpiece' || nextRole === 'consequence' ? 0 : 1),
+                          chunksSinceBreather: nextRole === 'breather' ? 0 : (rs.pacing.chunksSinceBreather || 0) + 1,
+                          forceBreatherSoon: nextRole === 'setpiece'
+                              || ((rs.pacing.recentDangerCount || 0) >= 2)
+                              || (laneChoice === 'side' && (rs.pacing.recentDangerCount || 0) >= 1 && (nextRole === 'threat' || nextRole === 'consequence')),
+                          forcePayoffSoon: liveArcs.length > 0 && ((rs.pacing.chunksSinceMajorIncident || 0) >= 3),
+                      };
+                      return {
+                          ...rs,
+                          routeTension: Math.max(0, Math.min(10, rs.routeTension + (nextRole === 'threat' ? 1 : nextRole === 'breather' ? -1 : 0) + laneTensionDelta)),
+                          routeCuriosity: Math.max(0, Math.min(10, rs.routeCuriosity + (nextRole === 'mystery' || nextRole === 'setpiece' ? 1 : 0) + laneCuriosityDelta)),
+                          routeFlags: Array.from(new Set([...(rs.routeFlags || []).filter(f => !/^lane_/.test(f)), `lane_${laneChoice}`, ...failedArcIds.map(id => `arc_expired_${id}`)])),
+                          activeRouteArcs: liveArcs,
+                          failedRouteArcs: Array.from(new Set([...(rs.failedRouteArcs || []), ...failedArcIds])),
+                          activeCompanions: nextCompanions,
+                          activeContracts: nextContracts,
+                          failedContracts: Array.from(new Set([...(rs.failedContracts || []), ...expiredContracts])),
+                          recentChunkRoles: nextRecentRoles,
+                          recentIncidentIds: nextRecentIncidents,
+                          queuedEchoes: nextQueuedEchoes,
+                          pacing: nextPacing,
+                      };
+                  })(),
                   run: {
                       ...prev.run,
                       maxDistanceReached: Math.max(prev.run.maxDistanceReached, distFloor),
@@ -2675,7 +3111,7 @@ export default function App() {
               const parts = targetMap.split('_');
               nextChunkPos = { x: parseInt(parts[1], 10), y: parseInt(parts[2], 10) };
               if (!loadedChunks[targetMap]) {
-                  const nextChunk = generateChunk(nextChunkPos.x, nextChunkPos.y, getKeystoneLevel(playerState.meta, 'rift_stability'));
+                  const nextChunk = generateChunk(nextChunkPos.x, nextChunkPos.y, getKeystoneLevel(playerState.meta, 'rift_stability'), playerState.routeState);
                   setLoadedChunks(prev => ({ ...prev, [targetMap]: nextChunk }));
               }
               setCurrentWeather('none');
@@ -2707,12 +3143,24 @@ export default function App() {
           if (challengeState.type === 'speed') {
               if (Date.now() > (challengeState.endTime || 0)) {
                   setChallengeState({ type: 'none', isActive: false });
+                  trackChallengeFailed('speed');
+                  if ((challengeState.npcId || '').startsWith('incident:') && pendingIncidentChallengeRef.current?.failure) {
+                      const pending = pendingIncidentChallengeRef.current;
+                      pendingIncidentChallengeRef.current = null;
+                      await applyIncidentOutcome(pending.failure, pending.key, 'Incident Fallout');
+                  }
                   setDialogue(["Time's up! You failed the speed challenge."]);
                   return;
               }
               // Check if reached edge
               if (newPos.x === 0 || newPos.x === CHUNK_SIZE - 1 || newPos.y === 0 || newPos.y === CHUNK_SIZE - 1) {
                   setChallengeState({ type: 'none', isActive: false });
+                  trackChallengeCompleted('speed');
+                  if ((challengeState.npcId || '').startsWith('incident:') && pendingIncidentChallengeRef.current?.success) {
+                      const pending = pendingIncidentChallengeRef.current;
+                      pendingIncidentChallengeRef.current = null;
+                      await applyIncidentOutcome(pending.success, pending.key, 'Incident Resolved');
+                  }
                   setDialogue(["Incredible speed!", "You won the challenge!"]);
                   // Reward logic here
                   setPlayerState(prev => ({ ...prev, storyFlags: [...prev.storyFlags, `challenge_${challengeState.npcId}`] }));
@@ -2733,6 +3181,12 @@ export default function App() {
                           
                           if (seen) {
                               setChallengeState({ type: 'none', isActive: false });
+                              trackChallengeFailed('stealth');
+                              if ((challengeState.npcId || '').startsWith('incident:') && pendingIncidentChallengeRef.current?.failure) {
+                                  const pending = pendingIncidentChallengeRef.current;
+                                  pendingIncidentChallengeRef.current = null;
+                                  await applyIncidentOutcome(pending.failure, pending.key, 'Incident Fallout');
+                              }
                               setDialogue(["HALT! You were spotted!", "The stealth challenge failed."]);
                               return;
                           }
@@ -2742,6 +3196,12 @@ export default function App() {
               // Check if reached treasure (statue or something)
               if (tileType === 22 || tileType === 12) {
                   setChallengeState({ type: 'none', isActive: false });
+                  trackChallengeCompleted('stealth');
+                  if ((challengeState.npcId || '').startsWith('incident:') && pendingIncidentChallengeRef.current?.success) {
+                      const pending = pendingIncidentChallengeRef.current;
+                      pendingIncidentChallengeRef.current = null;
+                      await applyIncidentOutcome(pending.success, pending.key, 'Incident Resolved');
+                  }
                   setDialogue(["You reached the treasure unseen!", "A true master of stealth."]);
                   setPlayerState(prev => ({ ...prev, storyFlags: [...prev.storyFlags, `challenge_${challengeState.npcId}`] }));
               }
@@ -3033,6 +3493,7 @@ export default function App() {
   };
 
   const startBattle = async (enemyCount: number, isBoss: boolean, isTrainer: boolean, trainerData?: TrainerData, biome?: string, tileType?: number) => {
+    if (isTrainer) trackTrainerEngagement();
     const isMultiplayer = !!multiplayer.roomId;
     const bId = isMultiplayer ? `wild_${multiplayer.roomId}_${Date.now()}` : null;
     if (bId) setBattleId(bId);
@@ -8482,7 +8943,9 @@ export default function App() {
             // in the run.trainerBond comment in types.ts.
             const bondPre = playerState.run.trainerBond?.stacks ?? 0;
             const bondMoneyMult = 1 + bondPre * 0.08;
-            const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult * bondMoneyMult * getDailyEvent().moneyMult);
+            const dailyMoneyMultRaw = Number(getDailyEvent().moneyMult);
+            const dailyMoneyMult = Number.isFinite(dailyMoneyMultRaw) && dailyMoneyMultRaw > 0 ? dailyMoneyMultRaw : 1;
+            const finalMoney = Math.floor(baseMoney * moneyBonus * moneyMult * bondMoneyMult * dailyMoneyMult);
 
             // Victory Heal: normally +25% on win. Suppress entirely when
             // chaining a gauntlet -- the whole point of a "two trainers
@@ -8619,33 +9082,34 @@ export default function App() {
             const victoryMsgs = isGymLeader ?
                 [
                     "Gym Leader defeated!",
-                    "You earned a Badge!",
-                    "You received 2 Capture Permits!",
-                    `Gained ${essenceEarned} Rift Essence + ${TOKEN_AWARDS.gymLeader} Rift Tokens!`,
+                    "Badge earned!",
+                    "+2 Capture Permits",
+                    `+${essenceEarned} Rift Essence • +${TOKEN_AWARDS.gymLeader} Rift Tokens`,
                     ...(bondMsg ? [bondMsg] : []),
-                    "Your team was partially healed!"
+                    "Your party was partially healed."
                 ] :
                 isRival && rivalMilestone ?
                     [
                         `You defeated ${trainer?.name}!`,
                         `"${trainer?.winDialogue ?? '...'}"`,
-                        `You got $${finalMoney}.`,
+                        `Reward: $${finalMoney}`,
                         rivalMilestone.trophy
-                            ? `Trophy: ${ITEMS[rivalMilestone.trophy]?.name ?? rivalMilestone.trophy}!`
+                            ? `Trophy unlocked: ${ITEMS[rivalMilestone.trophy]?.name ?? rivalMilestone.trophy}`
                             : 'Legendary match...',
-                        `(Milestone ${rivalMilestone.dist} cleared · +${TOKEN_AWARDS.rivalMilestone} Rift Tokens)`,
+                        `Milestone ${rivalMilestone.dist} cleared • +${TOKEN_AWARDS.rivalMilestone} Rift Tokens`,
                     ] :
                 chainingGauntlet ?
                     [
-                        `${trainer?.name ?? 'Trainer'} defeated! You got ${finalMoney}.`,
-                        `${gauntletNext!.name} steps forward -- no rest, no heal!`,
+                        `${trainer?.name ?? 'Trainer'} defeated! +$${finalMoney}`,
+                        `${gauntletNext!.name} steps in next — no heal between rounds.`,
                     ] :
                     [
-                        `Trainer defeated! You got ${finalMoney}.`,
-                        "You received a Capture Permit!",
-                        "Gained 1 Rift Essence!",
+                        "Trainer defeated!",
+                        `+$${finalMoney} Cash`,
+                        "+1 Capture Permit",
+                        `+${essenceEarned} Rift Essence`,
                         ...(bondMsg ? [bondMsg] : []),
-                        "Your team was partially healed!"
+                        "Your party was partially healed."
                     ];
 
             if (loot.length > 0) {
@@ -9148,6 +9612,112 @@ export default function App() {
   // inject the NPC/trainer into the chunk's local dict so interactions work
   // through the normal handler.
   const lastEventChunkRef = useRef<string>('');
+  const lastTelemetryChunkRef = useRef<string>('');
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      if (!playerState.mapId.startsWith('chunk_')) return;
+      const chunk = loadedChunks[playerState.mapId];
+      if (!chunk) return;
+      if (lastTelemetryChunkRef.current === playerState.mapId) return;
+      lastTelemetryChunkRef.current = playerState.mapId;
+      trackChunkVisit(Object.keys(chunk.trainers || {}).length);
+  }, [phase, playerState.mapId, loadedChunks]);
+
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD) return;
+      if (!playerState.mapId.startsWith('chunk_')) return;
+      const chunk = loadedChunks[playerState.mapId];
+      if (!chunk) return;
+
+      if (lastRoutePreviewChunkRef.current !== playerState.mapId && chunk.routePreview) {
+          lastRoutePreviewChunkRef.current = playerState.mapId;
+          const memoryLines = formatRouteMemory(playerState.routeState).slice(-2);
+          const memoryRecap = memoryLines.join(' | ');
+          const rs = normalizeRouteState(playerState.routeState);
+          const stackedRisk = (rs.routeFlags || []).filter((f: string) => ['angeredPoachers', 'factionAlerted', 'ignoredDistressCall'].includes(f)).length >= 2;
+          const readableMood = compactRouteMood(chunk.routePreview.mood);
+          const areaLabel = playerState.mapId.replace('chunk_', '').replace('_', ',');
+          showToast(
+              `Area: ${areaLabel}\nMood: ${readableMood}\nState: ${chunk.routePreview.tensionLabel || 'Watchful'} / ${chunk.routePreview.curiosityLabel || 'Hints Nearby'}\nDanger: ${chunk.routePreview.dangerHint}\nOpportunity: ${chunk.routePreview.rewardHint}${stackedRisk ? '\nRisk Stack: Consequences may chain.' : ''}${memoryRecap ? `\nMemory: ${memoryRecap}` : ''}`,
+              'story',
+              { kicker: 'Route Preview', ttl: 5200 },
+          );
+          logRoutePlaytest('route_preview', {
+              lane: (rs.routeFlags || []).find((f: string) => /^lane_/.test(f)) || 'lane_main',
+              chunkId: playerState.mapId,
+              chunkRole: chunk.chunkRole || 'breather',
+              incidentFamily: chunk.routeIncident?.family || null,
+              incidentId: chunk.routeIncident?.id || null,
+              tension: chunk.routePreview.tensionLabel || tensionTierLabel(rs.routeTension),
+              curiosity: chunk.routePreview.curiosityLabel || curiosityTierLabel(rs.routeCuriosity),
+              memoryShown: memoryLines,
+              stackedRisk,
+          });
+      }
+
+      const run = async () => {
+          if (!chunk.routeIncident) return;
+          const incidentDoneKey = `incident_done_${chunk.routeIncident.id}_${playerState.mapId}`;
+          if (playerState.storyFlags.includes(incidentDoneKey)) return;
+          if (lastIncidentPromptChunkRef.current === playerState.mapId) return;
+          if (dialogue) return;
+
+          lastIncidentPromptChunkRef.current = playerState.mapId;
+          const pick = await askDialogue({
+              speaker: 'Route Incident Director',
+              lines: [
+                  `${chunk.routeIncident.title}`,
+                  ...(chunk.routeIncident.signalText || []),
+              ],
+              choices: chunk.routeIncident.choices.map((c: any) => ({
+                  id: c.id,
+                  label: c.label,
+                  hint: `${c.hint || 'Choose how to respond.'}${c.outcome?.penalties?.tensionDelta ? ' | Risk: tension rises' : ''}${(c.outcome?.setRouteFlags || []).includes('angeredPoachers') ? ' | Risk: faction backlash' : ''}${c.outcome?.queueEchoIncidentId ? ' | Later: likely echo' : ''}`.trim(),
+              })),
+          });
+          if (!pick) return;
+          const selected = chunk.routeIncident.choices.find((c: any) => c.id === pick);
+          if (!selected) return;
+          const rs = normalizeRouteState(playerState.routeState);
+          const followUp = chunk.routeIncident.followUp;
+          const echoCandidatePool = (followUp?.possibleNextIncidentIds || []).filter((id: string) => !(rs.recentIncidentIds || []).slice(-4).includes(id));
+          const followUpEchoId = echoCandidatePool[0];
+          const echoRoll = seededUnitFloat(`${playerState.mapId}:${chunk.routeIncident.id}:${pick}:${(rs.recentIncidentIds || []).length}`);
+          const echoQueueOpen = (rs.queuedEchoes || []).length < 4;
+          const rivalOrFactionPressure = chunk.routeIncident.family === 'rival' || chunk.routeIncident.family === 'faction';
+          const adjustedEchoChance = rivalOrFactionPressure ? Math.min(0.55, followUp?.echoChance ?? 0.55) : (followUp?.echoChance ?? 0.55);
+          const allowFollowUpEcho = !!followUpEchoId && echoQueueOpen && echoRoll <= adjustedEchoChance;
+          const enrichedNarrative = Array.isArray(selected.outcome?.narrative) ? [...selected.outcome.narrative] : [];
+          if (chunk.routeIncident.id === 'rival_already_won') {
+              enrichedNarrative.push(rivalDirectionHint(playerState.chunkPos, playerState.badges));
+          }
+          const enrichedOutcome = {
+              ...selected.outcome,
+              narrative: enrichedNarrative.length > 0 ? enrichedNarrative : selected.outcome?.narrative,
+              startRouteArcId: selected.outcome.startRouteArcId || chunk.routeIncident.followUp?.arcId,
+              queueEchoIncidentId: selected.outcome.queueEchoIncidentId
+                  || (allowFollowUpEcho ? followUpEchoId : undefined),
+              echoDelayChunks: selected.outcome.echoDelayChunks
+                  || chunk.routeIncident.followUp?.minChunksLater,
+          };
+          logRoutePlaytest('incident_prompt_choice', {
+              lane: (playerState.routeState?.routeFlags || []).find((f: string) => /^lane_/.test(f)) || 'lane_main',
+              chunkId: playerState.mapId,
+              incidentFamily: chunk.routeIncident.family,
+              incidentId: chunk.routeIncident.id,
+              incidentTitle: chunk.routeIncident.title,
+              choiceId: selected.id,
+          });
+          await applyIncidentOutcome(
+              enrichedOutcome,
+              `${chunk.routeIncident.id}_${playerState.mapId}`,
+              chunk.routeIncident.title,
+              selected.failureOutcome,
+          );
+      };
+      void run();
+  }, [phase, playerState.mapId, loadedChunks, playerState.storyFlags, dialogue, askDialogue, applyIncidentOutcome, showToast]);
+
   useEffect(() => {
       if (phase !== GamePhase.OVERWORLD) return;
       if (!playerState.mapId.startsWith('chunk_')) return;
@@ -9587,13 +10157,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (scanCooldown > 0) {
-      const timer = setInterval(() => setScanCooldown(c => Math.max(0, c - 1)), 1000);
-      return () => clearInterval(timer);
-    }
-  }, [scanCooldown]);
-
   // Multiplayer Listeners
   useEffect(() => {
     multiplayer.onPlayersUpdate((players) => {
@@ -9923,9 +10486,9 @@ export default function App() {
           // choice). Bail here so we don't double-dismiss and lose the
           // resolver before the choice handler fires.
           if (dialogue.choices && dialogue.choices.length > 0) return;
-          const r = dialogue.resolve;
-          setDialogueRaw(null);
-          r?.(null);
+          if (e.repeat) return;
+          if (Date.now() - dialogueOpenedAtRef.current < DIALOGUE_MIN_READ_MS) return;
+          closeDialogue(null);
           return;
       }
 
@@ -10455,16 +11018,8 @@ export default function App() {
                    )}
                    <DialogueBox
                        dialogue={dialogue}
-                       onAdvance={() => {
-                           const r = dialogue?.resolve;
-                           setDialogueRaw(null);
-                           r?.(null);
-                       }}
-                       onChoice={(id) => {
-                           const r = dialogue?.resolve;
-                           setDialogueRaw(null);
-                           r?.(id);
-                       }}
+                       onAdvance={() => closeDialogue(null)}
+                       onChoice={(id) => closeDialogue(id)}
                    />
                    <div className="absolute top-6 left-6 z-40 flex gap-3">{playerState.team.slice(0,3).map((p,i)=><div key={i} className="scale-90 origin-top-left"><HealthBar current={p.currentHp} max={p.maxHp} label={p.name} level={p.level} status={p.status} /></div>)}</div>
                    <div className="absolute top-6 right-6 z-40 flex flex-col gap-3 items-end">
@@ -10540,7 +11095,6 @@ export default function App() {
                     remotePlayers={remotePlayers}
                     storyFlags={playerState.storyFlags} 
                     badges={playerState.badges} 
-                    isScanning={isScanning}
                     auraSight={hasTalent(playerState.meta, 'aura_sight')}
                     isRunning={isRunning}
                 />
@@ -10634,18 +11188,6 @@ export default function App() {
                         </div>
                     </div>
                 )}
-                <div className="fixed bottom-28 right-8 z-50 flex flex-col gap-3">
-                    <button 
-                        onClick={handleScan}
-                        disabled={scanCooldown > 0}
-                        className={`w-20 h-20 rounded-full flex items-center justify-center border-4 shadow-2xl transition-all active:scale-95 ${scanCooldown > 0 ? 'bg-gray-700 border-gray-600 opacity-50' : 'bg-blue-600 border-blue-400 hover:bg-blue-500'}`}
-                    >
-                        <div className="flex flex-col items-center">
-                            <span className="text-white text-xs font-bold">SCAN</span>
-                            {scanCooldown > 0 && <span className="text-white text-[10px]">{scanCooldown}s</span>}
-                        </div>
-                    </button>
-                </div>
             </div>
         );
         }
@@ -11265,16 +11807,8 @@ export default function App() {
             {dialogue && phase !== GamePhase.OVERWORLD && (
                 <DialogueBox
                     dialogue={dialogue}
-                    onAdvance={() => {
-                        const r = dialogue?.resolve;
-                        setDialogueRaw(null);
-                        r?.(null);
-                    }}
-                    onChoice={(id) => {
-                        const r = dialogue?.resolve;
-                        setDialogueRaw(null);
-                        r?.(id);
-                    }}
+                    onAdvance={() => closeDialogue(null)}
+                    onChoice={(id) => closeDialogue(id)}
                 />
             )}
             {/* Battle teardown blackout. Sits above everything except the

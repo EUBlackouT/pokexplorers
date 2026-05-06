@@ -1068,7 +1068,31 @@ export function buildGym(badgeId: number, returnTo: string, defeatedIds: string[
     };
 }
 
-export type InteriorKind = 'center' | 'mart' | 'house' | 'gym';
+const buildIncidentInterior = (kind: 'camp' | 'shrine' | 'outpost' | 'dungeon' | 'cave', seed: string, returnTo: string): MapZone => {
+    const base = buildHouse(`incident_${kind}_${seed}`, returnTo);
+    const layout = base.layout.map(r => [...r]);
+    const npcs: Record<string, NPCData> = { ...(base.npcs || {}) };
+    if (kind === 'camp') {
+        layout[12][10] = 51;
+        layout[11][10] = 52;
+        npcs['10,11'] = { id: `camp_host_${seed}`, name: 'Safehouse Keeper', sprite: SPRITE.nurse, facing: 'down', dialogue: ['This camp is now part of your route network.', 'Rest, then push onward.'] };
+    } else if (kind === 'shrine') {
+        layout[8][10] = 22;
+        npcs['10,10'] = { id: `shrine_keeper_${seed}`, name: 'Shrine Keeper', sprite: SPRITE.elder, facing: 'down', dialogue: ['The shrine remembers your choices.', 'Return after major incidents.'] };
+    } else if (kind === 'outpost') {
+        npcs['10,10'] = { id: `outpost_quarter_${seed}`, name: 'Quartermaster', sprite: SPRITE.shopkeeper, facing: 'down', dialogue: ['Outpost logistics updated.', 'Your faction standing affects supply tiers.'] };
+    } else if (kind === 'dungeon') {
+        layout[6][10] = 68;
+        npcs['10,10'] = { id: `dungeon_guide_${seed}`, name: 'Deep Guide', sprite: SPRITE.veteran, facing: 'down', dialogue: ['Mini-dungeon routes rotate daily.', 'Bring utility moves and patience.'] };
+    } else if (kind === 'cave') {
+        layout[7][10] = 24;
+        layout[8][10] = 7;
+        npcs['10,11'] = { id: `cave_scout_${seed}`, name: 'Cave Scout', sprite: SPRITE.hiker, facing: 'down', dialogue: ['Caves now serve as incident side-spaces.', 'Watch for unstable pockets ahead.'] };
+    }
+    return { ...base, id: `interior:${kind}:${seed}`, name: `${kind[0].toUpperCase()}${kind.slice(1)} Interior`, layout, npcs };
+};
+
+export type InteriorKind = 'center' | 'mart' | 'house' | 'gym' | 'camp' | 'shrine' | 'outpost' | 'dungeon' | 'cave';
 
 /** Materialize an interior MapZone. `seed` is a stable per-instance key
  *  (e.g. "c_3_-2_11_7" for a building at chunk (3,-2) with door at
@@ -1082,6 +1106,11 @@ export function resolveInterior(kind: InteriorKind, seed: string, returnTo: stri
         case 'mart':   return buildMart(seed, returnTo, 'Poke Mart');
         case 'house':  return buildHouse(seed, returnTo);
         case 'gym':    return buildGym(parseInt(seed, 10), returnTo, defeatedIds);
+        case 'camp':   return buildIncidentInterior('camp', seed, returnTo);
+        case 'shrine': return buildIncidentInterior('shrine', seed, returnTo);
+        case 'outpost': return buildIncidentInterior('outpost', seed, returnTo);
+        case 'dungeon': return buildIncidentInterior('dungeon', seed, returnTo);
+        case 'cave': return buildIncidentInterior('cave', seed, returnTo);
     }
 }
 

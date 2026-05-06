@@ -1,5 +1,5 @@
 
-import { MapZone, TrainerData, NPCData, InteractableData, Chunk } from '../types';
+import { MapZone, TrainerData, NPCData, InteractableData, Chunk, ChunkRole, RouteIncident, RouteState, RoutePreview } from '../types';
 import { getGymTeam } from '../data/gymTeams';
 import { interiorPortal, gymPortal } from './interiors';
 
@@ -701,6 +701,23 @@ interface RouteTrainerPlacement {
     teamSize: number;
 }
 
+interface RouteTrainerSpawnPolicy {
+    earlyBand: boolean;
+    forceSpawn: boolean;
+    allowDuo: boolean;
+    allowTierRamp: boolean;
+}
+
+const getRouteTrainerSpawnPolicy = (dist: number): RouteTrainerSpawnPolicy => {
+    const earlyBand = dist <= 8;
+    return {
+        earlyBand,
+        forceSpawn: earlyBand,
+        allowDuo: !earlyBand && dist > 5,
+        allowTierRamp: !earlyBand,
+    };
+};
+
 export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTrainerPlacement[] => {
     const dist = Math.sqrt(cx * cx + cy * cy);
     if (dist < 1) return []; // keep origin chunk trainer-free, allow nearby routes
@@ -712,11 +729,12 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     // balancing refactor the normal spawn chance (~12%) was too sparse, so
     // players could walk several startup chunks without seeing a single
     // trainer. Force one route trainer in the near-spawn ring.
-    const isEarlyRouteBand = dist <= 3.5;
-    if (!isEarlyRouteBand) {
+    const spawnPolicy = getRouteTrainerSpawnPolicy(dist);
+    if (!spawnPolicy.forceSpawn) {
         const spawnRoll = hash4(cx, cy, 1111, 0);
-        // ~12% spawn rate, gently scales up to ~18% in late-game distance.
-        const spawnChance = 0.12 + Math.min(0.06, dist / 800);
+        // Keep routes visibly populated with trainers, especially during
+        // early/mid live playtests where "empty roads" feels broken.
+        const spawnChance = 0.18 + Math.min(0.06, dist / 500);
         if (spawnRoll >= spawnChance) return [];
     }
 
@@ -731,7 +749,7 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     const tierRoll = hash4(cx, cy, 4444, 0);
     let tierIndex: 0 | 1 | 2 = 0;
     let tier: 'rookie' | 'veteran' | 'ace' = 'rookie';
-    if (!isEarlyRouteBand) {
+    if (spawnPolicy.allowTierRamp) {
         if (dist > 10 && tierRoll > 0.65)      { tierIndex = 1; tier = 'veteran'; }
         if (dist > 25 && tierRoll > 0.90)      { tierIndex = 2; tier = 'ace'; }
         else if (dist > 15 && tierRoll > 0.80) { tierIndex = 1; tier = 'veteran'; }
@@ -773,7 +791,7 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     // They draw independently so you can absolutely run into a Fisherman
     // standing near a Swimmer -- feels organic.
     const duoRoll = hash4(cx, cy, 6666, 0);
-    if (!isEarlyRouteBand && duoRoll < 0.20 && dist > 5) {
+    if (spawnPolicy.allowDuo && duoRoll < 0.20) {
         const aIdx2 = Math.floor(hash4(cx, cy, 7777, 0) * archetypes.length);
         const arch2 = archetypes[aIdx2];
         const nameIdx2 = Math.floor(hash4(cx, cy, 8888, 0) * arch2.namePool.length);
@@ -990,6 +1008,704 @@ export const getBiomeAt = (cx: number, cy: number): string => {
     return moistVal > 0.7 ? 'cave' : 'forest';
 };
 
+const CHUNK_ROLE_WEIGHTS: Record<ChunkRole, number> = {
+    breather: 0.64,
+    temptation: 0.95,
+    obstacle: 0.82,
+    threat: 1.32,
+    mystery: 0.88,
+    consequence: 1.1,
+    setpiece: 0.72,
+};
+
+type RouteCadencePreset = 'tutorial' | 'standard' | 'dangerous' | 'mystery' | 'faction_war' | 'high_variance';
+
+const BIOME_FAMILY_WEIGHTS: Record<string, Record<string, number>> = {
+    forest: { pokemon_ecology: 1.45, mystery: 1.25, environment: 1.08, human_trouble: 0.9, faction: 0.85, rival: 0.82, companion: 0.9, poi: 1.0, economy: 0.82, setpiece: 0.75 },
+    mountain: { pokemon_ecology: 0.95, mystery: 1.0, environment: 1.45, human_trouble: 0.9, faction: 1.15, rival: 0.95, companion: 0.85, poi: 1.0, economy: 0.8, setpiece: 0.9 },
+    swamp: { pokemon_ecology: 1.0, mystery: 1.4, environment: 1.35, human_trouble: 0.9, faction: 0.95, rival: 0.8, companion: 0.9, poi: 1.0, economy: 0.7, setpiece: 0.9 },
+    desert: { pokemon_ecology: 0.9, mystery: 1.0, environment: 1.35, human_trouble: 0.9, faction: 0.85, rival: 0.9, companion: 0.8, poi: 1.25, economy: 0.85, setpiece: 0.9 },
+    coast: { pokemon_ecology: 1.0, mystery: 1.0, environment: 1.35, human_trouble: 1.1, faction: 1.0, rival: 0.9, companion: 0.95, poi: 1.0, economy: 1.1, setpiece: 0.85 },
+    urban: { pokemon_ecology: 0.6, mystery: 0.95, environment: 0.85, human_trouble: 1.45, faction: 1.3, rival: 1.05, companion: 1.0, poi: 0.9, economy: 1.3, setpiece: 0.75 },
+    haunted: { pokemon_ecology: 0.85, mystery: 1.6, environment: 1.0, human_trouble: 0.75, faction: 0.9, rival: 0.9, companion: 0.7, poi: 1.2, economy: 0.6, setpiece: 1.05 },
+    town: { pokemon_ecology: 0.75, mystery: 0.82, environment: 0.95, human_trouble: 1.12, faction: 1.1, rival: 0.85, companion: 1.25, poi: 0.95, economy: 1.2, setpiece: 0.55 },
+    lake: { pokemon_ecology: 1.2, mystery: 1.0, environment: 1.15, human_trouble: 0.9, faction: 0.9, rival: 0.8, companion: 0.95, poi: 1.0, economy: 0.8, setpiece: 0.8 },
+    canyon: { pokemon_ecology: 1.0, mystery: 0.95, environment: 1.3, human_trouble: 0.95, faction: 1.1, rival: 0.95, companion: 0.85, poi: 1.0, economy: 0.8, setpiece: 0.85 },
+    snow: { pokemon_ecology: 1.05, mystery: 1.05, environment: 1.25, human_trouble: 0.85, faction: 0.9, rival: 0.85, companion: 0.9, poi: 0.95, economy: 0.75, setpiece: 0.8 },
+    cave: { pokemon_ecology: 0.95, mystery: 1.15, environment: 1.2, human_trouble: 0.8, faction: 0.9, rival: 0.8, companion: 0.85, poi: 1.2, economy: 0.7, setpiece: 0.9 },
+};
+
+const getFamilyWeight = (biome: string, family: string): number => {
+    const row = BIOME_FAMILY_WEIGHTS[biome] || BIOME_FAMILY_WEIGHTS.forest;
+    return row[family] ?? 1;
+};
+
+const classifyEchoPriority = (incidentId: string): 'high' | 'medium' | 'low' => {
+    if (/rescued|merchant|poacher|rival|shrine|bridge|alpha|ambush/.test(incidentId)) return 'high';
+    if (/patrol|checkpoint|contract|guild|ownership|fog|courier/.test(incidentId)) return 'medium';
+    return 'low';
+};
+
+const getCadencePreset = (rs: RouteState, biome: string, cx: number, cy: number): RouteCadencePreset => {
+    const ownership = rs.routeOwnershipByRegion[`${Math.floor(cx / 5)},${Math.floor(cy / 5)}`] || 'neutral';
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    if (dist <= 12) return 'tutorial';
+    if (ownership === 'poacher_controlled' || ownership === 'rival_influenced') return 'dangerous';
+    if (ownership === 'cursed' || biome === 'haunted') return 'mystery';
+    if (ownership === 'trainer_guild') return 'faction_war';
+    if (rs.routeCuriosity >= 7 && rs.routeTension >= 6) return 'high_variance';
+    return 'standard';
+};
+
+const normalizeRouteStateLocal = (routeState?: RouteState): RouteState => ({
+    routeTension: routeState?.routeTension ?? 0,
+    routeCuriosity: routeState?.routeCuriosity ?? 0,
+    routeFlags: routeState?.routeFlags ?? [],
+    factionReputation: routeState?.factionReputation ?? {},
+    chunkMemoryStates: routeState?.chunkMemoryStates ?? {},
+    routeIntel: routeState?.routeIntel ?? 0,
+    routeControl: routeState?.routeControl ?? 0,
+    activeRouteArcs: routeState?.activeRouteArcs ?? [],
+    completedRouteArcs: routeState?.completedRouteArcs ?? [],
+    failedRouteArcs: routeState?.failedRouteArcs ?? [],
+    recentIncidentIds: routeState?.recentIncidentIds ?? [],
+    recentChunkRoles: routeState?.recentChunkRoles ?? [],
+    routeStability: routeState?.routeStability ?? 5,
+    queuedEchoes: routeState?.queuedEchoes ?? [],
+    pacing: routeState?.pacing ?? {
+        desiredIntensity: 'normal',
+        recentDangerCount: 0,
+        recentRewardCount: 0,
+        recentMysteryCount: 0,
+        recentBattleIncidentCount: 0,
+        chunksSinceMajorIncident: 0,
+        chunksSinceBreather: 0,
+        forceBreatherSoon: false,
+        forcePayoffSoon: false,
+    },
+    routeOwnershipByRegion: routeState?.routeOwnershipByRegion ?? {},
+    activeCompanions: routeState?.activeCompanions ?? [],
+    activeContracts: routeState?.activeContracts ?? [],
+    completedContracts: routeState?.completedContracts ?? [],
+    failedContracts: routeState?.failedContracts ?? [],
+});
+
+const ROUTE_INCIDENTS_RAW: any[] = [
+    {
+        id: 'forest_broken_bridge',
+        title: 'Broken Timber Span',
+        biomeTags: ['forest'],
+        chunkRoles: ['obstacle', 'consequence'],
+        rarity: 0.95,
+        signalText: ['A creek bridge has collapsed.', 'A courier waves frantically from the far side.'],
+        choices: [
+            { id: 'repair', label: 'Repair bridge', hint: 'Collect challenge', outcome: { narrative: ['You gather timber and lash a stable crossing.'], challengeType: 'collect', challengeTarget: 'timber_bundle', rewards: { routeIntel: 1, safeCampUnlock: true, futureDiscountPct: 8 }, addFlags: ['bridgeRepaired'], setRouteFlags: ['bridgeRepaired'], tensionDelta: -1 } },
+            { id: 'ignore', label: 'Leave it', outcome: { narrative: ['You move on and leave the crossing broken.'], addFlags: ['ignoredDistressCall'], setRouteFlags: ['ignoredDistressCall'], tensionDelta: 1 } },
+        ],
+    },
+    { id: 'forest_poacher_track', title: 'Poacher Tracks', biomeTags: ['forest'], chunkRoles: ['threat', 'mystery'], rarity: 0.82, signalText: ['Bootprints and cage marks cut through the path.'], choices: [ { id: 'ambush', label: 'Track and confront', hint: 'Battle challenge', outcome: { narrative: ['You intercept poachers before they vanish into brush.'], challengeType: 'battle', challengeTarget: 'poacher_cell', rewards: { factionReputation: { rangers: 1 }, craftingMaterials: 2 }, addFlags: ['angeredPoachers'], setRouteFlags: ['angeredPoachers'], tensionDelta: 1 } }, { id: 'rescue', label: 'Free trapped wilds first', hint: 'Explore challenge', outcome: { narrative: ['You pry open cages and release injured wild Pokemon.'], challengeType: 'explore', challengeTarget: 'rescue_site', rewards: { factionReputation: { rangers: 2 }, routeIntel: 1, companionBuff: 'Wild allies mark safer brush routes.' }, addFlags: ['rescuedWildPokemon'], setRouteFlags: ['rescuedWildPokemon'], curiosityDelta: 1, tensionDelta: -1 } } ] },
+    { id: 'forest_shrine_hum', title: 'Humming Shrine', biomeTags: ['forest'], chunkRoles: ['mystery', 'setpiece'], rarity: 0.62, signalText: ['A vine-covered shrine resonates with low tones.'], choices: [ { id: 'attune', label: 'Attune to shrine', hint: 'Type trial', outcome: { narrative: ['The shrine responds to your team alignment.'], challengeType: 'type_trial', challengeTarget: 'nature_trial', challengeRequiredType: 'grass', rewards: { rareEncounterAccess: 'grove_rare_pool', moveTutorAccess: 'forest_attunement' }, addFlags: ['shrineActivated'], setRouteFlags: ['shrineActivated'], curiosityDelta: 2 } }, { id: 'catalog', label: 'Take notes only', outcome: { narrative: ['You map runes without disturbing the seal.'], rewards: { routeIntel: 2, mapRevealRadius: 1 }, curiosityDelta: 1 } } ] },
+    { id: 'forest_merchant_convoy', title: 'Merchant Convoy', biomeTags: ['forest', 'town'], chunkRoles: ['temptation', 'consequence'], rarity: 0.92, signalText: ['A stalled wagon blocks the road.', 'Guards ask for help securing cargo.'], choices: [ { id: 'escort', label: 'Escort convoy', hint: 'Stealth challenge', outcome: { narrative: ['You move supply crates past prowling thieves.'], challengeType: 'stealth', challengeTarget: 'cargo_run', rewards: { factionReputation: { merchants: 2 }, futureDiscountPct: 12, routeControl: 1 }, addFlags: ['helpedMerchant'], setRouteFlags: ['helpedMerchant'], tensionDelta: -1 } }, { id: 'tax', label: 'Demand payment upfront', outcome: { narrative: ['You take coin, but word spreads about your methods.'], rewards: { money: 350 }, penalties: { tensionDelta: 1 }, addFlags: ['factionAlerted'], setRouteFlags: ['factionAlerted'] } } ] },
+    { id: 'lake_fog_signal', title: 'Signal Through Fog', biomeTags: ['lake'], chunkRoles: ['mystery', 'obstacle'], rarity: 0.78, signalText: ['Lantern flashes blink from a misty pier.'], choices: [ { id: 'sprint', label: 'Race to pier', hint: 'Speed challenge', outcome: { narrative: ['You sprint over slick boards before fog closes in.'], challengeType: 'speed', challengeTarget: 'fog_pier', challengeTimeLimit: 15, rewards: { mapRevealRadius: 1, routeIntel: 1 }, curiosityDelta: 1 } }, { id: 'wait', label: 'Wait and observe', outcome: { narrative: ['By waiting, you spot hidden whirlpools and safe paths.'], rewards: { routeIntel: 2, safeCampUnlock: true }, tensionDelta: -1 } } ] },
+    { id: 'lake_alpha_wake', title: 'Alpha Wake', biomeTags: ['lake'], chunkRoles: ['threat', 'setpiece'], rarity: 0.66, signalText: ['A huge wake tears across still water.'], choices: [ { id: 'lure', label: 'Lure the alpha out', hint: 'Battle challenge', outcome: { narrative: ['You bait the apex Pokemon into open water combat.'], challengeType: 'battle', challengeTarget: 'alpha_wake', challengeRewardPokemonId: 130, challengeRewardLevel: 18, rewards: { rareEncounterAccess: 'alpha_lake_window', companionBuff: 'Team morale rises after big-game hunt.' }, addFlags: ['alphaPokemonAwake'], setRouteFlags: ['alphaPokemonAwake'], tensionDelta: 2 } }, { id: 'mark', label: 'Mark and bypass', outcome: { narrative: ['You mark the wake pattern for future anglers.'], rewards: { routeIntel: 2, factionReputation: { anglers: 1 } }, curiosityDelta: 1 } } ] },
+    { id: 'desert_dust_ambush', title: 'Dustline Ambush', biomeTags: ['desert'], chunkRoles: ['threat', 'obstacle'], rarity: 0.74, signalText: ['Sand spirals around half-buried traps.'], choices: [ { id: 'push', label: 'Push through quickly', hint: 'Speed challenge', outcome: { narrative: ['You surge through drifting trap-lines before they reset.'], challengeType: 'speed', challengeTarget: 'dustline_break', challengeTimeLimit: 14, rewards: { shortcutUnlock: true, routeControl: 1 }, tensionDelta: 1 } }, { id: 'disarm', label: 'Disarm traps', hint: 'Collect challenge', outcome: { narrative: ['You salvage trap parts and clear passage for others.'], challengeType: 'collect', challengeTarget: 'trap_parts', rewards: { craftingMaterials: 4, factionReputation: { caravans: 2 } }, addFlags: ['routeSafehouseUnlocked'], setRouteFlags: ['routeSafehouseUnlocked'], tensionDelta: -1 } } ] },
+    { id: 'desert_mirage_shrine', title: 'Mirage Shrine', biomeTags: ['desert'], chunkRoles: ['mystery', 'setpiece'], rarity: 0.55, signalText: ['Heat haze reveals a shrine that fades in and out.'], choices: [ { id: 'stabilize', label: 'Stabilize glyphs', hint: 'Type trial', outcome: { narrative: ['The shrine locks into place under a type-aligned aura.'], challengeType: 'type_trial', challengeTarget: 'mirage_lock', challengeRequiredType: 'ground', rewards: { rareEncounterAccess: 'mirage_pool', moveTutorAccess: 'sand_ritual', mapRevealRadius: 2 }, addFlags: ['shrineActivated'], setRouteFlags: ['shrineActivated'], curiosityDelta: 2 } }, { id: 'skip', label: 'Skip unstable shrine', outcome: { narrative: ['You keep momentum and avoid mirage disorientation.'], tensionDelta: -1 } } ] },
+    { id: 'desert_caravan_distress', title: 'Caravan Distress Call', biomeTags: ['desert'], chunkRoles: ['consequence', 'obstacle'], rarity: 0.88, signalText: ['A flare pops above a stranded caravan.'], choices: [ { id: 'assist', label: 'Assist caravan', hint: 'Collect challenge', outcome: { narrative: ['You ration supplies and stabilize the caravan wheel rig.'], challengeType: 'collect', challengeTarget: 'supply_handout', rewards: { factionReputation: { caravans: 2, merchants: 1 }, futureDiscountPct: 10, safeCampUnlock: true }, addFlags: ['helpedMerchant'], setRouteFlags: ['helpedMerchant', 'routeSafehouseUnlocked'], tensionDelta: -1 } }, { id: 'scavenge', label: 'Scavenge abandoned crates', outcome: { narrative: ['You take quick salvage while guards argue.'], rewards: { money: 300, craftingMaterials: 2 }, addFlags: ['factionAlerted'], setRouteFlags: ['factionAlerted'], tensionDelta: 1 } } ] },
+    { id: 'canyon_rockfall', title: 'Rockfall Choke', biomeTags: ['canyon'], chunkRoles: ['obstacle', 'consequence'], rarity: 0.9, signalText: ['A recent rockfall blocks the main lane.'], choices: [ { id: 'clear', label: 'Clear debris', hint: 'Collect challenge', outcome: { narrative: ['You clear enough stone for a narrow route.'], challengeType: 'collect', challengeTarget: 'stone_clear', rewards: { routeControl: 1, shortcutUnlock: true, routeIntel: 1 }, addFlags: ['bridgeRepaired'], setRouteFlags: ['bridgeRepaired'], tensionDelta: -1 } }, { id: 'climb', label: 'Climb sidewall', hint: 'Stealth challenge', outcome: { narrative: ['You climb ledges above hostile patrol sightlines.'], challengeType: 'stealth', challengeTarget: 'ledge_sneak', rewards: { mapRevealRadius: 1, routeIntel: 1 }, curiosityDelta: 1 } } ] },
+    { id: 'canyon_outpost_claim', title: 'Outpost Claim', biomeTags: ['canyon'], chunkRoles: ['threat', 'consequence'], rarity: 0.7, signalText: ['Two factions argue over an abandoned outpost.'], choices: [ { id: 'mediate', label: 'Mediate dispute', hint: 'Type trial', outcome: { narrative: ['You settle rights through an honor-bound trial.'], challengeType: 'type_trial', challengeTarget: 'outpost_trial', challengeRequiredType: 'rock', rewards: { routeSafehouseUnlocked: true, factionReputation: { rangers: 1, prospectors: 1 } }, addFlags: ['routeSafehouseUnlocked'], setRouteFlags: ['routeSafehouseUnlocked'], tensionDelta: -1 } }, { id: 'take_side', label: 'Back stronger side', hint: 'Battle challenge', outcome: { narrative: ['You back one side and force a decision by battle.'], challengeType: 'battle', challengeTarget: 'outpost_duel', rewards: { money: 450, factionReputation: { prospectors: 2 } }, penalties: { addFlags: ['factionAlerted'], tensionDelta: 1 }, setRouteFlags: ['factionAlerted'] } } ] },
+    { id: 'snow_whiteout', title: 'Whiteout Ridge', biomeTags: ['snow'], chunkRoles: ['obstacle', 'threat'], rarity: 0.72, signalText: ['Wind shear reduces visibility to a few steps.'], choices: [ { id: 'dash', label: 'Dash the ridge', hint: 'Speed challenge', outcome: { narrative: ['You commit to a fast crossing before gusts worsen.'], challengeType: 'speed', challengeTarget: 'whiteout_dash', challengeTimeLimit: 13, rewards: { routeControl: 1, tempBuff: 'Cold Focus: +crit chance next battle' }, tensionDelta: 1 } }, { id: 'markers', label: 'Place trail markers', hint: 'Explore challenge', outcome: { narrative: ['You place markers and secure a reusable safe route.'], challengeType: 'explore', challengeTarget: 'marker_route', rewards: { safeCampUnlock: true, routeIntel: 2 }, addFlags: ['routeSafehouseUnlocked'], setRouteFlags: ['routeSafehouseUnlocked'], tensionDelta: -1 } } ] },
+    { id: 'snow_rescue_cub', title: 'Rescue in the Drift', biomeTags: ['snow'], chunkRoles: ['consequence', 'mystery'], rarity: 0.86, signalText: ['A faint cry echoes from an ice drift.'], choices: [ { id: 'rescue', label: 'Rescue trapped Pokemon', hint: 'Explore challenge', outcome: { narrative: ['You dig through powder and free a chilled wild Pokemon.'], challengeType: 'explore', challengeTarget: 'drift_rescue', rewards: { companionBuff: 'Rescued wild scouts ahead.', factionReputation: { rangers: 2 } }, addFlags: ['rescuedWildPokemon'], setRouteFlags: ['rescuedWildPokemon'], curiosityDelta: 1, tensionDelta: -1 } }, { id: 'track', label: 'Track predator instead', hint: 'Battle challenge', outcome: { narrative: ['You follow deep claw marks to a predatory alpha.'], challengeType: 'battle', challengeTarget: 'snow_alpha_track', rewards: { rareEncounterAccess: 'snow_alpha_window', money: 300 }, addFlags: ['alphaPokemonAwake'], setRouteFlags: ['alphaPokemonAwake'], tensionDelta: 2 } } ] },
+    { id: 'cave_echo_chamber', title: 'Echo Chamber', biomeTags: ['cave'], chunkRoles: ['mystery', 'setpiece'], rarity: 0.58, signalText: ['The cave repeats your footsteps with delayed echoes.'], choices: [ { id: 'sound_map', label: 'Map echoes', hint: 'Stealth challenge', outcome: { narrative: ['You navigate by silence and decode hidden passage beats.'], challengeType: 'stealth', challengeTarget: 'echo_route', rewards: { mapRevealRadius: 2, routeIntel: 2, shortcutUnlock: true }, curiosityDelta: 2 } }, { id: 'force_path', label: 'Force open path', hint: 'Battle challenge', outcome: { narrative: ['Noisy movement awakens territorial den guards.'], challengeType: 'battle', challengeTarget: 'echo_den_guard', rewards: { craftingMaterials: 3 }, tensionDelta: 1 } } ] },
+    { id: 'cave_fossil_ring', title: 'Fossil Ring', biomeTags: ['cave'], chunkRoles: ['temptation', 'mystery'], rarity: 0.73, signalText: ['A ring of fossil fragments circles an intact core.'], choices: [ { id: 'excavate', label: 'Excavate carefully', hint: 'Collect challenge', outcome: { narrative: ['You recover fossils and stabilize the chamber.'], challengeType: 'collect', challengeTarget: 'fossil_fragments', rewards: { craftingMaterials: 5, routeIntel: 1, money: 260 }, curiosityDelta: 1 } }, { id: 'awaken', label: 'Trigger resonance', hint: 'Type trial', outcome: { narrative: ['Resonance wakes dormant energies in the chamber.'], challengeType: 'type_trial', challengeTarget: 'fossil_resonance', challengeRequiredType: 'rock', rewards: { rareEncounterAccess: 'fossil_deep_pool', moveTutorAccess: 'fossil_art' }, addFlags: ['alphaPokemonAwake'], setRouteFlags: ['alphaPokemonAwake'], tensionDelta: 1, curiosityDelta: 1 } } ] },
+    { id: 'town_rival_notice', title: 'Rival Notice Board', biomeTags: ['town'], chunkRoles: ['threat', 'consequence'], rarity: 0.82, signalText: ['A rival leaves a marked challenge card at the crossroads.'], choices: [ { id: 'chase', label: 'Chase rival now', hint: 'Battle challenge', outcome: { narrative: ['You catch the rival before they slip to side roads.'], challengeType: 'battle', challengeTarget: 'rival_ahead', rewards: { routeControl: 1, factionReputation: { scouts: 1 } }, addFlags: ['rivalAhead'], setRouteFlags: ['rivalAhead'], tensionDelta: 1 } }, { id: 'prepare', label: 'Prepare and gather intel', hint: 'Explore challenge', outcome: { narrative: ['You gather notes on their route and battle habits.'], challengeType: 'explore', challengeTarget: 'rival_intel', rewards: { routeIntel: 2, tempBuff: 'Prepared: +defense in next rival battle' }, curiosityDelta: 1 } } ] },
+    { id: 'town_faction_checkpoint', title: 'Faction Checkpoint', biomeTags: ['town', 'forest', 'canyon'], chunkRoles: ['temptation', 'consequence'], rarity: 0.84, signalText: ['A checkpoint requests your allegiance for route support.'], choices: [ { id: 'rangers', label: 'Back Rangers', outcome: { narrative: ['Rangers post safety markers along your mapped lanes.'], rewards: { factionReputation: { rangers: 2 }, safeCampUnlock: true, routeControl: 1 }, setRouteFlags: ['routeSafehouseUnlocked'], tensionDelta: -1 } }, { id: 'merchants', label: 'Back Merchants', outcome: { narrative: ['Merchants issue route vouchers and better prices.'], rewards: { factionReputation: { merchants: 2 }, futureDiscountPct: 10, money: 200 }, setRouteFlags: ['helpedMerchant'] } } ] },
+    { id: 'forest_distress_flare', title: 'Distress Flare', biomeTags: ['forest', 'canyon'], chunkRoles: ['consequence', 'threat'], rarity: 0.9, signalText: ['A red flare burns above the canopy.'], choices: [ { id: 'respond', label: 'Respond to call', hint: 'Battle challenge', outcome: { narrative: ['You defend a field team under attack.'], challengeType: 'battle', challengeTarget: 'distress_response', rewards: { factionReputation: { scouts: 2 }, routeIntel: 1, safeCampUnlock: true }, addFlags: ['helpedMerchant'], setRouteFlags: ['helpedMerchant'], tensionDelta: -1 } }, { id: 'ignore', label: 'Keep to objective', outcome: { narrative: ['You stay on route, but the flare fades unanswered.'], addFlags: ['ignoredDistressCall'], setRouteFlags: ['ignoredDistressCall'], tensionDelta: 1 } } ] },
+    { id: 'lake_hidden_camp', title: 'Hidden Safe Camp', biomeTags: ['lake', 'forest', 'snow'], chunkRoles: ['breather', 'mystery'], rarity: 0.68, signalText: ['Faint smoke rises from a sheltered hollow.'], choices: [ { id: 'unlock', label: 'Secure safe camp', hint: 'Collect challenge', outcome: { narrative: ['You stock and secure the camp for future runs.'], challengeType: 'collect', challengeTarget: 'camp_stock', rewards: { safeCampUnlock: true, routeControl: 1, routeIntel: 1 }, addFlags: ['routeSafehouseUnlocked'], setRouteFlags: ['routeSafehouseUnlocked'], tensionDelta: -2 } }, { id: 'stash', label: 'Use as temporary stash', outcome: { narrative: ['You rest briefly and note supply routes nearby.'], rewards: { tempBuff: 'Rested: +speed in next encounter', routeIntel: 1 }, tensionDelta: -1 } } ] },
+    { id: 'desert_tutor_caravan', title: 'Tutor Caravan', biomeTags: ['desert', 'town', 'canyon'], chunkRoles: ['temptation', 'breather'], rarity: 0.77, signalText: ['A moving caravan advertises battlefield lessons.'], choices: [ { id: 'trial', label: 'Take skill trial', hint: 'Type trial', outcome: { narrative: ['You pass a focused combat drill.'], challengeType: 'type_trial', challengeTarget: 'tutor_trial', challengeRequiredType: 'fighting', rewards: { moveTutorAccess: 'caravan_tutor', companionBuff: 'Party confidence rises.' }, curiosityDelta: 1 } }, { id: 'sponsor', label: 'Sponsor caravan route', hint: 'Collect challenge', outcome: { narrative: ['You donate supplies and gain long-term route perks.'], challengeType: 'collect', challengeTarget: 'caravan_supply', rewards: { futureDiscountPct: 12, factionReputation: { merchants: 2 }, routeControl: 1 }, setRouteFlags: ['helpedMerchant'] } } ] },
+];
+
+const INCIDENT_FAMILY_FALLBACK = (id: string): any => {
+    if (/rival|shortcut|note|alliance/.test(id)) return 'rival';
+    if (/merchant|caravan|trader|economy|contractor/.test(id)) return 'economy';
+    if (/poacher|ranger|faction|guild/.test(id)) return 'faction';
+    if (/shrine|mystery|glow|silent|mirage|haunted|footprint|statue/.test(id)) return 'mystery';
+    if (/bridge|fog|storm|rock|flood|tunnel|slide|collapse/.test(id)) return 'environment';
+    if (/alpha|nest|wild|hatchling|honey|migration|predator|territory/.test(id)) return 'pokemon_ecology';
+    if (/camp|courier|checkpoint|healer|researcher/.test(id)) return 'human_trouble';
+    return 'poi';
+};
+
+const REQUIRED_INCIDENT_LIBRARY: Array<{ id: string; title: string; family: any; biomeTags: any[]; chunkRoles: ChunkRole[]; arcId?: string }> = [
+    { id: 'migration_crossing', title: 'Migration Crossing', family: 'pokemon_ecology', biomeTags: ['forest', 'coast'], chunkRoles: ['obstacle', 'mystery'] },
+    { id: 'injured_wild_pokemon', title: 'Injured Wild Pokemon', family: 'pokemon_ecology', biomeTags: ['forest', 'snow'], chunkRoles: ['consequence', 'mystery'], arcId: 'wounded-pokemon-arc' },
+    { id: 'territory_dispute', title: 'Territory Dispute', family: 'pokemon_ecology', biomeTags: ['forest', 'canyon'], chunkRoles: ['threat', 'consequence'] },
+    { id: 'nest_defense', title: 'Nest Defense', family: 'pokemon_ecology', biomeTags: ['forest', 'swamp'], chunkRoles: ['threat', 'mystery'] },
+    { id: 'alpha_tracks', title: 'Alpha Tracks', family: 'pokemon_ecology', biomeTags: ['forest', 'canyon', 'snow'], chunkRoles: ['threat', 'mystery'], arcId: 'alpha-territory-arc' },
+    { id: 'honey_tree_swarm', title: 'Honey Tree Swarm', family: 'pokemon_ecology', biomeTags: ['forest'], chunkRoles: ['temptation', 'setpiece'] },
+    { id: 'pokemon_playing_road', title: 'Pokemon Playing in Road', family: 'pokemon_ecology', biomeTags: ['forest', 'town'], chunkRoles: ['breather', 'temptation'] },
+    { id: 'predator_silence', title: 'Predator Silence', family: 'pokemon_ecology', biomeTags: ['forest', 'haunted'], chunkRoles: ['mystery', 'threat'] },
+    { id: 'lost_hatchling', title: 'Lost Hatchling', family: 'pokemon_ecology', biomeTags: ['forest', 'coast'], chunkRoles: ['consequence', 'mystery'], arcId: 'lost-hatchling-arc' },
+    { id: 'rare_cry_distance', title: 'Rare Cry in Distance', family: 'pokemon_ecology', biomeTags: ['forest', 'mountain'], chunkRoles: ['mystery', 'temptation'] },
+    { id: 'broken_bridge_named', title: 'Broken Bridge', family: 'environment', biomeTags: ['forest', 'canyon', 'coast'], chunkRoles: ['obstacle', 'consequence'], arcId: 'bridge-repair-arc' },
+    { id: 'flooded_crossing', title: 'Flooded Crossing', family: 'environment', biomeTags: ['coast', 'swamp', 'lake'], chunkRoles: ['obstacle', 'threat'] },
+    { id: 'rockslide', title: 'Rockslide', family: 'environment', biomeTags: ['mountain', 'canyon'], chunkRoles: ['obstacle', 'threat'] },
+    { id: 'thick_fog_named', title: 'Thick Fog', family: 'environment', biomeTags: ['swamp', 'coast', 'haunted'], chunkRoles: ['mystery', 'obstacle'], arcId: 'haunted-fog-path-arc' },
+    { id: 'sudden_storm', title: 'Sudden Storm', family: 'environment', biomeTags: ['coast', 'desert'], chunkRoles: ['threat', 'setpiece'] },
+    { id: 'poisoned_spring', title: 'Poisoned Spring', family: 'environment', biomeTags: ['swamp', 'forest'], chunkRoles: ['consequence', 'mystery'] },
+    { id: 'burning_grassline', title: 'Burning Grassline', family: 'environment', biomeTags: ['desert', 'canyon'], chunkRoles: ['threat', 'setpiece'] },
+    { id: 'collapsed_tunnel', title: 'Collapsed Tunnel', family: 'environment', biomeTags: ['mountain', 'cave'], chunkRoles: ['obstacle', 'consequence'] },
+    { id: 'overturned_merchant_cart', title: 'Overturned Merchant Cart', family: 'human_trouble', biomeTags: ['forest', 'town', 'coast'], chunkRoles: ['consequence', 'temptation'], arcId: 'merchant-caravan-arc' },
+    { id: 'trainer_campfire_named', title: 'Trainer Campfire', family: 'human_trouble', biomeTags: ['forest', 'mountain', 'coast'], chunkRoles: ['breather', 'consequence'], arcId: 'safe-camp-arc' },
+    { id: 'poacher_trap_named', title: 'Poacher Trap', family: 'human_trouble', biomeTags: ['forest', 'swamp'], chunkRoles: ['threat', 'consequence'], arcId: 'poacher-trail-arc' },
+    { id: 'toll_checkpoint', title: 'Toll Checkpoint', family: 'human_trouble', biomeTags: ['urban', 'canyon', 'town'], chunkRoles: ['obstacle', 'temptation'] },
+    { id: 'lost_courier', title: 'Lost Courier', family: 'human_trouble', biomeTags: ['forest', 'desert'], chunkRoles: ['consequence', 'mystery'], arcId: 'lost-trainer-rescue-arc' },
+    { id: 'false_healer', title: 'False Healer', family: 'human_trouble', biomeTags: ['swamp', 'haunted', 'urban'], chunkRoles: ['mystery', 'threat'] },
+    { id: 'researcher_field_test', title: 'Researcher Field Test', family: 'human_trouble', biomeTags: ['forest', 'mountain', 'urban'], chunkRoles: ['temptation', 'mystery'] },
+    { id: 'rival_fanclub_witness', title: 'Rival Fan Club / Rival Witness', family: 'human_trouble', biomeTags: ['town', 'urban'], chunkRoles: ['consequence', 'mystery'] },
+    { id: 'glowing_footprints', title: 'Glowing Footprints', family: 'mystery', biomeTags: ['forest', 'haunted', 'swamp'], chunkRoles: ['mystery', 'setpiece'], arcId: 'glowing-footprints-arc' },
+    { id: 'abandoned_campsite_named', title: 'Abandoned Campsite', family: 'mystery', biomeTags: ['forest', 'mountain', 'coast'], chunkRoles: ['mystery', 'consequence'] },
+    { id: 'ancient_shrine_named', title: 'Ancient Shrine', family: 'mystery', biomeTags: ['forest', 'desert', 'haunted'], chunkRoles: ['setpiece', 'mystery'], arcId: 'shrine-awakening-arc' },
+    { id: 'silent_grove', title: 'Silent Grove', family: 'mystery', biomeTags: ['forest', 'haunted'], chunkRoles: ['mystery', 'breather'] },
+    { id: 'moving_statue', title: 'Moving Statue', family: 'mystery', biomeTags: ['desert', 'haunted'], chunkRoles: ['mystery', 'setpiece'] },
+    { id: 'mirage_item', title: 'Mirage Item', family: 'mystery', biomeTags: ['desert', 'coast'], chunkRoles: ['temptation', 'mystery'] },
+    { id: 'rival_note', title: 'Rival Note', family: 'rival', biomeTags: ['town', 'forest'], chunkRoles: ['consequence', 'mystery'] },
+    { id: 'rival_shortcut', title: 'Rival Shortcut', family: 'rival', biomeTags: ['forest', 'canyon', 'mountain'], chunkRoles: ['consequence', 'threat'], arcId: 'rival-shortcut-race-arc' },
+    { id: 'rival_already_won', title: 'Rival Cleared the Route', family: 'rival', biomeTags: ['town', 'urban', 'coast'], chunkRoles: ['consequence', 'breather'] },
+    { id: 'temporary_rival_alliance', title: 'Temporary Rival Alliance', family: 'rival', biomeTags: ['forest', 'haunted'], chunkRoles: ['setpiece', 'consequence'] },
+    { id: 'ranger_patrol', title: 'Ranger Patrol', family: 'faction', biomeTags: ['forest', 'swamp'], chunkRoles: ['consequence', 'obstacle'] },
+    { id: 'poacher_ambush', title: 'Poacher Ambush', family: 'faction', biomeTags: ['forest', 'swamp', 'canyon'], chunkRoles: ['threat', 'setpiece'] },
+    { id: 'merchant_caravan_named', title: 'Merchant Caravan', family: 'faction', biomeTags: ['town', 'coast', 'desert'], chunkRoles: ['temptation', 'consequence'] },
+    { id: 'trainer_guild_trial', title: 'Trainer Guild Trial', family: 'faction', biomeTags: ['town', 'urban', 'mountain'], chunkRoles: ['obstacle', 'setpiece'] },
+    { id: 'bridge_storm_battle', title: 'Bridge Storm Battle', family: 'setpiece', biomeTags: ['coast', 'forest'], chunkRoles: ['setpiece', 'threat'] },
+    { id: 'swarm_stampede', title: 'Swarm Stampede', family: 'setpiece', biomeTags: ['forest', 'swamp'], chunkRoles: ['setpiece', 'threat'] },
+    { id: 'cave_collapse_escape', title: 'Cave Collapse Escape', family: 'setpiece', biomeTags: ['cave', 'mountain'], chunkRoles: ['setpiece', 'obstacle'] },
+    { id: 'camp_raid', title: 'Camp Raid', family: 'setpiece', biomeTags: ['forest', 'canyon'], chunkRoles: ['setpiece', 'consequence'] },
+    { id: 'shrine_awakening_named', title: 'Shrine Awakening', family: 'setpiece', biomeTags: ['forest', 'haunted'], chunkRoles: ['setpiece', 'mystery'] },
+    { id: 'alpha_roadblock', title: 'Alpha Pokemon Roadblock', family: 'setpiece', biomeTags: ['forest', 'mountain', 'snow'], chunkRoles: ['setpiece', 'threat'] },
+    { id: 'traveling_move_hermit', title: 'Traveling Move Hermit', family: 'economy', biomeTags: ['mountain', 'forest'], chunkRoles: ['breather', 'temptation'] },
+    { id: 'black_market_trader', title: 'Black-Market Trader', family: 'economy', biomeTags: ['urban', 'swamp', 'haunted'], chunkRoles: ['temptation', 'threat'] },
+    { id: 'map_scout', title: 'Map Scout', family: 'companion', biomeTags: ['forest', 'town', 'mountain'], chunkRoles: ['breather', 'mystery'] },
+    { id: 'weather_watcher', title: 'Weather Watcher', family: 'companion', biomeTags: ['coast', 'desert', 'mountain'], chunkRoles: ['breather', 'obstacle'] },
+    { id: 'berry_specialist', title: 'Berry Specialist', family: 'economy', biomeTags: ['forest', 'swamp'], chunkRoles: ['breather', 'temptation'] },
+    { id: 'route_contractor', title: 'Route Contractor', family: 'companion', biomeTags: ['town', 'urban', 'canyon'], chunkRoles: ['consequence', 'obstacle'] },
+];
+
+const buildTemplateIncident = (seed: { id: string; title: string; family: any; biomeTags: any[]; chunkRoles: ChunkRole[]; arcId?: string }): RouteIncident => ({
+    id: seed.id,
+    title: seed.title,
+    family: seed.family,
+    biomeTags: seed.biomeTags,
+    chunkRoles: seed.chunkRoles,
+    rarity: 0.72,
+    signalText: [
+        `${seed.title} detected ahead.`,
+        'Risk: possible ambush / faction reaction / route tension shift.',
+        'Opportunity: intel, route control, companion support, or future discounts.',
+    ],
+    choices: [
+        {
+            id: 'main',
+            label: 'Handle directly',
+            hint: 'Balanced approach',
+            outcome: {
+                narrative: ['You engage the situation head-on and stabilize the route.'],
+                challengeType: 'explore',
+                challengeTarget: `${seed.id}_resolve`,
+                rewards: { routeIntel: 1, routeControl: 1 },
+                tensionDelta: -1,
+                curiosityDelta: 1,
+                startRouteArcId: seed.arcId,
+            },
+        },
+        {
+            id: 'risky',
+            label: 'Push for bigger gain',
+            hint: 'Higher risk / higher reward',
+            outcome: {
+                narrative: ['You take the risky line and trigger a volatile response.'],
+                challengeType: 'battle',
+                challengeTarget: `${seed.id}_clash`,
+                rewards: { money: 350, craftingMaterials: 2, routeIntel: 1 },
+                penalties: { tensionDelta: 1 },
+                queueEchoIncidentId: 'poacher_ambush',
+                echoDelayChunks: 2,
+                startRouteArcId: seed.arcId,
+            },
+        },
+        {
+            id: 'cautious',
+            label: 'Play it safe',
+            hint: 'Lower pressure, slower payoff',
+            outcome: {
+                narrative: ['You keep the route stable and avoid escalation.'],
+                challengeType: 'collect',
+                challengeTarget: `${seed.id}_stabilize`,
+                rewards: { routeIntel: 1, safeCampUnlock: true },
+                tensionDelta: -1,
+                startRouteArcId: seed.arcId,
+            },
+        },
+    ],
+    followUp: seed.arcId ? {
+        arcId: seed.arcId,
+        possibleNextIncidentIds: [seed.id, 'rival_note', 'ranger_patrol'],
+        echoChance: 0.55,
+        minChunksLater: 2,
+        maxChunksLater: 4,
+        failureFlagIfIgnored: `ignored_${seed.id}`,
+    } : undefined,
+});
+
+const ROUTE_INCIDENTS_BASE: RouteIncident[] = [
+    ...(ROUTE_INCIDENTS_RAW as any[]).map((it) => ({ family: it.family || INCIDENT_FAMILY_FALLBACK(it.id), ...it })),
+    ...REQUIRED_INCIDENT_LIBRARY.map(buildTemplateIncident),
+];
+
+const ROUTE_ARC_LIBRARY = [
+    { id: 'wounded-pokemon-arc', payoffIncidentId: 'predator_silence' },
+    { id: 'merchant-caravan-arc', payoffIncidentId: 'merchant_caravan_named' },
+    { id: 'bridge-repair-arc', payoffIncidentId: 'bridge_storm_battle' },
+    { id: 'glowing-footprints-arc', payoffIncidentId: 'ancient_shrine_named' },
+    { id: 'poacher-trail-arc', payoffIncidentId: 'poacher_ambush' },
+    { id: 'rival-shortcut-race-arc', payoffIncidentId: 'rival_shortcut' },
+    { id: 'safe-camp-arc', payoffIncidentId: 'lake_hidden_camp' },
+    { id: 'haunted-fog-path-arc', payoffIncidentId: 'moving_statue' },
+    { id: 'alpha-territory-arc', payoffIncidentId: 'alpha_roadblock' },
+    { id: 'shrine-awakening-arc', payoffIncidentId: 'shrine_awakening_named' },
+    { id: 'lost-trainer-rescue-arc', payoffIncidentId: 'lost_courier' },
+    { id: 'lost-hatchling-arc', payoffIncidentId: 'lost_hatchling' },
+];
+
+const INCIDENT_OVERRIDES: Record<string, Partial<RouteIncident>> = {
+    injured_wild_pokemon: {
+        followUp: { arcId: 'wounded-pokemon-arc', possibleNextIncidentIds: ['predator_silence', 'poacher_ambush'], echoChance: 0.7, minChunksLater: 2, maxChunksLater: 4, failureFlagIfIgnored: 'ignored_wounded_wild' },
+        choices: [
+            { id: 'heal', label: 'Treat the wounds', hint: 'Peaceful option', outcome: { narrative: ['You treat the wild Pokemon and calm the area.'], challengeType: 'collect', challengeTarget: 'field_medicine', rewards: { routeIntel: 1, factionReputation: { rangers: 2 }, joinCompanion: { id: 'ranger_mira', name: 'Ranger Mira', role: 'ranger', expiresAfterChunks: 4, sourceIncidentId: 'injured_wild_pokemon', effects: [{ type: 'trap_warning' }, { type: 'reduce_ambush_chance', amount: 0.2 }] } as any }, addFlags: ['rescuedWildPokemon'], setRouteFlags: ['rescuedWildPokemon'], startRouteArcId: 'wounded-pokemon-arc', queueEchoIncidentId: 'predator_silence', echoDelayChunks: 2, tensionDelta: -1 } },
+            { id: 'bait', label: 'Use as bait', hint: 'Risky exploit', outcome: { narrative: ['You exploit the situation and attract predators.'], challengeType: 'battle', challengeTarget: 'predator_lure', rewards: { money: 420 }, penalties: { tensionDelta: 2 }, addFlags: ['factionAlerted'], setRouteFlags: ['factionAlerted'], queueEchoIncidentId: 'alpha_roadblock', echoDelayChunks: 3, failRouteArcId: 'wounded-pokemon-arc' } },
+            { id: 'ignore', label: 'Walk past', hint: 'Risk: future hostility', outcome: { narrative: ['You leave it. The route feels less forgiving.'], addFlags: ['ignoredDistressCall'], setRouteFlags: ['ignoredDistressCall'], queueEchoIncidentId: 'poacher_ambush', echoDelayChunks: 2, failRouteArcId: 'wounded-pokemon-arc', tensionDelta: 1 } },
+        ] as any,
+    },
+    overturned_merchant_cart: {
+        followUp: { arcId: 'merchant-caravan-arc', possibleNextIncidentIds: ['merchant_caravan_named', 'poacher_ambush'], echoChance: 0.6, minChunksLater: 2, maxChunksLater: 5, failureFlagIfIgnored: 'merchant_cart_ignored' },
+    },
+    broken_bridge_named: {
+        followUp: { arcId: 'bridge-repair-arc', possibleNextIncidentIds: ['merchant_caravan_named', 'bridge_storm_battle'], echoChance: 0.7, minChunksLater: 2, maxChunksLater: 4, failureFlagIfIgnored: 'bridge_ignored' },
+    },
+    glowing_footprints: {
+        followUp: { arcId: 'glowing-footprints-arc', possibleNextIncidentIds: ['ancient_shrine_named', 'moving_statue'], echoChance: 0.7, minChunksLater: 2, maxChunksLater: 4, failureFlagIfIgnored: 'footprints_ignored' },
+    },
+    poacher_trap_named: {
+        followUp: { arcId: 'poacher-trail-arc', possibleNextIncidentIds: ['poacher_ambush', 'ranger_patrol'], echoChance: 0.75, minChunksLater: 1, maxChunksLater: 3, failureFlagIfIgnored: 'poacher_trap_ignored' },
+    },
+    rival_shortcut: {
+        followUp: { arcId: 'rival-shortcut-race-arc', possibleNextIncidentIds: ['rival_already_won', 'temporary_rival_alliance'], echoChance: 0.8, minChunksLater: 1, maxChunksLater: 3, failureFlagIfIgnored: 'rival_shortcut_ignored' },
+        choices: [
+            { id: 'race', label: 'Race the rival', hint: 'Speed challenge', outcome: { narrative: ['You sprint the hazardous shortcut side by side.'], challengeType: 'speed', challengeTarget: 'rival_race', challengeTimeLimit: 13, addFlags: ['rivalAhead', 'rivalChallengeQueued'], setRouteFlags: ['rivalAhead', 'rivalChallengeQueued'], startRouteArcId: 'rival-shortcut-race-arc', queueEchoIncidentId: 'rival_already_won', echoDelayChunks: 2, rewards: { routeControl: 1 } } },
+            { id: 'sabotage', label: 'Set a decoy route', hint: 'Risk: rivalry worsens', outcome: { narrative: ['The rival catches on and gets annoyed.'], addFlags: ['rivalAnnoyed', 'rivalTookShortcut'], setRouteFlags: ['rivalAnnoyed', 'rivalTookShortcut'], queueEchoIncidentId: 'rival_already_won', echoDelayChunks: 1, tensionDelta: 1 } },
+            { id: 'alliance', label: 'Offer temporary alliance', hint: 'Explore challenge', outcome: { narrative: ['You cooperate for one dangerous push.'], challengeType: 'explore', challengeTarget: 'rival_alliance', addFlags: ['rivalTemporaryAlliance', 'rivalRespectsPlayer'], setRouteFlags: ['rivalTemporaryAlliance', 'rivalRespectsPlayer'], queueEchoIncidentId: 'temporary_rival_alliance', echoDelayChunks: 2, rewards: { routeIntel: 1 } } },
+        ] as any,
+    },
+    rival_already_won: {
+        signalText: [
+            'The rival got here first and left fresh boot prints.',
+            'A cleared camp and scattered supplies show you just missed them.',
+        ],
+        followUp: {
+            arcId: 'rival-shortcut-race-arc',
+            possibleNextIncidentIds: ['rival_note', 'temporary_rival_alliance'],
+            echoChance: 1,
+            minChunksLater: 0,
+            maxChunksLater: 1,
+            failureFlagIfIgnored: 'rival_trail_lost',
+        },
+        choices: [
+            {
+                id: 'inspect',
+                label: 'Inspect the cleared camp',
+                hint: 'Gain route intel',
+                outcome: {
+                    narrative: ['You recover route notes and learn where the rival is headed next.'],
+                    rewards: { routeIntel: 2, routeControl: 1, money: 350 },
+                    addFlags: ['rivalAhead'],
+                    setRouteFlags: ['rivalAhead'],
+                    queueEchoIncidentId: 'rival_note',
+                    echoDelayChunks: 0,
+                    advanceRouteArcId: 'rival-shortcut-race-arc',
+                    curiosityDelta: 1,
+                },
+            },
+            {
+                id: 'chase',
+                label: 'Push to catch up',
+                hint: 'Risk: tension rises',
+                outcome: {
+                    narrative: ['You push hard to catch their trail before it fades.'],
+                    rewards: { routeIntel: 1, routeControl: 2, money: 500 },
+                    addFlags: ['rivalChallengeQueued'],
+                    setRouteFlags: ['rivalChallengeQueued'],
+                    queueEchoIncidentId: 'temporary_rival_alliance',
+                    echoDelayChunks: 0,
+                    completeRouteArcId: 'rival-shortcut-race-arc',
+                    tensionDelta: 1,
+                },
+            },
+        ] as any,
+    },
+    trainer_campfire_named: {
+        followUp: { arcId: 'safe-camp-arc', possibleNextIncidentIds: ['lake_hidden_camp'], echoChance: 0.55, minChunksLater: 2, maxChunksLater: 4, failureFlagIfIgnored: 'campfire_ignored' },
+    },
+    thick_fog_named: {
+        followUp: { arcId: 'haunted-fog-path-arc', possibleNextIncidentIds: ['moving_statue', 'silent_grove'], echoChance: 0.65, minChunksLater: 2, maxChunksLater: 4, failureFlagIfIgnored: 'fog_ignored' },
+    },
+    alpha_tracks: {
+        followUp: { arcId: 'alpha-territory-arc', possibleNextIncidentIds: ['alpha_roadblock'], echoChance: 0.85, minChunksLater: 1, maxChunksLater: 3, failureFlagIfIgnored: 'alpha_tracks_ignored' },
+    },
+    ancient_shrine_named: {
+        followUp: { arcId: 'shrine-awakening-arc', possibleNextIncidentIds: ['shrine_awakening_named', 'bridge_storm_battle'], echoChance: 0.7, minChunksLater: 2, maxChunksLater: 5, failureFlagIfIgnored: 'shrine_ignored' },
+    },
+};
+
+let ROUTE_INCIDENTS: RouteIncident[] = ROUTE_INCIDENTS_BASE.map((incident) => {
+    const over = INCIDENT_OVERRIDES[incident.id];
+    if (!over) return incident;
+    return { ...incident, ...over } as RouteIncident;
+});
+
+const ROLE_INCIDENT_BINDINGS: Record<string, { role: any; effect: any }> = {
+    map_scout: { role: 'map_scout', effect: { type: 'reveal_next_chunk_role' } },
+    weather_watcher: { role: 'weather_watcher', effect: { type: 'trap_warning' } },
+    lost_courier: { role: 'lost_trainer', effect: { type: 'increase_stealth_success', amount: 0.2 } },
+    black_market_trader: { role: 'black_market_trader', effect: { type: 'discount_shops', amount: 0.08 } },
+    traveling_move_hermit: { role: 'move_hermit', effect: { type: 'extra_route_choice' } },
+    route_contractor: { role: 'route_contractor', effect: { type: 'extra_route_choice' } },
+    merchant_caravan_named: { role: 'merchant', effect: { type: 'discount_shops', amount: 0.12 } },
+    rival_fanclub_witness: { role: 'rival_witness', effect: { type: 'reveal_next_chunk_role' } },
+    ranger_patrol: { role: 'faction_patrol', effect: { type: 'reduce_ambush_chance', amount: 0.25 } },
+    trainer_campfire_named: { role: 'field_medic', effect: { type: 'post_battle_heal', amountPercent: 0.25 } },
+    glowing_footprints: { role: 'rumor_hunter', effect: { type: 'increase_rare_pokemon_chance', amount: 0.08 } },
+};
+
+ROUTE_INCIDENTS = ROUTE_INCIDENTS.map((incident) => {
+    const bind = ROLE_INCIDENT_BINDINGS[incident.id];
+    if (!bind || incident.choices.length === 0) return incident;
+    const first = { ...incident.choices[0] } as any;
+    first.outcome = {
+        ...(first.outcome || {}),
+        rewards: {
+            ...((first.outcome && first.outcome.rewards) || {}),
+            joinCompanion: {
+                id: `${bind.role}_${incident.id}`,
+                name: bind.role.replace(/_/g, ' '),
+                role: bind.role,
+                expiresAfterChunks: 4,
+                sourceIncidentId: incident.id,
+                effects: [bind.effect],
+            },
+        },
+    };
+    return { ...incident, choices: [first, ...incident.choices.slice(1)] };
+});
+
+const pickChunkRole = (cx: number, cy: number, biome: string, routeState?: RouteState): ChunkRole => {
+    const rs = normalizeRouteStateLocal(routeState);
+    const tension = rs.routeTension;
+    const curiosity = rs.routeCuriosity;
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    const cadence = getCadencePreset(rs, biome, cx, cy);
+    const lane = rs.routeFlags.find(f => /^lane_/.test(f)) || 'lane_main';
+    const regionKey = `${Math.floor(cx / 5)},${Math.floor(cy / 5)}`;
+    const ownership = rs.routeOwnershipByRegion[regionKey] || 'neutral';
+    const recentRoleWindow = rs.recentChunkRoles.slice(-5);
+    const recentSetpiece = recentRoleWindow.includes('setpiece');
+    const recentDangerWindow = recentRoleWindow.filter((r) => r === 'threat' || r === 'setpiece' || r === 'obstacle').length;
+    const weights = { ...CHUNK_ROLE_WEIGHTS };
+    if (dist < 3) {
+        weights.setpiece *= 0.25;
+        weights.consequence = Math.max(0.55, weights.consequence - 0.08);
+    }
+    if (tension >= 4) {
+        weights.threat += 0.3;
+        weights.obstacle += 0.1;
+        weights.breather = Math.max(0.4, weights.breather - 0.2);
+    }
+    if (curiosity >= 4) {
+        weights.mystery += 0.16;
+        weights.setpiece += 0.22;
+    }
+    if (lane === 'lane_side') {
+        weights.temptation += 0.18;
+        weights.obstacle += 0.1;
+        weights.mystery += 0.08;
+        weights.consequence += 0.08;
+        weights.threat += 0.14;
+        weights.breather = Math.max(0.35, weights.breather - 0.1);
+        if (recentDangerWindow >= 2 || (rs.pacing.recentDangerCount || 0) >= 2) {
+            // Risky stays dangerous, but avoid oppressive chains.
+            weights.breather += 0.24;
+            weights.threat = Math.max(0.45, weights.threat - 0.12);
+            weights.consequence = Math.max(0.45, weights.consequence - 0.08);
+        }
+    } else if (lane === 'lane_strange') {
+        weights.mystery += 0.26;
+        weights.setpiece += 0.28;
+        weights.threat += 0.1;
+        weights.breather = Math.max(0.35, weights.breather - 0.2);
+    } else {
+        weights.breather += 0.1;
+        weights.temptation += 0.08;
+        weights.threat = Math.max(0.4, weights.threat - 0.18);
+        weights.setpiece = Math.max(0.15, weights.setpiece - 0.2);
+    }
+    if (biome === 'town') {
+        weights.breather += 0.4;
+        weights.threat = Math.max(0.4, weights.threat - 0.5);
+    }
+    if (rs.pacing.forceBreatherSoon || rs.pacing.chunksSinceBreather > 7 || recentDangerWindow >= 4) {
+        weights.breather += 0.45;
+        weights.setpiece = Math.max(0.22, weights.setpiece - 0.25);
+        weights.threat = Math.max(0.45, weights.threat - 0.25);
+        weights.obstacle = Math.max(0.4, weights.obstacle - 0.15);
+    }
+    if (rs.pacing.chunksSinceMajorIncident > 3) {
+        weights.temptation += 0.28;
+        weights.mystery += 0.3;
+    }
+    if (ownership === 'cursed') {
+        weights.threat += 0.3;
+        weights.mystery += 0.25;
+    } else if (ownership === 'merchant_safe' || ownership === 'ranger_protected' || ownership === 'player_stabilized') {
+        weights.breather += 0.35;
+        weights.consequence += 0.1;
+    } else if (ownership === 'poacher_controlled' || ownership === 'rival_influenced') {
+        weights.threat += 0.4;
+        weights.obstacle += 0.2;
+    }
+    if (cadence === 'tutorial') {
+        weights.breather += 0.18;
+        weights.temptation += 0.1;
+        weights.setpiece = Math.max(0.05, weights.setpiece - 0.22);
+        weights.threat = Math.max(0.45, weights.threat - 0.15);
+    } else if (cadence === 'dangerous') {
+        weights.threat += 0.18;
+        weights.obstacle += 0.12;
+        weights.consequence += 0.1;
+        weights.setpiece += 0.08;
+    } else if (cadence === 'mystery') {
+        weights.mystery += 0.2;
+        weights.setpiece += 0.08;
+    } else if (cadence === 'high_variance') {
+        weights.temptation += 0.1;
+        weights.setpiece += 0.12;
+    }
+    if (recentSetpiece) {
+        weights.setpiece = Math.max(0.05, weights.setpiece - 0.15);
+        weights.breather += 0.22;
+    }
+    if (rs.recentChunkRoles[rs.recentChunkRoles.length - 1] === 'setpiece') {
+        return hash4(cx, cy, 71011, 0) < 0.7 ? 'breather' : 'temptation';
+    }
+    const total = Object.values(weights).reduce((a, b) => a + b, 0);
+    let roll = hash4(cx, cy, 71001, 0) * total;
+    const keys = Object.keys(weights) as ChunkRole[];
+    for (const key of keys) {
+        roll -= weights[key];
+        if (roll <= 0) return key;
+    }
+    return 'breather';
+};
+
+const buildRoutePreview = (cx: number, cy: number, biome: string, role: ChunkRole, routeState?: RouteState): RoutePreview => {
+    const rs = normalizeRouteStateLocal(routeState);
+    const tension = rs.routeTension;
+    const curiosity = rs.routeCuriosity;
+    const dangerByRole: Record<ChunkRole, string> = {
+        breather: 'The route feels safe.',
+        temptation: 'Something feels active nearby.',
+        obstacle: 'You feel watched.',
+        threat: 'The route feels hostile.',
+        mystery: 'Something feels active nearby.',
+        consequence: 'You feel watched.',
+        setpiece: 'Trouble is closing in.',
+    };
+    const rewardByRole: Record<ChunkRole, string> = {
+        breather: 'Recovery and utility help are likely.',
+        temptation: 'Risky detours can pay off.',
+        obstacle: 'Clearing this route may unlock safer travel.',
+        threat: 'High pressure, but notable rewards on success.',
+        mystery: 'Discovery and rare intel are possible.',
+        consequence: 'Your past choices can open or close options.',
+        setpiece: 'Major payoff possible if you commit.',
+    };
+    const chunkId = `chunk_${cx}_${cy}`;
+    const memoryHints = rs.chunkMemoryStates?.[chunkId] || [];
+    const tensionLabel = tension <= 1 ? 'Calm' : tension <= 3 ? 'Watchful' : tension <= 5 ? 'Risky' : tension <= 7 ? 'Dangerous' : 'Critical';
+    const curiosityLabel = curiosity <= 1 ? 'Quiet' : curiosity <= 3 ? 'Hints Nearby' : curiosity <= 5 ? 'Strange Signs' : curiosity <= 7 ? 'Mystery Building' : 'Discovery Imminent';
+    const tensionHint = tension <= 1 ? 'The route feels safe.' : tension <= 3 ? 'Something feels active nearby.' : tension <= 5 ? 'You feel watched.' : tension <= 7 ? 'The route feels hostile.' : 'Trouble is closing in.';
+    const curiosityHint = curiosity <= 1 ? 'No unusual signs.' : curiosity <= 3 ? 'Small details stand out.' : curiosity <= 5 ? 'The area feels unusual.' : curiosity <= 7 ? 'Several clues point off the main path.' : 'Something rare is close.';
+    const stackedRisk = (rs.routeFlags || []).filter((f) => ['angeredPoachers', 'factionAlerted', 'ignoredDistressCall'].includes(f)).length >= 2;
+    const topCompanion = rs.activeCompanions[0];
+    const companionHintByRole: Record<string, string> = {
+        map_scout: 'Your scout points out a safer approach.',
+        ranger: 'Your ranger notices signs of disturbed wildlife.',
+        merchant: 'The merchant warns that valuable cargo may attract trouble.',
+        weather_watcher: 'The watcher studies the sky and frowns.',
+    };
+    return {
+        mood: `${biome.toUpperCase()} | ${role.toUpperCase()}`,
+        dangerHint: `${dangerByRole[role]} ${tensionHint}${stackedRisk ? ' Multiple prior choices are escalating local hostility.' : ''}`,
+        rewardHint: `${rewardByRole[role]} ${curiosityHint}`,
+        routeOptions: {
+            main: stackedRisk ? 'Main lane can cool heat and reduce chain danger' : role === 'threat' ? 'Hold main lane, lower variance' : 'Steady progress and consistency',
+            side: stackedRisk ? 'Side lane remains high reward, but pressure is stacking' : role === 'temptation' ? 'Side lane has richer reward odds' : 'Side lane offers situational rewards',
+            strange: role === 'mystery' || role === 'setpiece' ? 'Strange lane may trigger rare incident' : 'High variance route with unknown modifiers',
+        },
+        knownModifiers: [
+            ...(rs.routeFlags?.slice(-3) ?? []),
+            ...memoryHints.slice(-2),
+            tension >= 5 ? 'heightened_tension' : 'stable_tension',
+            curiosity >= 5 ? 'high_curiosity' : 'normal_curiosity',
+            stackedRisk ? 'stacked_risk' : 'single_risk',
+        ],
+        tensionLabel,
+        curiosityLabel,
+        companionHint: topCompanion ? companionHintByRole[topCompanion.role] || `${topCompanion.name} is helping with ${topCompanion.role.replace(/_/g, ' ')} duties.` : undefined,
+    };
+};
+
+const selectRouteIncident = (cx: number, cy: number, biome: string, role: ChunkRole, routeState?: RouteState): RouteIncident | undefined => {
+    const rs = normalizeRouteStateLocal(routeState);
+    const biomeTag = biome as any;
+    const dist = Math.sqrt(cx * cx + cy * cy);
+    if (dist < 1 || dist > 35) return undefined;
+    const tension = rs.routeTension;
+    const curiosity = rs.routeCuriosity;
+    const flags = new Set(rs.routeFlags ?? []);
+    const lane = rs.routeFlags.find(f => /^lane_/.test(f)) || 'lane_main';
+    const cadence = getCadencePreset(rs, biome, cx, cy);
+    const regionKey = `${Math.floor(cx / 5)},${Math.floor(cy / 5)}`;
+    const ownership = rs.routeOwnershipByRegion[regionKey] || 'neutral';
+    const chunkFloor = Math.floor(dist);
+    const unresolvedArcs = rs.activeRouteArcs.filter(a => !a.completed && !a.failed).length;
+    const arcCap = dist <= 20 ? 2 : 3;
+    const arcPayoffIds = new Set(
+        rs.activeRouteArcs
+            .filter(a => !a.completed && !a.failed && (a.stageIndex || 0) >= Math.max(1, (a.maxStages || 4) - 2))
+            .map(a => a.payoffIncidentId)
+            .filter(Boolean) as string[],
+    );
+    const eligibleEchoes = rs.queuedEchoes.filter(e => e.triggerAfterChunk <= chunkFloor && (e.expiresAfterChunk === undefined || e.expiresAfterChunk >= chunkFloor));
+    if (eligibleEchoes.length > 0 && role !== 'setpiece' && role !== 'consequence') {
+        const sortedEchoes = [...eligibleEchoes].sort((a, b) => {
+            const pa = classifyEchoPriority(a.incidentId);
+            const pb = classifyEchoPriority(b.incidentId);
+            const score = (p: 'high' | 'medium' | 'low') => p === 'high' ? 2 : p === 'medium' ? 1 : 0;
+            return score(pb) - score(pa);
+        });
+        const echo = sortedEchoes[0];
+        const priority = classifyEchoPriority(echo.incidentId);
+        const echoIncident = ROUTE_INCIDENTS.find(i => i.id === echo.incidentId);
+        if (echoIncident) {
+            if (priority === 'high') return echoIncident;
+            const echoRoll = hash4(cx, cy, 71021, 0);
+            if ((priority === 'medium' && echoRoll < 0.75) || (priority === 'low' && echoRoll < 0.4)) return echoIncident;
+        }
+    }
+    if (arcPayoffIds.size > 0 && (role === 'setpiece' || role === 'consequence' || rs.pacing.forcePayoffSoon)) {
+        const payoff = ROUTE_INCIDENTS.find(i => arcPayoffIds.has(i.id) && i.biomeTags.includes(biomeTag));
+        if (payoff) return payoff;
+    }
+    const pool = ROUTE_INCIDENTS.filter((incident) => {
+        if (!incident.biomeTags.includes(biomeTag)) return false;
+        if (!incident.chunkRoles.includes(role)) return false;
+        if (incident.minTension !== undefined && tension < incident.minTension) return false;
+        if (incident.maxTension !== undefined && tension > incident.maxTension) return false;
+        if (incident.minCuriosity !== undefined && curiosity < incident.minCuriosity) return false;
+        if (incident.maxCuriosity !== undefined && curiosity > incident.maxCuriosity) return false;
+        if (incident.blockedFlags?.some((f) => flags.has(f))) return false;
+        if (incident.requirements?.some((f) => !flags.has(f))) return false;
+        if (rs.recentIncidentIds.slice(-10).includes(incident.id)) return false;
+        if (rs.pacing.recentDangerCount >= 2 && incident.family === 'setpiece' && role !== 'setpiece') return false;
+        if (unresolvedArcs >= arcCap && incident.followUp?.arcId && !rs.activeRouteArcs.some(a => a.id === incident.followUp?.arcId)) return false;
+        const recentFamilies = rs.recentIncidentIds
+            .slice(-5)
+            .map((id) => ROUTE_INCIDENTS.find((it) => it.id === id)?.family)
+            .filter(Boolean);
+        const familyCount = recentFamilies.filter((f) => f === incident.family).length;
+        const recentRival = recentFamilies.filter((f) => f === 'rival').length;
+        const justifiedRepeat = (
+            (incident.family === 'mystery' && (biome === 'haunted' || lane === 'lane_strange' || curiosity >= 6))
+            || (incident.family === 'environment' && ['mountain', 'swamp', 'desert', 'coast'].includes(biome))
+            || (incident.family === 'faction' && ownership !== 'neutral')
+        );
+        if (familyCount >= 2 && !justifiedRepeat) return false;
+        if (incident.family === 'rival' && recentRival >= 1 && !arcPayoffIds.has(incident.id)) return false;
+        return true;
+    });
+    if (pool.length === 0) return undefined;
+    const weighted = pool.map((incident) => {
+        let weight = Math.max(0.2, incident.rarity ?? 0.7);
+        weight *= getFamilyWeight(biome, incident.family);
+        if (ownership === 'merchant_safe') weight *= incident.family === 'economy' ? 1.45 : incident.family === 'faction' ? 0.8 : 1;
+        if (ownership === 'ranger_protected') weight *= incident.family === 'pokemon_ecology' || incident.family === 'faction' ? 1.35 : 0.9;
+        if (ownership === 'poacher_controlled') weight *= incident.family === 'faction' || incident.family === 'human_trouble' ? 1.1 : 0.92;
+        if (ownership === 'cursed') weight *= incident.family === 'mystery' || incident.family === 'setpiece' ? 1.45 : 0.8;
+        if (ownership === 'rival_influenced') weight *= incident.family === 'rival' ? 1.18 : 0.92;
+        if (incident.family === 'environment') weight *= ['mountain', 'swamp', 'desert', 'coast'].includes(biome) ? 1.35 : 1.18;
+        if (incident.family === 'human_trouble' && !['urban', 'coast', 'town'].includes(biome)) weight *= 0.84;
+        if (incident.family === 'faction' && ownership === 'neutral' && tension < 6) weight *= 0.82;
+        if (incident.family === 'rival' && !flags.has('rivalTookShortcut') && !flags.has('rivalAnnoyed')) weight *= 0.86;
+        if (lane === 'lane_main') weight *= (incident.family === 'economy' || incident.family === 'companion') ? 1.2 : (incident.family === 'setpiece' || incident.family === 'mystery') ? 0.8 : 1;
+        if (lane === 'lane_side') weight *= (incident.family === 'environment' || incident.family === 'pokemon_ecology' || incident.family === 'poi') ? 1.32 : (incident.family === 'faction' ? 0.58 : incident.family === 'rival' ? 0.82 : 1);
+        if (lane === 'lane_strange') weight *= (incident.family === 'mystery' || incident.family === 'poi' || incident.family === 'setpiece') ? 1.44 : incident.family === 'rival' ? 1.12 : (incident.family === 'economy' ? 0.7 : 0.9);
+        if (tension >= 6 && (incident.family === 'faction' || incident.family === 'environment')) weight *= 1.25;
+        if (curiosity >= 6 && (incident.family === 'mystery' || incident.family === 'poi')) weight *= 1.3;
+        if (role === 'obstacle' || role === 'threat') {
+            if (incident.family === 'environment') weight *= 1.55;
+            if (incident.family === 'economy') weight *= 0.65;
+        }
+        if (role === 'mystery') {
+            if (incident.family === 'mystery' || incident.family === 'poi') weight *= 1.25;
+            if (incident.family === 'economy') weight *= 0.7;
+        }
+        if (role === 'consequence') {
+            if (incident.family === 'environment') weight *= 1.2;
+            if (incident.family === 'economy') weight *= 0.7;
+        }
+        if (role === 'setpiece') {
+            if (incident.family === 'setpiece') weight *= 1.75;
+            else if (incident.family === 'mystery' || incident.family === 'rival' || incident.family === 'faction') weight *= 1.2;
+            else weight *= 0.8;
+        }
+        if (role === 'consequence') {
+            if (incident.family === 'faction' || incident.family === 'human_trouble' || incident.family === 'economy') weight *= 1.2;
+        }
+        if (lane === 'lane_side' && (rs.pacing.recentDangerCount || 0) >= 2) {
+            if (incident.family === 'faction' || incident.family === 'rival' || incident.family === 'setpiece') weight *= 0.64;
+            if (incident.family === 'economy' || incident.family === 'companion' || incident.family === 'pokemon_ecology') weight *= 1.12;
+        }
+        if (cadence === 'tutorial') {
+            if (incident.family === 'setpiece' || incident.family === 'faction') weight *= 0.6;
+            if (incident.family === 'companion' || incident.family === 'economy' || incident.family === 'pokemon_ecology') weight *= 1.2;
+        } else if (cadence === 'dangerous') {
+            if (incident.family === 'faction' || incident.family === 'environment' || incident.family === 'human_trouble') weight *= 1.2;
+        } else if (cadence === 'mystery') {
+            if (incident.family === 'mystery' || incident.family === 'poi') weight *= 1.35;
+        } else if (cadence === 'high_variance') {
+            if (incident.family === 'setpiece' || incident.family === 'mystery' || incident.family === 'rival' || incident.family === 'poi') weight *= 1.15;
+        }
+        if (arcPayoffIds.has(incident.id)) weight *= 1.6;
+        if (incident.family === 'economy' && ownership !== 'merchant_safe') weight *= 0.62;
+        return { incident, weight: Math.max(0.05, weight) };
+    });
+    const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+    let roll = hash4(cx, cy, 71002, 0) * totalWeight;
+    for (const item of weighted) {
+        roll -= item.weight;
+        if (roll <= 0) return item.incident;
+    }
+    return weighted[0].incident;
+};
+
 /** Biome → (bg, wall, patch) lookup. Also used for edge blending. */
 const getBiomeTiles = (biome: string): { bg: number; wall: number; patch: number } => {
     switch (biome) {
@@ -1003,12 +1719,15 @@ const getBiomeTiles = (biome: string): { bg: number; wall: number; patch: number
     }
 };
 
-export const generateChunk = (cx: number, cy: number, riftStability: number = 0): Chunk => {
+export const generateChunk = (cx: number, cy: number, riftStability: number = 0, routeState?: RouteState): Chunk => {
     const seed = getChunkSeed(cx, cy);
     const rng = new SeededRandom(seed);
     const dist = Math.sqrt(cx*cx + cy*cy);
 
     const biome = getBiomeAt(cx, cy);
+    const chunkRole = pickChunkRole(cx, cy, biome, routeState);
+    const routePreview = buildRoutePreview(cx, cy, biome, chunkRole, routeState);
+    const routeIncident = selectRouteIncident(cx, cy, biome, chunkRole, routeState);
 
     if (cx === 0 && cy === 0) {
         return {
@@ -1030,7 +1749,10 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
                 "12,5": { id: "pallet_npc_2", name: "Lass", sprite: TRAINER_SPRITES.lass, dialogue: ["Pallet Town is so peaceful.", "Have you seen Prof. Oak?"] },
                 "15,13": { id: "pallet_npc_3", name: "Fisherman", sprite: TRAINER_SPRITES.fisherman, dialogue: ["The water here is perfect for fishing.", "I caught a huge Magikarp earlier!"] },
                 "2,13": { id: "pallet_npc_4", name: "Bug Catcher", sprite: TRAINER_SPRITES.bugcatcher, dialogue: ["I'm looking for rare bugs in the tall grass!", "Be careful out there."] }
-            }
+            },
+            chunkRole,
+            routePreview,
+            routeIncident,
         };
     }
 
@@ -1090,7 +1812,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
             if (layout[ry][rx] === bgTile) layout[ry][rx] = patchTile;
         }
 
-        return { id: `chunk_${cx}_${cy}`, name: "THE RIFT CORE", layout, portals, wildLevelRange: [90, 100], biome, trainers, npcs, interactables, x: cx, y: cy };
+        return { id: `chunk_${cx}_${cy}`, name: "THE RIFT CORE", layout, portals, wildLevelRange: [90, 100], biome, trainers, npcs, interactables, x: cx, y: cy, chunkRole, routePreview, routeIncident };
     }
 
     // 2. Fill base terrain with local noise + neighbor-aware edge blending.
@@ -1182,6 +1904,24 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
             if (py > 0 && py < CHUNK_SIZE - 2 && ((layout[py-1] && layout[py-1][x] === 3) || (layout[py+2] && layout[py+2][x] === 3))) {
                 layout[py][x] = 29; layout[py+1][x] = 29;
             }
+        }
+    }
+
+    // 3-lane route structure:
+    // - main path (existing cross-road, safest/predictable)
+    // - side path (risk/reward lane near edges)
+    // - strange path (rare, high-variance weave)
+    const sideLaneX = hash4(cx, cy, 72001, 0) > 0.5 ? 3 : CHUNK_SIZE - 4;
+    for (let y = 2; y < CHUNK_SIZE - 2; y++) {
+        if (layout[y][sideLaneX] === 3) layout[y][sideLaneX] = 29; // bridge if water
+        else if (layout[y][sideLaneX] !== wallTile) layout[y][sideLaneX] = 4;
+    }
+    if (hash4(cx, cy, 72002, 0) < 0.45) {
+        let sx = 2 + Math.floor(hash4(cx, cy, 72003, 0) * 3);
+        for (let y = CHUNK_SIZE - 3; y >= 2; y--) {
+            sx = Math.max(2, Math.min(CHUNK_SIZE - 3, sx + (hash4(cx, cy, 72004, y) < 0.5 ? -1 : 1)));
+            if (layout[y][sx] === 3) layout[y][sx] = 29;
+            else if (layout[y][sx] !== wallTile) layout[y][sx] = 4;
         }
     }
 
@@ -2270,7 +3010,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
     });
 
     // 2) Early-ring trainer density assertion + deterministic fallback.
-    const earlyBand = dist >= 1 && dist <= 3.5;
+    const earlyBand = dist >= 1 && dist <= 8;
     if (earlyBand && Object.keys(trainers).length === 0) {
         const archetypes = ROUTE_ARCHETYPES[biome] ?? EMPTY_ARCHETYPES;
         if (archetypes.length > 0) {
@@ -2324,6 +3064,57 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         }
     }
 
+    // 3) Duplicate trainer-id repair (deterministic suffixing).
+    const trainerIdOwners = new Map<string, string[]>();
+    Object.entries(trainers).forEach(([k, t]) => {
+        const arr = trainerIdOwners.get(t.id) ?? [];
+        arr.push(k);
+        trainerIdOwners.set(t.id, arr);
+    });
+    trainerIdOwners.forEach((keys, id) => {
+        if (keys.length <= 1) return;
+        // Keep first key untouched, suffix the rest.
+        keys.slice(1).forEach((key, i) => {
+            const nextId = `${id}_v${i + 2}`;
+            trainers[key].id = nextId;
+            validationWarn(`Duplicate trainer id "${id}" detected; rewrote ${key} -> "${nextId}".`);
+        });
+    });
+
+    // 4) Minimum NPC density bands by distance.
+    // Conservative targets so we improve consistency without overcrowding:
+    //   dist 1..6  : at least 1 NPC
+    //   dist > 25  : at least 2 NPCs
+    let minNpcCount = 0;
+    if (dist >= 1 && dist <= 6) minNpcCount = 1;
+    else if (dist > 25) minNpcCount = 2;
+    const npcDeficit = minNpcCount - Object.keys(npcs).length;
+    if (npcDeficit > 0) {
+        const openSpots: Array<{ x: number; y: number }> = [];
+        for (let ty = 3; ty < CHUNK_SIZE - 3; ty++) {
+            for (let tx = 3; tx < CHUNK_SIZE - 3; tx++) {
+                const tile = layout[ty]?.[tx];
+                if (tile !== bgTile && tile !== 2 && tile !== 4 && tile !== patchTile) continue;
+                const key = `${tx},${ty}`;
+                if (trainers[key] || npcs[key] || interactables[key] || portals[key]) continue;
+                openSpots.push({ x: tx, y: ty });
+            }
+        }
+        openSpots.sort((a, b) => {
+            const da = Math.abs(a.x - 9.5) + Math.abs(a.y - 9.5);
+            const db = Math.abs(b.x - 9.5) + Math.abs(b.y - 9.5);
+            return da - db;
+        });
+
+        for (let i = 0; i < npcDeficit; i++) {
+            const spot = openSpots[i];
+            if (!spot) break;
+            const npc = pickAmbientNpc(cx, cy, biome, 90 + i, levelBase);
+            npcs[`${spot.x},${spot.y}`] = npc;
+            validationWarn(`Injected ambient NPC "${npc.id}" to satisfy min NPC density band.`);
+        }
+    }
+
     // directly above them is also a no-prop zone.
     const propTiles = new Set([97, 98, 99]);
     const clearPropAt = (px: number, py: number) => {
@@ -2340,6 +3131,52 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
     Object.keys(trainers).forEach(reserveAroundSprite);
     Object.keys(npcs).forEach(reserveAroundSprite);
 
+    // Town biome identity pass: guarantee visible buildings so "town" chunks
+    // don't read like empty fields with a label.
+    if (biome === 'town' && dist >= 1) {
+        const hasTownPortal = Object.keys(portals).length > 0;
+        if (!hasTownPortal) {
+            const placeTownBuilding = (seedOffset: number, kind: 'house' | 'mart') => {
+                const candidates: Array<{ x: number; y: number }> = [];
+                for (let ty = 3; ty < CHUNK_SIZE - 4; ty++) {
+                    for (let tx = 3; tx < CHUNK_SIZE - 4; tx++) {
+                        const doorKey = `${tx + 1},${ty + 1}`;
+                        const a = layout[ty]?.[tx];
+                        const b = layout[ty]?.[tx + 1];
+                        const c = layout[ty]?.[tx + 2];
+                        const d = layout[ty + 1]?.[tx];
+                        const e = layout[ty + 1]?.[tx + 1];
+                        const f = layout[ty + 1]?.[tx + 2];
+                        if ([a, b, c, d, e, f].some((tile) => tile !== bgTile && tile !== 2 && tile !== 4 && tile !== patchTile)) continue;
+                        if (trainers[doorKey] || npcs[doorKey] || interactables[doorKey] || portals[doorKey]) continue;
+                        candidates.push({ x: tx, y: ty });
+                    }
+                }
+                if (candidates.length === 0) return false;
+                const pick = candidates[Math.floor(hash4(cx, cy, 32000 + seedOffset, 0) * candidates.length)];
+                const roof = kind === 'mart' ? 30 : 40;
+                const wall = kind === 'mart' ? 33 : 43;
+                const side = kind === 'mart' ? 45 : 35;
+                layout[pick.y][pick.x] = roof;
+                layout[pick.y][pick.x + 1] = roof + 1;
+                layout[pick.y][pick.x + 2] = roof + 2;
+                layout[pick.y + 1][pick.x] = wall;
+                layout[pick.y + 1][pick.x + 1] = 50;
+                layout[pick.y + 1][pick.x + 2] = side;
+                portals[`${pick.x + 1},${pick.y + 1}`] = interiorPortal(kind, cx, cy, pick.x + 1, pick.y + 1);
+                if (layout[pick.y + 2]?.[pick.x] !== undefined) {
+                    layout[pick.y + 2][pick.x] = 4;
+                    layout[pick.y + 2][pick.x + 1] = 4;
+                    layout[pick.y + 2][pick.x + 2] = 4;
+                }
+                return true;
+            };
+            const builtA = placeTownBuilding(1, 'house');
+            const builtB = placeTownBuilding(2, 'mart');
+            if (builtA || builtB) poiTags.push('town_block');
+        }
+    }
+
     return {
         x: cx, y: cy,
         id: `chunk_${cx}_${cy}`,
@@ -2352,8 +3189,67 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0)
         interactables,
         biome,
         poiTags: poiTags.length > 0 ? poiTags : undefined,
+        chunkRole,
+        routePreview,
+        routeIncident,
     };
 };
+
+export const formatRouteMemory = (routeState?: RouteState): string[] => {
+    const rs = normalizeRouteStateLocal(routeState);
+    const memories: string[] = [];
+    const push = (line: string) => {
+        if (!line) return;
+        if (memories.includes(line)) return;
+        memories.push(line);
+    };
+    if (rs.routeFlags.includes('bridgeRepaired')) push('The repaired bridge has made this road safer.');
+    if (rs.routeFlags.includes('angeredPoachers') || rs.routeFlags.includes('factionAlerted')) push('Poachers are watching this route.');
+    if (rs.routeFlags.includes('rescuedWildPokemon')) push('A rescued Pokemon may return later.');
+    if (rs.routeFlags.includes('routeSafehouseUnlocked')) push('A safe camp is available nearby.');
+    if (rs.routeFlags.includes('rivalAhead') || rs.routeFlags.includes('rivalChallengeQueued') || rs.routeFlags.includes('rivalTookShortcut')) push('Your rival is somewhere ahead.');
+    if (rs.routeFlags.includes('shrineActivated')) push('The shrine\'s energy is still active on this route.');
+    if ((rs.factionReputation.rangers || 0) > (rs.factionReputation.poachers || 0)) push('Rangers trust your decisions here.');
+    const lastOwnership = Object.values(rs.routeOwnershipByRegion).slice(-1)[0];
+    if (lastOwnership === 'merchant_safe') push('Merchant traffic has stabilized this route.');
+    if (lastOwnership === 'poacher_controlled' || lastOwnership === 'cursed') push('This route still feels unstable.');
+    const urgentArc = rs.activeRouteArcs
+        .filter((a) => !a.completed && !a.failed)
+        .sort((a, b) => ((a.expiresAfterChunks || 99) - (a.stageIndex || 0)) - ((b.expiresAfterChunks || 99) - (b.stageIndex || 0)))[0];
+    if (urgentArc) {
+        if (urgentArc.id.includes('wounded')) push('The wounded Pokemon trail is getting colder.');
+        else if (urgentArc.id.includes('poacher')) push('The poacher trail may disappear soon.');
+        else if (urgentArc.id.includes('shrine')) push('The shrine energy is stronger nearby.');
+        else if (urgentArc.id.includes('rival')) push('The rival\'s tracks are still fresh.');
+        else push(`${urgentArc.title} still needs a resolution.`);
+    }
+    const majorEcho = rs.queuedEchoes
+        .map((e) => e.incidentId)
+        .find((id) => classifyEchoPriority(id) !== 'low');
+    if (majorEcho?.includes('merchant')) push('A merchant favor may pay off soon.');
+    else if (majorEcho?.includes('poacher')) push('Retaliation may be waiting ahead.');
+    else if (majorEcho?.includes('rival')) push('A rival follow-up is close.');
+    else if (majorEcho?.includes('shrine')) push('The shrine\'s consequence has not passed yet.');
+    if (rs.activeCompanions[0]) {
+        const c = rs.activeCompanions[0];
+        push(`${c.name} is still traveling with you.`);
+    }
+    const latestChunkMem = Object.values(rs.chunkMemoryStates)
+        .flat()
+        .filter((m) => m && !/flag_|echo_|arc_/.test(m))
+        .slice(-3);
+    latestChunkMem.forEach(push);
+    return memories.slice(-6);
+};
+
+export const getRouteIncidentStats = () => {
+    const byFamily: Record<string, number> = {};
+    ROUTE_INCIDENTS.forEach(i => { byFamily[i.family] = (byFamily[i.family] || 0) + 1; });
+    return { total: ROUTE_INCIDENTS.length, byFamily };
+};
+
+export const getRouteIncidentCatalog = (): RouteIncident[] => ROUTE_INCIDENTS;
+export const getRouteArcCatalog = () => ROUTE_ARC_LIBRARY;
 
 export const MAPS = STATIC_MAPS; // Keep static maps for interiors
 

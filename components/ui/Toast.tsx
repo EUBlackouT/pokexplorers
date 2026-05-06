@@ -14,11 +14,11 @@ export interface ToastEntry {
 }
 
 const TIER_DEFAULT_TTL: Record<ToastTier, number> = {
-    info: 1800,
-    reward: 2600,
-    story: 3200,
-    warning: 3000,
-    danger: 3800,
+    info: 3000,
+    reward: 4200,
+    story: 5200,
+    warning: 4600,
+    danger: 5200,
 };
 
 const TIER_STYLES: Record<ToastTier, { bg: string; border: string; accent: string; icon: string }> = {
@@ -89,7 +89,7 @@ const ToastItem: React.FC<{ toast: ToastEntry; onExpire: (id: number) => void }>
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, x: -30, scale: 0.9, transition: { duration: 0.2 } }}
             transition={{ type: 'spring', stiffness: 280, damping: 22 }}
-            className={`${style.bg} ${style.border} border-2 backdrop-blur-md pl-3 pr-4 py-2 rounded-lg shadow-xl shadow-black/40 flex items-start gap-2 max-w-xs pointer-events-auto`}
+            className={`${style.bg} ${style.border} border-2 backdrop-blur-md pl-3 pr-4 py-2 rounded-lg shadow-xl shadow-black/40 flex items-start gap-2 max-w-sm pointer-events-auto`}
         >
             <div className={`${style.accent} text-base leading-none mt-0.5`}>{style.icon}</div>
             <div className="flex-1 min-w-0">
@@ -98,7 +98,7 @@ const ToastItem: React.FC<{ toast: ToastEntry; onExpire: (id: number) => void }>
                         {toast.kicker}
                     </div>
                 )}
-                <div className="text-white text-[11px] leading-snug break-words">{toast.message}</div>
+                <div className="text-white text-[12px] leading-snug break-words whitespace-pre-line">{toast.message}</div>
             </div>
         </motion.div>
     );
@@ -108,10 +108,11 @@ export const ToastStack: React.FC<{ toasts: ToastEntry[]; onExpire: (id: number)
     toasts,
     onExpire,
 }) => {
+    const visibleToasts = toasts.slice(-3);
     return (
-        <div className="fixed top-4 left-4 z-[200] flex flex-col gap-2 pointer-events-none">
+        <div className="fixed top-4 right-4 z-[200] flex flex-col gap-2 pointer-events-none items-end">
             <AnimatePresence initial={false}>
-                {toasts.map((t) => (
+                {visibleToasts.map((t) => (
                     <ToastItem key={t.id} toast={t} onExpire={onExpire} />
                 ))}
             </AnimatePresence>

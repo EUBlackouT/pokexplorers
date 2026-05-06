@@ -9,6 +9,10 @@
     "start": "cross-env NODE_ENV=production tsx server.ts",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
+    "diagnostics:chunks": "tsx scripts/chunk-health-check.ts",
+    "diagnostics:routewalk": "tsx scripts/route-walk-check.ts",
+    "diagnostics:incidents": "tsx scripts/incidents-diagnostics.ts",
+    "diagnostics:routearcs": "tsx scripts/routearcs-diagnostics.ts",
     "electron:dev": "cross-env NODE_ENV=development electron .",
     "electron:build": "npm run build && electron-builder"
   },
