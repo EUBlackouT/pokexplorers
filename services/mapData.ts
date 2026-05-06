@@ -707,10 +707,18 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     const archetypes = ROUTE_ARCHETYPES[biome] ?? EMPTY_ARCHETYPES;
     if (archetypes.length === 0) return [];
 
-    const spawnRoll = hash4(cx, cy, 1111, 0);
-    // ~12% spawn rate, gently scales up to ~18% in late-game distance.
-    const spawnChance = 0.12 + Math.min(0.06, dist / 800);
-    if (spawnRoll >= spawnChance) return [];
+    // Early-route guarantee:
+    // The first few chunks outside Pallet must not feel empty. After the
+    // balancing refactor the normal spawn chance (~12%) was too sparse, so
+    // players could walk several startup chunks without seeing a single
+    // trainer. Force one route trainer in the near-spawn ring.
+    const isEarlyRouteBand = dist <= 3.5;
+    if (!isEarlyRouteBand) {
+        const spawnRoll = hash4(cx, cy, 1111, 0);
+        // ~12% spawn rate, gently scales up to ~18% in late-game distance.
+        const spawnChance = 0.12 + Math.min(0.06, dist / 800);
+        if (spawnRoll >= spawnChance) return [];
+    }
 
     // Archetype pick + name pick, both deterministic.
     const aIdx = Math.floor(hash4(cx, cy, 2222, 0) * archetypes.length);
@@ -723,9 +731,11 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     const tierRoll = hash4(cx, cy, 4444, 0);
     let tierIndex: 0 | 1 | 2 = 0;
     let tier: 'rookie' | 'veteran' | 'ace' = 'rookie';
-    if (dist > 10 && tierRoll > 0.65)      { tierIndex = 1; tier = 'veteran'; }
-    if (dist > 25 && tierRoll > 0.90)      { tierIndex = 2; tier = 'ace'; }
-    else if (dist > 15 && tierRoll > 0.80) { tierIndex = 1; tier = 'veteran'; }
+    if (!isEarlyRouteBand) {
+        if (dist > 10 && tierRoll > 0.65)      { tierIndex = 1; tier = 'veteran'; }
+        if (dist > 25 && tierRoll > 0.90)      { tierIndex = 2; tier = 'ace'; }
+        else if (dist > 15 && tierRoll > 0.80) { tierIndex = 1; tier = 'veteran'; }
+    }
 
     // Team size: 2 for rookie, 3 for veteran, 4 for ace.
     const teamSize = 2 + tierIndex; // 2 / 3 / 4
@@ -763,7 +773,7 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
     // They draw independently so you can absolutely run into a Fisherman
     // standing near a Swimmer -- feels organic.
     const duoRoll = hash4(cx, cy, 6666, 0);
-    if (duoRoll < 0.20 && dist > 5) {
+    if (!isEarlyRouteBand && duoRoll < 0.20 && dist > 5) {
         const aIdx2 = Math.floor(hash4(cx, cy, 7777, 0) * archetypes.length);
         const arch2 = archetypes[aIdx2];
         const nameIdx2 = Math.floor(hash4(cx, cy, 8888, 0) * arch2.namePool.length);
