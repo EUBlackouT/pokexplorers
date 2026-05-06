@@ -444,6 +444,155 @@ const AuroraVeilAmbient: React.FC<{ side: 'player' | 'enemy' }> = ({ side }) => 
     );
 };
 
+// Weather ambience -----------------------------------------------------------
+// These overlays are intentionally subtle and lightweight (CSS + a handful of
+// motion nodes) so they read clearly without drowning out move VFX.
+const RainAmbient: React.FC = () => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-sky-900/20 via-blue-900/10 to-transparent" />
+        {Array.from({ length: 36 }).map((_, i) => {
+            const left = ((i * 37) % 100);
+            const dur = 0.55 + (i % 5) * 0.18;
+            const delay = (i % 9) * 0.12;
+            const top = -20 - (i % 7) * 14;
+            return (
+                <motion.span
+                    key={`rain-${i}`}
+                    className="absolute w-[1.5px] h-7 bg-gradient-to-b from-cyan-100/0 via-cyan-100/80 to-cyan-200/0 rounded-full"
+                    style={{ left: `${left}%`, top }}
+                    animate={{ y: ['0%', '145%'], opacity: [0.15, 0.8, 0.15] }}
+                    transition={{ duration: dur, repeat: Infinity, ease: 'linear', delay }}
+                />
+            );
+        })}
+    </div>
+);
+
+const SunAmbient: React.FC = () => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <motion.div
+            className="absolute inset-0"
+            style={{ background: 'radial-gradient(circle at 70% 15%, rgba(255,220,120,0.35) 0%, rgba(255,200,80,0.0) 55%)' }}
+            animate={{ opacity: [0.5, 0.9, 0.5] }}
+            transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        <motion.div
+            className="absolute inset-0"
+            style={{ background: 'linear-gradient(135deg, rgba(255,170,40,0.16), rgba(255,200,80,0.04), rgba(255,140,30,0.12))', mixBlendMode: 'screen' }}
+            animate={{ opacity: [0.45, 0.75, 0.45] }}
+            transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+        />
+    </div>
+);
+
+const SandAmbient: React.FC = () => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-amber-900/20 via-amber-700/10 to-transparent" />
+        {Array.from({ length: 24 }).map((_, i) => {
+            const top = ((i * 29) % 100);
+            const start = -20 - (i % 6) * 7;
+            const dur = 2.2 + (i % 4) * 0.5;
+            return (
+                <motion.span
+                    key={`sand-${i}`}
+                    className="absolute w-1 h-1 rounded-full bg-amber-200/70"
+                    style={{ top: `${top}%`, left: `${start}%`, boxShadow: '0 0 6px rgba(251,191,36,0.35)' }}
+                    animate={{ x: ['0%', '130%'], y: ['0%', `${(i % 5) * 5 - 10}%`], opacity: [0.1, 0.7, 0.1] }}
+                    transition={{ duration: dur, repeat: Infinity, ease: 'linear', delay: (i % 8) * 0.2 }}
+                />
+            );
+        })}
+    </div>
+);
+
+const SnowAmbient: React.FC<{ icy?: boolean }> = ({ icy = false }) => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <div className={`absolute inset-0 ${icy ? 'bg-gradient-to-b from-cyan-200/12 via-sky-100/8 to-transparent' : 'bg-gradient-to-b from-slate-200/12 via-slate-100/6 to-transparent'}`} />
+        {Array.from({ length: 28 }).map((_, i) => {
+            const left = ((i * 41) % 100);
+            const drift = (i % 5) * 4 - 8;
+            const dur = 2.4 + (i % 4) * 0.5;
+            const size = 6 + (i % 3) * 2;
+            return (
+                <motion.span
+                    key={`snow-${i}`}
+                    className="absolute rounded-full text-white/85"
+                    style={{ left: `${left}%`, top: '-8%', width: size, height: size, background: 'rgba(255,255,255,0.75)', filter: 'blur(0.1px)' }}
+                    animate={{ y: ['0%', '120%'], x: ['0%', `${drift}%`], opacity: [0.0, 0.9, 0.0] }}
+                    transition={{ duration: dur, repeat: Infinity, ease: 'linear', delay: (i % 10) * 0.18 }}
+                />
+            );
+        })}
+    </div>
+);
+
+const ElectricSquallAmbient: React.FC = () => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <motion.div
+            className="absolute inset-0"
+            style={{ background: 'radial-gradient(circle at 30% 20%, rgba(255,230,120,0.24) 0%, rgba(255,230,120,0) 45%)' }}
+            animate={{ opacity: [0.25, 0.55, 0.25] }}
+            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        {Array.from({ length: 4 }).map((_, i) => (
+            <motion.div
+                key={`bolt-${i}`}
+                className="absolute h-[2px] bg-yellow-200/90 rounded-full"
+                style={{ top: `${15 + i * 18}%`, left: `${10 + i * 19}%`, width: `${14 + (i % 2) * 8}%`, boxShadow: '0 0 10px rgba(250,204,21,0.8)' }}
+                animate={{ opacity: [0, 0.95, 0], scaleX: [0.8, 1.1, 0.9] }}
+                transition={{ duration: 0.28, repeat: Infinity, repeatDelay: 1.3 + i * 0.35, ease: 'easeOut' }}
+            />
+        ))}
+    </div>
+);
+
+const AshstormAmbient: React.FC = () => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-stone-900/28 via-zinc-800/14 to-transparent" />
+        {Array.from({ length: 26 }).map((_, i) => {
+            const top = ((i * 17) % 100);
+            const start = -30 - (i % 5) * 9;
+            const dur = 2.0 + (i % 6) * 0.35;
+            const size = 1 + (i % 3);
+            return (
+                <motion.span
+                    key={`ash-${i}`}
+                    className="absolute rounded-full bg-stone-300/50"
+                    style={{ top: `${top}%`, left: `${start}%`, width: size, height: size, filter: 'blur(0.2px)' }}
+                    animate={{ x: ['0%', '150%'], y: ['0%', `${(i % 5) * 3 - 6}%`], opacity: [0.05, 0.5, 0.05] }}
+                    transition={{ duration: dur, repeat: Infinity, ease: 'linear', delay: (i % 8) * 0.23 }}
+                />
+            );
+        })}
+    </div>
+);
+
+const BloomAmbient: React.FC = () => (
+    <div className="absolute inset-0 pointer-events-none z-[6] overflow-hidden">
+        <motion.div
+            className="absolute inset-0"
+            style={{ background: 'radial-gradient(circle at 50% 80%, rgba(74,222,128,0.22) 0%, rgba(34,197,94,0) 60%)' }}
+            animate={{ opacity: [0.3, 0.65, 0.3] }}
+            transition={{ duration: 3.0, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        {Array.from({ length: 20 }).map((_, i) => {
+            const left = ((i * 31) % 100);
+            const dur = 2.8 + (i % 4) * 0.5;
+            return (
+                <motion.span
+                    key={`pollen-${i}`}
+                    className="absolute text-lime-100/70 text-[8px]"
+                    style={{ left: `${left}%`, bottom: '-4%' }}
+                    animate={{ y: ['0%', '-130%'], x: ['0%', `${(i % 5) * 4 - 8}%`], opacity: [0, 0.75, 0] }}
+                    transition={{ duration: dur, repeat: Infinity, ease: 'easeOut', delay: (i % 9) * 0.25 }}
+                >
+                    ✦
+                </motion.span>
+            );
+        })}
+    </div>
+);
+
 // --- Main component ---------------------------------------------------------
 export const BattleFieldHud: React.FC<Props> = ({ bs }) => {
     const globals = globalChips(bs);
@@ -456,10 +605,19 @@ export const BattleFieldHud: React.FC<Props> = ({ bs }) => {
     const enemyTw     = !!(bs.enemyTailwindTurns && bs.enemyTailwindTurns > 0);
     const playerAv    = !!(bs.auroraVeilTurns && bs.auroraVeilTurns > 0);
     const enemyAv     = !!(bs.enemyAuroraVeilTurns && bs.enemyAuroraVeilTurns > 0);
+    const weather = bs.weather;
 
     return (
         <>
             {/* ---------- Ambient layer ---------- */}
+            {weather === 'rain' && <RainAmbient />}
+            {weather === 'sun' && <SunAmbient />}
+            {weather === 'sand' && <SandAmbient />}
+            {weather === 'hail' && <SnowAmbient icy />}
+            {weather === 'snow' && <SnowAmbient />}
+            {weather === 'electric' && <ElectricSquallAmbient />}
+            {weather === 'ashstorm' && <AshstormAmbient />}
+            {weather === 'grass' && <BloomAmbient />}
             <TrickRoomAmbient active={trickRoomOn} />
             {gravityOn && <GravityAmbient />}
             {playerTw && <TailwindStreaks side="player" />}
