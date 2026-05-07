@@ -1014,6 +1014,8 @@ export default function App() {
   /** Defeat wipes send TITLE via transitionFromBattleMusic — skip duplicate MENU effect playBGM (host only). */
   const skipNextMenuTitleBgmRef = useRef(false);
   const prevPhaseForMusicRef = useRef<GamePhase>(phase);
+  const lastOverworldMusicZoneRef = useRef<'interior' | 'town' | 'water' | 'route' | null>(null);
+  const stickyRouteTrackRef = useRef<string>(BGM_TRACKS.ROUTE_A);
   // Rival intercept queue -- see RIVAL_MILESTONES below. The rival
   // ambushes the player when they FIRST cross a distance milestone.
   // We record which milestones have already fired via the
@@ -10698,22 +10700,25 @@ export default function App() {
       const prev = prevPhaseForMusicRef.current;
       prevPhaseForMusicRef.current = phase;
 
-      const resolveOverworldBgmUrl = (): string => {
+      const resolveOverworldBgm = (): { zone: 'interior' | 'town' | 'water' | 'route'; url: string } => {
           const mapId = playerState.mapId;
           const map = lookupMap(mapId, loadedChunks);
           const biome: string | undefined = map?.biome;
           if (mapId.startsWith('interior:') || biome === 'interior' || biome === 'lab' || biome === 'center' || biome === 'mart') {
-              return BGM_TRACKS.INTERIOR;
+              return { zone: 'interior', url: BGM_TRACKS.INTERIOR };
           }
-          if (biome === 'town') return BGM_TRACKS.TOWN;
-          if (biome === 'lake') return BGM_TRACKS.WATER;
+          if (biome === 'town') return { zone: 'town', url: BGM_TRACKS.TOWN };
+          if (biome === 'lake') return { zone: 'water', url: BGM_TRACKS.WATER };
           if (mapId.startsWith('chunk_')) {
               const parts = mapId.split('_');
               const cx = parseInt(parts[1] ?? '0', 10) || 0;
               const cy = parseInt(parts[2] ?? '0', 10) || 0;
-              return ((cx + cy) & 1) === 0 ? BGM_TRACKS.ROUTE_A : BGM_TRACKS.ROUTE_B;
+              if (lastOverworldMusicZoneRef.current !== 'route') {
+                  stickyRouteTrackRef.current = ((cx + cy) & 1) === 0 ? BGM_TRACKS.ROUTE_A : BGM_TRACKS.ROUTE_B;
+              }
+              return { zone: 'route', url: stickyRouteTrackRef.current };
           }
-          return BGM_TRACKS.ROUTE_A;
+          return { zone: 'route', url: stickyRouteTrackRef.current || BGM_TRACKS.ROUTE_A };
       };
 
       if (phase === GamePhase.MENU || phase === GamePhase.STARTER_SELECT) {
@@ -10732,7 +10737,8 @@ export default function App() {
           return;
       }
 
-      const owUrl = resolveOverworldBgmUrl();
+      const { zone, url: owUrl } = resolveOverworldBgm();
+      lastOverworldMusicZoneRef.current = zone;
 
       if (prev === GamePhase.BATTLE && !pendingGauntletNextRef.current) {
           const outcome = postBattleMusicOutcomeRef.current ?? 'victory';
