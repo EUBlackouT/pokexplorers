@@ -873,7 +873,7 @@ function buildGymLeaderTrainer(badgeId: number): TrainerData {
 /** Public entry point used by App.tsx interior resolver. `defeatedIds` is
  *  the list of trainer ids the player has already beaten this run --
  *  any matching mook / leader is omitted so cleared gyms read as empty. */
-export function buildGym(badgeId: number, returnTo: string, defeatedIds: string[] = []): MapZone {
+export function buildGym(badgeId: number, returnTo: string, defeatedIds: string[] = [], earnedBadges = 0): MapZone {
     const theme = GYM_THEMES[badgeId] ?? GYM_THEMES[1];
     const layout = makeGymFrame(theme);
     const trainers: Record<string, TrainerData> = {};
@@ -1028,7 +1028,7 @@ export function buildGym(badgeId: number, returnTo: string, defeatedIds: string[
     // Leader at the back. If already beaten, replace with a Council NPC
     // so re-entering a cleared gym still feels alive.
     const leaderId = `gym_leader_${badgeId}`;
-    const leaderDefeated = defeatedIds.includes(leaderId);
+    const leaderDefeated = defeatedIds.includes(leaderId) || earnedBadges >= badgeId;
     const npcs: Record<string, NPCData> = {};
     if (!leaderDefeated) {
         trainers["10,4"] = buildGymLeaderTrainer(badgeId);
@@ -1100,12 +1100,12 @@ export type InteriorKind = 'center' | 'mart' | 'house' | 'gym' | 'camp' | 'shrin
  *  `returnTo` is the portal destination string the door mat exits to.
  *  `defeatedIds` is forwarded to gym builds for trainer culling.
  */
-export function resolveInterior(kind: InteriorKind, seed: string, returnTo: string, defeatedIds: string[] = []): MapZone {
+export function resolveInterior(kind: InteriorKind, seed: string, returnTo: string, defeatedIds: string[] = [], earnedBadges = 0): MapZone {
     switch (kind) {
         case 'center': return buildCenter(seed, returnTo, 'Pokemon Center');
         case 'mart':   return buildMart(seed, returnTo, 'Poke Mart');
         case 'house':  return buildHouse(seed, returnTo);
-        case 'gym':    return buildGym(parseInt(seed, 10), returnTo, defeatedIds);
+        case 'gym':    return buildGym(parseInt(seed, 10), returnTo, defeatedIds, earnedBadges);
         case 'camp':   return buildIncidentInterior('camp', seed, returnTo);
         case 'shrine': return buildIncidentInterior('shrine', seed, returnTo);
         case 'outpost': return buildIncidentInterior('outpost', seed, returnTo);

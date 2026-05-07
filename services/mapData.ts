@@ -1801,7 +1801,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
             reward: 50000,
             dialogue: "I am the Guardian of the Rift. None shall pass.",
             winDialogue: "The Rift... it closes. You have saved this reality.",
-            isGymLeader: true,
+            isGymLeader: false,
             badgeId: 9 // Special Badge
         };
         
@@ -2293,7 +2293,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
             sprite: "https://play.pokemonshowdown.com/sprites/trainers/grimsley.png",
             level: 75 + Math.floor(dist / 2),
             team: team,
-            isGymLeader: true, // Treat as gym leader for badge logic
+            isGymLeader: false, // Elite encounter, not a progression gym badge.
             badgeId: 99,
             reward: 10000,
             dialogue: "You've come far, but your journey ends here!",

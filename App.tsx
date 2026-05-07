@@ -1047,7 +1047,9 @@ export default function App() {
       if (!item) return;
 
       if (item.category === 'healing' || item.id === 'rare-candy') {
-          let evolvedMon: Pokemon | null = null;
+          const levelCap = getPlayerLevelCap(playerState.badges);
+          let rareCandyLeveled = false;
+          let rareCandyBlockedByCap = false;
           
           setPlayerState(prev => {
               const newTeam = [...prev.team];
@@ -1067,11 +1069,15 @@ export default function App() {
               else if (itemId === 'full-heal') { newStatus = undefined; }
               else if (itemId === 'revive' && p.isFainted) { newHp = Math.floor(p.maxHp / 2); p.isFainted = false; }
               else if (itemId === 'rare-candy') {
-                  p.level = Math.min(100, p.level + 1);
+                  if (p.level >= levelCap) {
+                      rareCandyBlockedByCap = true;
+                      return prev;
+                  }
+                  p.level = Math.min(levelCap, p.level + 1);
                   p.stats = calculateStatsFull(p.baseStats, p.ivs, p.evs, p.level, p.nature);
                   p.maxHp = p.stats.hp;
                   p.currentHp = p.maxHp;
-                  leveledUp = true;
+                  rareCandyLeveled = true;
               }
               
           p.currentHp = newHp;
@@ -1094,16 +1100,23 @@ export default function App() {
           return { ...prev, team: newTeam, inventory: newInventory };
       });
 
-      playLevelUpSfx();
+      if (itemId === 'rare-candy' && rareCandyBlockedByCap) {
+          showToast(`Rare Candy had no effect. ${pokemon.name} is at your current level cap.`, 'info', { kicker: 'ITEM' });
+          return;
+      }
+
+      if (itemId === 'rare-candy' && rareCandyLeveled) {
+          playLevelUpSfx();
+      }
       
       // Check for level-up evolution if rare candy was used
-          if (itemId === 'rare-candy') {
+          if (itemId === 'rare-candy' && rareCandyLeveled) {
               const canEvolve = await checkEvolution(pokemon);
               if (canEvolve) {
                   // Build the evolved form now (off the post-level-up snapshot
                   // so stat recomputation uses the new level) and queue the
                   // cinematic. The `onDone` callback writes back to state.
-                  const postLevelMon = { ...pokemon, level: Math.min(100, pokemon.level + 1) };
+                  const postLevelMon = { ...pokemon, level: Math.min(levelCap, pokemon.level + 1) };
                   const evo = await evolvePokemon(postLevelMon);
                   queueEvolution(postLevelMon, evo, (final) => {
                       setPlayerState(prev => ({
@@ -3083,7 +3096,7 @@ export default function App() {
               const exitY = Math.min(CHUNK_SIZE - 1, newPos.y + 1);
               const returnTo = `chunk_${playerState.chunkPos.x}_${playerState.chunkPos.y},${newPos.x},${exitY}`;
               if (kind === 'gym' || !loadedChunks[interiorId]) {
-                  const interior = resolveInterior(kind, seed, returnTo, playerState.defeatedTrainers);
+                  const interior = resolveInterior(kind, seed, returnTo, playerState.defeatedTrainers, playerState.badges);
                   setLoadedChunks(prev => ({ ...prev, [interiorId]: interior }));
               }
 
@@ -3403,7 +3416,23 @@ export default function App() {
 
       const trainerKey = `${newPos.x},${newPos.y}`;
       const trainerData = currentMap.trainers?.[trainerKey];
-      if (trainerData && !playerState.defeatedTrainers.includes(trainerData.id)) { startBattle(0, false, true, trainerData); return; }
+      if (trainerData && !playerState.defeatedTrainers.includes(trainerData.id)) {
+          const nextBadge = playerState.badges + 1;
+          if (trainerData.isGymLeader && (trainerData.badgeId || 0) >= 1 && (trainerData.badgeId || 0) <= 8 && (trainerData.badgeId || 0) > nextBadge) {
+              const nextGym = getNextGymTarget(playerState.badges);
+              const dirHint = nextGym
+                  ? compassDirectionName(nextGym.cx - playerState.chunkPos.x, nextGym.cy - playerState.chunkPos.y)
+                  : null;
+              setDialogue([
+                  `This is Gym ${trainerData.badgeId}.`,
+                  `Your next official badge target is Gym ${nextBadge}.`,
+                  dirHint ? `Best lead right now: head ${dirHint}.` : 'Follow route signs or the compass hint to stay on progression.',
+              ]);
+              return;
+          }
+          startBattle(0, false, true, trainerData);
+          return;
+      }
 
       // Per-step exploration XP trickle. Old code did `playerState.badges.length`
       // on a number which silently produced NaN and disabled this whole loop.
@@ -3538,14 +3567,14 @@ export default function App() {
       if (!currentMap) return;
 
       const isMultiplayer = !!multiplayer.roomId;
-      const isGym = !!(trainerData && trainerData.isGymLeader);
+      const isGym = !!(trainerData && trainerData.isGymLeader && (trainerData.badgeId ?? 0) >= 1 && (trainerData.badgeId ?? 0) <= 8);
       // Scenario detection for battle art. Each special trainer gets the
       // arena it deserves, based on predictable id patterns or flags:
       //   Rift Champion  (badgeId === 9) -> champion throne room
       //   Ghost Trainer  (id starts with 'ghost_trainer_') -> haunted mansion
       //   Roaming Legendary (id starts with 'legendary_roam_<speciesId>_')
       //       -> thematic arena (ice_palace / thunder_peak / sky_pillar / ...)
-      const isChampion = !!(trainerData && trainerData.badgeId === 9);
+      const isChampion = !!(trainerData && ((trainerData.badgeId === 9) || /^rift_guardian_/.test(trainerData.id || '')));
       const isHaunted = !!(trainerData && trainerData.id?.startsWith('ghost_trainer_'));
       let legendarySpeciesId: number | undefined;
       if (trainerData && trainerData.id?.startsWith('legendary_roam_')) {
@@ -3565,8 +3594,6 @@ export default function App() {
               legendarySpeciesId,
           },
       );
-      console.log('Setting Battle Background URL:', bgUrl, { isGym, isChampion, isHaunted, legendarySpeciesId });
-      
       // Calculate Rift Pressure (difficulty scaling).
       //
       // Coefficients used to be 0.15 (distance) + 0.10 (badges). Combined with
@@ -3596,15 +3623,20 @@ export default function App() {
       }
 
       let enemies: Pokemon[];
+      const playerWildCap = getWildLevelCap(playerState.badges, distance);
+      const nonGymTrainerLevelCap = Math.min(100, Math.max(playerWildCap + 8, getPlayerLevelCap(playerState.badges) + 2));
+      const trainerBattleLevel = trainerData
+          ? (isGym || isChampion ? trainerData.level : Math.min(trainerData.level, nonGymTrainerLevelCap))
+          : 1;
       if (trainerData) {
-          if (trainerData.isGymLeader) {
+          if (isGym) {
               if (trainerData.loadout && trainerData.loadout.length > 0) {
                   // Hand-authored competitive set from data/gymTeams.ts.
                   const { hydrateGymTeam } = await import('./services/pokeService');
-                  enemies = await hydrateGymTeam(trainerData.level, trainerData.loadout, difficulty);
+                  enemies = await hydrateGymTeam(trainerBattleLevel, trainerData.loadout, difficulty);
               } else {
                   const { fetchCompetitivePokemon } = await import('./services/pokeService');
-                  enemies = await Promise.all(trainerData.team.map(id => fetchCompetitivePokemon(id, trainerData.level)));
+                  enemies = await Promise.all(trainerData.team.map(id => fetchCompetitivePokemon(id, trainerBattleLevel)));
               }
               // Apply Rift Pressure to gym leaders on top of their competitive set.
               // ONLY HP / Atk / SpA scale -- same rule as wild / trainer fetchPokemon,
@@ -3632,20 +3664,20 @@ export default function App() {
                   //   preferred species bias when rolling.
                   const trainerBiome = biome || currentMap.biome || 'forest';
                   const rawCount = Array.isArray(trainerData.team) ? trainerData.team.length : 2;
-                  const sizeCap = recommendedTrainerTeamSizeForLevel(trainerData.level);
+                  const sizeCap = recommendedTrainerTeamSizeForLevel(trainerBattleLevel);
                   const finalCount = Math.max(2, Math.min(rawCount || 2, sizeCap));
 
                   const cachedSpecies = proceduralTrainerRosterRef.current[trainerId];
                   if (cachedSpecies && cachedSpecies.length > 0) {
                       enemies = await Promise.all(
-                          cachedSpecies.slice(0, finalCount).map(id => fetchPokemon(id, trainerData.level, true, 0, difficulty))
+                          cachedSpecies.slice(0, finalCount).map(id => fetchPokemon(id, trainerBattleLevel, true, 0, difficulty))
                       );
                   } else {
-                      enemies = await getTrainerTeam(finalCount, trainerData.level, trainerBiome, difficulty, trainerData.team || []);
+                      enemies = await getTrainerTeam(finalCount, trainerBattleLevel, trainerBiome, difficulty, trainerData.team || []);
                       proceduralTrainerRosterRef.current[trainerId] = enemies.map(m => m.id);
                   }
               } else {
-                  enemies = await Promise.all(trainerData.team.map(id => fetchPokemon(id, trainerData.level, true, 0, difficulty)));
+                  enemies = await Promise.all(trainerData.team.map(id => fetchPokemon(id, trainerBattleLevel, true, 0, difficulty)));
               }
           }
       } else {
@@ -8893,6 +8925,10 @@ export default function App() {
                 ? buildRivalTrainer(rivalMilestone)
                 : (Object.values(currentMap?.trainers || {}).find((t: any) => t.id === battleState.currentTrainerId) as TrainerData | undefined);
             const isGymLeader = trainer?.isGymLeader;
+            const trainerBadgeId = trainer?.badgeId ?? -1;
+            const isMainGymLeader = !!(isGymLeader && trainerBadgeId >= 1 && trainerBadgeId <= 8);
+            const gymBadgeEarned = isMainGymLeader && trainerBadgeId === playerState.badges + 1;
+            const isChampionClear = trainerBadgeId === 9 || /^rift_guardian_/.test(trainer?.id || '');
             const isRival = !!rivalMilestone;
 
             // Gauntlet linkage: if this trainer has a queued partner,
@@ -8915,17 +8951,17 @@ export default function App() {
             // Capture Permits: 2 for Gym Leader, 1 for regular Trainer.
             // Gauntlet chaining defers permit payout to the FINAL battle
             // so the player doesn't double-dip in the middle of a combo.
-            const permitsEarned = chainingGauntlet ? 0 : (isGymLeader ? 2 : 1);
+            const permitsEarned = chainingGauntlet ? 0 : (gymBadgeEarned ? 2 : 1);
 
             // Immediate Rift Essence: 5 for Gym Leader, 1 for regular Trainer
-            let essenceEarned = chainingGauntlet ? 0 : (isGymLeader ? 5 : 1);
+            let essenceEarned = chainingGauntlet ? 0 : (gymBadgeEarned ? 5 : 1);
             if (!chainingGauntlet) {
                 // Essence Purse keystone: +10% essence per level.
                 const mult = purse_essenceMult(playerState.meta);
                 if (mult > 1) {
                     essenceEarned = Math.floor(essenceEarned * mult);
                     // Nudge so a full-stacked Purse never stalls at the floor.
-                    if (getKeystoneLevel(playerState.meta, 'essence_purse') >= 5 && essenceEarned === (isGymLeader ? 5 : 1)) {
+                    if (getKeystoneLevel(playerState.meta, 'essence_purse') >= 5 && essenceEarned === (gymBadgeEarned ? 5 : 1)) {
                         essenceEarned += 1;
                     }
                 }
@@ -8933,7 +8969,7 @@ export default function App() {
 
             // Streak Bonus for Money: +20% per streak point
             const moneyBonus = 1 + (newStreak * 0.2);
-            const baseMoney = isGymLeader ? 2000 : 500;
+            const baseMoney = gymBadgeEarned ? 2000 : 500;
             let moneyMult = 1;
             if (survivingTeam.some(p => p.heldItem?.id === 'amulet-coin')) moneyMult = 2;
             // Trainer Bond multiplier (read PRE-increment so the bonus
@@ -8970,11 +9006,11 @@ export default function App() {
                     newItems.push(rivalMilestone.trophy);
                 }
 
-                const newBadges = isGymLeader ? prev.badges + 1 : prev.badges;
+                const newBadges = gymBadgeEarned ? prev.badges + 1 : prev.badges;
                 // When a badge is earned, auto-scale the whole team to the new
                 // floor -- so grabbing badge 3 immediately pulls low-level
                 // benched mons up to fighting shape.
-                const finalTeam = isGymLeader
+                const finalTeam = gymBadgeEarned
                     ? autoScaleTeamToFloor(survivingTeam, newBadges, prev.run.maxDistanceReached)
                     : survivingTeam;
 
@@ -8995,11 +9031,11 @@ export default function App() {
                 // See data/meta.ts TOKEN_AWARDS for the rates.
                 let tokensEarned = 0;
                 if (!chainingGauntlet) {
-                    if (isGymLeader) tokensEarned += TOKEN_AWARDS.gymLeader;
+                    if (gymBadgeEarned) tokensEarned += TOKEN_AWARDS.gymLeader;
                     if (isRival)     tokensEarned += TOKEN_AWARDS.rivalMilestone;
                     // Champion tag: story `_beaten_rift-champion` flag used
                     // by existing end-game flow; treat as a capstone drop.
-                    if (trainer?.badgeId === 9) tokensEarned += TOKEN_AWARDS.championClear;
+                    if (isChampionClear) tokensEarned += TOKEN_AWARDS.championClear;
                     // Talent: Rift Ledger doubles tokens during the first
                     // hour of this run. We reuse `lifetime.runStartedAt` if
                     // available, otherwise never double (safe fallback).
@@ -9010,6 +9046,29 @@ export default function App() {
                         }
                     }
                 }
+
+                const championFlag = isChampionClear ? ['_beaten_rift-champion'] : [];
+                const criticalTrainerIdRe = /^(gym_leader_|gym\d+_mook|rift_guardian_|e4_|elite_|champion_)/;
+                const mergedDefeated = (() => {
+                    const trainerId = battleState.currentTrainerId;
+                    if (!trainerId) return prev.defeatedTrainers;
+                    const list = [...prev.defeatedTrainers, trainerId];
+                    const dedup: string[] = [];
+                    const seen = new Set<string>();
+                    for (let i = list.length - 1; i >= 0; i--) {
+                        const id = list[i];
+                        if (seen.has(id)) continue;
+                        seen.add(id);
+                        dedup.unshift(id);
+                    }
+                    if (dedup.length <= 5000) return dedup;
+                    const critical = dedup.filter((id) => criticalTrainerIdRe.test(id));
+                    const nonCritical = dedup.filter((id) => !criticalTrainerIdRe.test(id));
+                    const nonCriticalBudget = Math.max(0, 5000 - critical.length);
+                    const keptNonCritical = nonCritical.slice(Math.max(0, nonCritical.length - nonCriticalBudget));
+                    const merged = [...keptNonCritical, ...critical];
+                    return merged.slice(Math.max(0, merged.length - 5000));
+                })();
 
                 return {
                     ...prev,
@@ -9024,13 +9083,8 @@ export default function App() {
                     // very-old trainer's id evicts and the player
                     // returns, they re-fight the encounter; that's
                     // the better failure mode than save bloat.
-                    defeatedTrainers: (() => {
-                        const next = [...prev.defeatedTrainers, battleState.currentTrainerId!];
-                        return next.length > 5000 ? next.slice(next.length - 5000) : next;
-                    })(),
-                    storyFlags: rivalFlag.length > 0
-                        ? [...prev.storyFlags, ...rivalFlag]
-                        : prev.storyFlags,
+                    defeatedTrainers: mergedDefeated,
+                    storyFlags: [...new Set([...prev.storyFlags, ...rivalFlag, ...championFlag])],
                     inventory: { ...prev.inventory, items: newItems },
                     meta: {
                         ...prev.meta,
@@ -9060,6 +9114,7 @@ export default function App() {
                         totalMoneyEarned: lt.totalMoneyEarned + finalMoney,
                         currentStreak: newStreak,
                         biggestStreak: Math.max(lt.biggestStreak, newStreak),
+                        riftStabilityCleared: !!(lt.riftStabilityCleared || isChampionClear),
                     },
                     bounties: nextBountyState,
                 };
@@ -9079,7 +9134,7 @@ export default function App() {
                 else if (newBondStacks === 10) showToast('Trainer Bond LEGENDARY! +80% XP & loot.', 'reward', { kicker: 'Bond' });
             }
 
-            const victoryMsgs = isGymLeader ?
+            const victoryMsgs = gymBadgeEarned ?
                 [
                     "Gym Leader defeated!",
                     "Badge earned!",
@@ -9088,6 +9143,14 @@ export default function App() {
                     ...(bondMsg ? [bondMsg] : []),
                     "Your party was partially healed."
                 ] :
+                isMainGymLeader ?
+                    [
+                        "Gym leader defeated!",
+                        "You already hold this gym's progression tier, so no new badge was awarded.",
+                        `Reward: $${finalMoney}`,
+                        `+${essenceEarned} Rift Essence`,
+                        ...(bondMsg ? [bondMsg] : []),
+                    ] :
                 isRival && rivalMilestone ?
                     [
                         `You defeated ${trainer?.name}!`,
@@ -9127,10 +9190,9 @@ export default function App() {
             setDialogue(victoryMsgs);
             _trainerRewardOk = true;
 
-            if (isGymLeader) {
+            if (gymBadgeEarned) {
                 window.clearTimeout(victorySafetyTimer);
                 battleExitInFlightRef.current = true;
-                console.log('[Battle] Gym leader victory: routing to PERK_SELECT.');
                 setBattleFading('victory');
                 await delay(300);
                 setPhase(GamePhase.PERK_SELECT);
@@ -10965,6 +11027,40 @@ export default function App() {
                         best: playerState.catchCombo.best,
                     } : undefined}
                 />
+            );
+        }
+
+        if (phase === GamePhase.GAME_OVER || phase === GamePhase.VICTORY) {
+            const isVictoryPhase = phase === GamePhase.VICTORY;
+            return (
+                <div className="h-screen w-screen bg-black text-white flex items-center justify-center">
+                    <div className="w-full max-w-xl rounded-2xl border border-white/20 bg-black/70 p-8 text-center shadow-2xl">
+                        <h2 className="text-3xl font-black tracking-wide mb-4">
+                            {isVictoryPhase ? 'Victory' : 'Game Over'}
+                        </h2>
+                        <p className="text-sm text-gray-200 mb-6">
+                            {isVictoryPhase
+                                ? 'Your expedition reached a major milestone. You can continue exploring or return to the main menu.'
+                                : 'The expedition ended. Return to the main menu to begin a new run or load your save.'}
+                        </p>
+                        <div className="flex justify-center gap-3">
+                            <button
+                                className="px-4 py-2 rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 transition"
+                                onClick={() => setPhase(GamePhase.MENU)}
+                            >
+                                Main Menu
+                            </button>
+                            {isVictoryPhase && (
+                                <button
+                                    className="px-4 py-2 rounded-lg border border-cyan-300/50 bg-cyan-600/30 hover:bg-cyan-500/40 transition"
+                                    onClick={() => setPhase(GamePhase.OVERWORLD)}
+                                >
+                                    Continue Expedition
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
             );
         }
         

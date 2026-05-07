@@ -32,18 +32,26 @@ import { MOVE_SFX_ALIASES } from '../data/moveSfxAliases';
 // -----------------------------------------------------------------------------
 const AUDIO_PREF_KEY = 'pokexplorers_audio_v1';
 interface AudioPrefs { sfx: number; bgm: number; muted: boolean }
+const DEFAULT_SFX_PREF = 0.72;
+const DEFAULT_BGM_PREF = 0.64;
+const MASTER_BUS_GAIN = 0.9;
+const SFX_BUS_TRIM = 0.8;
+const BGM_BUS_TRIM = 0.9;
+
+const defaultAudioPrefs = (): AudioPrefs => ({ sfx: DEFAULT_SFX_PREF, bgm: DEFAULT_BGM_PREF, muted: false });
+
 const loadAudioPrefs = (): AudioPrefs => {
-    if (typeof window === 'undefined') return { sfx: 1, bgm: 1, muted: false };
+    if (typeof window === 'undefined') return defaultAudioPrefs();
     try {
         const raw = window.localStorage.getItem(AUDIO_PREF_KEY);
-        if (!raw) return { sfx: 1, bgm: 1, muted: false };
+        if (!raw) return defaultAudioPrefs();
         const p = JSON.parse(raw) as Partial<AudioPrefs>;
         return {
-            sfx: typeof p.sfx === 'number' ? Math.max(0, Math.min(1, p.sfx)) : 1,
-            bgm: typeof p.bgm === 'number' ? Math.max(0, Math.min(1, p.bgm)) : 1,
+            sfx: typeof p.sfx === 'number' ? Math.max(0, Math.min(1, p.sfx)) : DEFAULT_SFX_PREF,
+            bgm: typeof p.bgm === 'number' ? Math.max(0, Math.min(1, p.bgm)) : DEFAULT_BGM_PREF,
             muted: !!p.muted,
         };
-    } catch { return { sfx: 1, bgm: 1, muted: false }; }
+    } catch { return defaultAudioPrefs(); }
 };
 const persistAudioPrefs = (p: AudioPrefs): void => {
     if (typeof window === 'undefined') return;
@@ -146,6 +154,9 @@ export const BGM_TRACKS = {
 };
 
 let audioCtx: AudioContext | null = null;
+let masterBus: GainNode | null = null;
+let bgmBus: GainNode | null = null;
+let sfxBus: GainNode | null = null;
 // =============================================================================
 // BGM crossfade state.
 // ---------------------------------------------------------------------------
@@ -203,6 +214,14 @@ const initAudio = () => {
     try {
         const CtxClass = (window as any).AudioContext || (window as any).webkitAudioContext;
         audioCtx = new CtxClass();
+        masterBus = audioCtx.createGain();
+        masterBus.gain.value = MASTER_BUS_GAIN;
+        bgmBus = audioCtx.createGain();
+        bgmBus.gain.value = BGM_BUS_TRIM;
+        sfxBus = audioCtx.createGain();
+        sfxBus.gain.value = SFX_BUS_TRIM;
+        bgmBus.connect(masterBus).connect(audioCtx.destination);
+        sfxBus.connect(masterBus);
         console.log("[Audio] System Initialized. State:", audioCtx.state);
         audioCtx.onstatechange = () => {
             console.log("[Audio] Context State:", audioCtx?.state);
@@ -287,7 +306,7 @@ const playNoise = (
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(volume, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-    src.connect(filter).connect(gain).connect(ctx.destination);
+    src.connect(filter).connect(gain).connect(sfxBus || masterBus || ctx.destination);
     src.start();
     src.stop(ctx.currentTime + duration + 0.05);
 };
@@ -310,7 +329,7 @@ const playTone = (
     gain.gain.setValueAtTime(0.0, t0);
     gain.gain.linearRampToValueAtTime(volume, t0 + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(sfxBus || masterBus || ctx.destination);
     osc.start(t0);
     osc.stop(t0 + duration + 0.05);
 };
@@ -398,31 +417,32 @@ const triggerProceduralSound = (type: 'hit' | 'thump' | 'beep' | 'faint' | 'supe
     const ctx = initAudio();
     if (!ctx || ctx.state !== 'running') return;
     const now = ctx.currentTime;
+    const sfx = Math.max(0.01, getSfxVolume());
 
     if (type === 'hit') {
-        playNoise(ctx, 0.12, 'lowpass', 500, 0.5, 0.45);
-        playTone(ctx, 'square', 180, 40, 0.13, 0.25);
+        playNoise(ctx, 0.12, 'lowpass', 500, 0.5, 0.45 * sfx);
+        playTone(ctx, 'square', 180, 40, 0.13, 0.25 * sfx);
     } else if (type === 'thump') {
-        playTone(ctx, 'sine', 60, 20, 0.25, 0.5);
+        playTone(ctx, 'sine', 60, 20, 0.25, 0.5 * sfx);
     } else if (type === 'faint') {
-        playTone(ctx, 'sawtooth', 220, 50, 0.55, 0.35);
-        playTone(ctx, 'sawtooth', 180, 30, 0.55, 0.3, 0.1);
+        playTone(ctx, 'sawtooth', 220, 50, 0.55, 0.35 * sfx);
+        playTone(ctx, 'sawtooth', 180, 30, 0.55, 0.3 * sfx, 0.1);
     } else if (type === 'super') {
         [660, 990, 1320, 1760].forEach((f, i) =>
-            playTone(ctx, 'square', f, f, 0.1, 0.25, i * 0.06));
+            playTone(ctx, 'square', f, f, 0.1, 0.25 * sfx, i * 0.06));
     } else if (type === 'notvery') {
-        playTone(ctx, 'triangle', 220, 110, 0.3, 0.2);
+        playTone(ctx, 'triangle', 220, 110, 0.3, 0.2 * sfx);
     } else if (type === 'levelup') {
         [523.25, 659.25, 783.99, 1046.50].forEach((f, i) =>
-            playTone(ctx, 'triangle', f, f, 0.18, 0.22, i * 0.09));
+            playTone(ctx, 'triangle', f, f, 0.18, 0.22 * sfx, i * 0.09));
     } else {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(880, now);
-        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.setValueAtTime(0.1 * sfx, now);
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-        osc.connect(gain); gain.connect(ctx.destination);
+        osc.connect(gain); gain.connect(sfxBus || masterBus || ctx.destination);
         osc.start(now); osc.stop(now + 0.3);
     }
 };
@@ -497,7 +517,7 @@ const playCascadingSound = async (file: string, mirrorList: string[], ext: strin
         source.buffer = buffer;
         const gain = ctx.createGain();
         gain.gain.value = volume * getSfxVolume();
-        source.connect(gain).connect(ctx.destination);
+        source.connect(gain).connect(sfxBus || masterBus || ctx.destination);
         source.start(0);
         return true;
     } catch (e) {
@@ -522,7 +542,7 @@ export const playSound = async (url: string, volume: number = 0.5) => {
         source.buffer = buffer;
         const gain = ctx.createGain();
         gain.gain.value = volume * getSfxVolume();
-        source.connect(gain).connect(ctx.destination);
+        source.connect(gain).connect(sfxBus || masterBus || ctx.destination);
         source.start(0);
     } catch {}
 };
@@ -557,14 +577,15 @@ const moveNameToSlug = (raw?: string): string => {
 const playProceduralMove = (type: string, moveName?: string) => {
     const ctx = initAudio();
     if (!ctx || ctx.state !== 'running') return;
+    const sfx = Math.max(0.01, getSfxVolume());
     const synth = synthByType[type?.toLowerCase?.() || 'normal'] || synthByType.normal;
-    synth(ctx, 0.55);
+    synth(ctx, 0.45 * sfx);
     const slug = moveNameToSlug(moveName);
     if (slug === 'explosion' || slug === 'self-destruct') {
         setTimeout(() => triggerProceduralSound('thump'), 60);
         setTimeout(() => triggerProceduralSound('hit'), 120);
     } else if (slug === 'hyper-beam' || slug === 'solar-beam' || slug === 'giga-impact') {
-        playTone(ctx, 'sawtooth', 1200, 200, 0.7, 0.3);
+        playTone(ctx, 'sawtooth', 1200, 200, 0.7, 0.24 * sfx);
     }
 };
 
@@ -576,7 +597,7 @@ const playDecoded = (buffer: AudioBuffer, volume: number) => {
         source.buffer = buffer;
         const gain = ctx.createGain();
         gain.gain.value = volume * getSfxVolume();
-        source.connect(gain).connect(ctx.destination);
+        source.connect(gain).connect(sfxBus || masterBus || ctx.destination);
         source.start(0);
     } catch (e) {
         lastError = `Play Fail: ${(e as Error).message}`;
@@ -711,7 +732,7 @@ export const playMoveSfx = (type: string, moveName?: string, sfxUrl?: string): v
     // Fast path: any candidate already decoded -> play it instantly.
     for (const url of candidates) {
         if (bufferCache.has(url)) {
-            playDecoded(bufferCache.get(url)!, 0.7);
+            playDecoded(bufferCache.get(url)!, 0.55);
             return;
         }
     }
@@ -722,7 +743,7 @@ export const playMoveSfx = (type: string, moveName?: string, sfxUrl?: string): v
         const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 350));
         Promise.race([loadBuffer(localUrl), timeout]).then((buf) => {
             if (buf) {
-                playDecoded(buf, 0.7);
+                playDecoded(buf, 0.55);
             } else {
                 // Fetch still in flight or it failed outright; warm any remaining
                 // cross-origin candidates for next time and use procedural now.
@@ -1033,7 +1054,7 @@ const startProceduralBGM = (theme: string, volume: number, slot: BgmSlot) => {
     slot.baseGain = volume * spec.volume / 0.2;
     // Live gain is set by crossfadeBGM's ramp; we just connect the node here.
     slot.gain.gain.value = 0;
-    slot.gain.connect(ctx.destination);
+    slot.gain.connect(bgmBus || masterBus || ctx.destination);
 
     const loopBeats = Math.max(totalBeats(spec.melody), totalBeats(spec.bass));
     const loopDur = loopBeats * (60 / spec.bpm);
@@ -1220,7 +1241,7 @@ export const playBGM = async (url: string, volume: number = 0.3, fadeMs: number 
             source.loop = true;
             const gain = ctx.createGain();
             gain.gain.value = 0;
-            source.connect(gain).connect(ctx.destination);
+            source.connect(gain).connect(bgmBus || masterBus || ctx.destination);
             source.start(0);
             newSlot.source = source;
             newSlot.gain = gain;
