@@ -2545,31 +2545,37 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
       return true;
   };
 
-  if (assignment && assignment.abilities_new.length > 0) {
-      const newAbilityName = isTrainer
-          ? assignment.abilities_new[0]
-          : assignment.abilities_new[Math.floor(Math.random() * assignment.abilities_new.length)];
-      if (!applyNewAbility(newAbilityName) && import.meta.env?.DEV) {
-          console.warn(`[abilities] ${data.name} assignment "${newAbilityName}" has no NEW_ABILITIES entry — skipping.`);
-      }
-  } else {
-      // --- TYPE-BASED FALLBACK ABILITY POOL ---
-      // When there's no hand-written assignment, still give the mon a flavour
-      // custom ability drawn from its primary type. This massively expands
-      // coverage for wild Pokemon without forcing us to maintain a per-species
-      // table. Only abilities that are actually wired into the battle engine
-      // are listed here.
-      const pick = (pool: string[]): string | null => {
-          if (!pool.length) return null;
-          // Deterministic for trainers (always first), random for wilds so
-          // players see variety across catches of the same species.
-          return isTrainer ? pool[0] : pool[Math.floor(Math.random() * pool.length)];
-      };
-      const chosen = pick(getTypeFallbackAbilities(monTypes));
-      if (chosen) {
-          applyNewAbility(chosen);
-      } else if (isTrainer && import.meta.env?.DEV) {
-          console.warn(`[abilities] Trainer ${data.name} has no assignment and no type-fallback pool — vanilla "${ability.name}".`);
+  // Keep original PokeAPI abilities in the ecosystem: trainers stay mostly
+  // curated/custom, but wilds/starters now roll a meaningful vanilla chance.
+  const vanillaAbilityChance = !isTrainer ? (level <= 5 ? 0.55 : 0.32) : 0;
+  const keepVanillaAbility = Math.random() < vanillaAbilityChance;
+  if (!keepVanillaAbility) {
+      if (assignment && assignment.abilities_new.length > 0) {
+          const newAbilityName = isTrainer
+              ? assignment.abilities_new[0]
+              : assignment.abilities_new[Math.floor(Math.random() * assignment.abilities_new.length)];
+          if (!applyNewAbility(newAbilityName) && import.meta.env?.DEV) {
+              console.warn(`[abilities] ${data.name} assignment "${newAbilityName}" has no NEW_ABILITIES entry — skipping.`);
+          }
+      } else {
+          // --- TYPE-BASED FALLBACK ABILITY POOL ---
+          // When there's no hand-written assignment, still give the mon a flavour
+          // custom ability drawn from its primary type. This massively expands
+          // coverage for wild Pokemon without forcing us to maintain a per-species
+          // table. Only abilities that are actually wired into the battle engine
+          // are listed here.
+          const pick = (pool: string[]): string | null => {
+              if (!pool.length) return null;
+              // Deterministic for trainers (always first), random for wilds so
+              // players see variety across catches of the same species.
+              return isTrainer ? pool[0] : pool[Math.floor(Math.random() * pool.length)];
+          };
+          const chosen = pick(getTypeFallbackAbilities(monTypes));
+          if (chosen) {
+              applyNewAbility(chosen);
+          } else if (isTrainer && import.meta.env?.DEV) {
+              console.warn(`[abilities] Trainer ${data.name} has no assignment and no type-fallback pool — vanilla "${ability.name}".`);
+          }
       }
   }
 

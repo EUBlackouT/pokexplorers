@@ -9,6 +9,7 @@ import {
     playSendOutSfx,
     playBattleWinSfx,
 } from '../services/soundService';
+import { formatAbilityName } from '../utils/formatAbilityName';
 
 /* ============================================================================
  * StarterSelect (v2, overhauled)
@@ -86,7 +87,7 @@ const flavorLine = (p: Pokemon): string => {
     const role = deriveRole(p).tag.toLowerCase();
     const speed = p.stats.speed;
     const tempo = speed >= 100 ? 'blazing' : speed >= 75 ? 'swift' : speed >= 55 ? 'steady' : 'patient';
-    return `A ${tempo} ${primary}${secondary} ${role} with ${p.ability.name.replace(/-/g, ' ')}.`;
+    return `A ${tempo} ${primary}${secondary} ${role} with ${formatAbilityName(p.ability.name)}.`;
 };
 
 /** Debounced cry player. Ignores rapid hover jitter, fires at most every 220ms. */
@@ -314,7 +315,7 @@ const PreviewDais: React.FC<{ pokemon: Pokemon | null; upgrades: any }> = ({ pok
                             <div className="bg-gray-100 border border-gray-300 rounded-lg px-3 py-2">
                                 <div className="flex items-baseline gap-2 mb-0.5">
                                     <span className="text-[9px] md:text-[10px] font-press-start uppercase tracking-wider text-[#b91c1c]">Ability</span>
-                                    <span className="text-sm font-bold text-gray-900">{titleCase(pokemon.ability.name)}</span>
+                                    <span className="text-sm font-bold text-gray-900">{titleCase(formatAbilityName(pokemon.ability.name))}</span>
                                 </div>
                                 <p className="text-[11px] md:text-xs leading-snug text-gray-600 line-clamp-2">
                                     {pokemon.ability.description || 'No description available.'}

@@ -5,6 +5,7 @@ import { ITEMS } from '../../services/itemData';
 import { TYPE_COLORS } from '../../services/pokeService';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { describeMove } from '../../utils/moveDescriptions';
+import { formatAbilityName } from '../../utils/formatAbilityName';
 import { MenuBackdrop, MenuCard, BrandTitle, Panel, PushButton, CloseX } from '../ui/MenuKit';
 
 // Rough cap most stats land under. Used to render proportional stat bars so
@@ -214,7 +215,7 @@ export const PokemonSummary: React.FC<{
                         <Panel title="Ability" accent="#fbbf24">
                             <div className="flex flex-wrap items-center gap-2 mb-2">
                                 <span className="text-sm uppercase tracking-wide text-amber-200 font-black truncate">
-                                    {pokemon.ability.name.replace(/-/g, ' ')}
+                                    {formatAbilityName(pokemon.ability.name)}
                                 </span>
                                 {pokemon.ability.isHidden && (
                                     <span className="px-1.5 py-0.5 bg-purple-700/80 border border-purple-400 text-purple-100 text-[7px] uppercase tracking-widest rounded-full">Hidden</span>

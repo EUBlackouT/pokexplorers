@@ -79,6 +79,7 @@ import { submitScore as submitExplorerScore, getSession as warmLeaderboardSessio
 import { BIOME_LORE } from './data/biomeLore';
 import { getHourlyMerchantChunk, getRoamingLegendary } from './utils/worldEvents';
 import { trackChunkVisit, trackTrainerEngagement, trackChallengeAccepted, trackChallengeCompleted, trackChallengeFailed } from './utils/telemetry';
+import { formatAbilityName } from './utils/formatAbilityName';
 import { BattlePopupLayer } from './components/ui/BattlePopupLayer';
 import { BattleBuffFx } from './components/ui/BattleBuffFx';
 import { StatStageStrip } from './components/ui/StatStageStrip';
@@ -4725,7 +4726,7 @@ export default function App() {
                 if (p.ability.name === 'AegisField' || p.ability.name === 'BacklineGuard') {
                     if (isPlayer) setBattleState(prev => ({ ...prev, aegisFieldTurns: 1 }));
                     else setBattleState(prev => ({ ...prev, enemyAegisFieldTurns: 1 }));
-                    tempLogs.push(`${p.name}'s ${p.ability.name} is protecting the team!`);
+                    tempLogs.push(`${p.name}'s ${formatAbilityName(p.ability.name)} is protecting the team!`);
                 }
                 if (p.ability.name === 'HazardEater') {
                     // Simplified: heal on switch-in
@@ -5656,7 +5657,7 @@ export default function App() {
                         actor.currentHp = Math.max(0, actor.currentHp - dmg);
                         const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
                         popupAbility(tSide, realTargetIndex as 0 | 1, target.ability.name === 'IronBarbs' ? 'Iron Barbs' : 'Rough Skin');
-                        tempLogs.push(`${actor.name} was hurt by ${target.name}'s ${target.ability.name}!`);
+                        tempLogs.push(`${actor.name} was hurt by ${target.name}'s ${formatAbilityName(target.ability.name)}!`);
                     }
 
                     // Gooey / Tangling Hair Ability
@@ -5665,7 +5666,7 @@ export default function App() {
                             actor.statStages.speed = Math.max(-6, (actor.statStages.speed || 0) - 1);
                             const tSide: 'player' | 'enemy' = action.isPlayer ? 'enemy' : 'player';
                             popupAbility(tSide, realTargetIndex as 0 | 1, target.ability.name === 'Gooey' ? 'Gooey' : 'Tangling Hair');
-                            tempLogs.push(`${actor.name}'s Speed was lowered by ${target.name}'s ${target.ability.name}!`);
+                            tempLogs.push(`${actor.name}'s Speed was lowered by ${target.name}'s ${formatAbilityName(target.ability.name)}!`);
                         }
                     }
 
