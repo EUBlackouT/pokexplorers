@@ -370,6 +370,8 @@ export const StarterSelect: React.FC<Props> = ({
     const [inviteError, setInviteError] = useState<string | null>(null);
     const [codeCopied, setCodeCopied] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
+    const confirmNoBtnRef = useRef<HTMLButtonElement | null>(null);
+    const confirmYesBtnRef = useRef<HTMLButtonElement | null>(null);
 
     const debouncedCry = useDebouncedCry();
 
@@ -487,7 +489,26 @@ export const StarterSelect: React.FC<Props> = ({
             if (loading || error) return;
             const tag = (e.target as HTMLElement | null)?.tagName || '';
             if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
-            if (showConfirm) return; // Confirm dialog has its own handlers.
+            if (showConfirm) {
+                if (e.key === 'Escape') {
+                    setShowConfirm(false);
+                    e.preventDefault();
+                } else if (e.key === 'Enter') {
+                    confirmSelection();
+                    e.preventDefault();
+                } else if (e.key === 'Tab') {
+                    const focusables = [confirmNoBtnRef.current, confirmYesBtnRef.current].filter(Boolean) as HTMLButtonElement[];
+                    if (focusables.length > 0) {
+                        const current = document.activeElement as HTMLElement | null;
+                        const currentIdx = focusables.findIndex((btn) => btn === current);
+                        const step = e.shiftKey ? -1 : 1;
+                        const nextIdx = currentIdx === -1 ? 0 : (currentIdx + step + focusables.length) % focusables.length;
+                        focusables[nextIdx].focus();
+                        e.preventDefault();
+                    }
+                }
+                return; // Confirm dialog has its own handlers.
+            }
             if (!options.length) return;
 
             if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
@@ -507,6 +528,14 @@ export const StarterSelect: React.FC<Props> = ({
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
     }, [focusedIndex, options, loading, error, toggleSelection, onBack, showConfirm]);
+
+    useEffect(() => {
+        if (!showConfirm) return;
+        const id = window.setTimeout(() => {
+            confirmYesBtnRef.current?.focus();
+        }, 0);
+        return () => window.clearTimeout(id);
+    }, [showConfirm]);
 
     /* -----------------------------------------------------------------------
      * Play cry when focus changes.
@@ -609,7 +638,7 @@ export const StarterSelect: React.FC<Props> = ({
 
     /* ============ Main render ============ */
     return (
-        <div className="fixed inset-0 text-white overflow-hidden select-none">
+        <div className="fixed inset-0 text-white overflow-y-auto overflow-x-hidden select-none">
             {/* ---------- Painted sanctuary background ---------- */}
             <div className="absolute inset-0 z-0">
                 <motion.div
@@ -729,12 +758,12 @@ export const StarterSelect: React.FC<Props> = ({
              * dais shrinks to its content, the pedestal row takes the remaining
              * space and wraps to multiple rows if needed, and the action bar
              * stays anchored at the bottom. Everything is sized to fit 100vh. */}
-            <div className="relative z-10 h-full w-full flex flex-col items-center px-3 md:px-8 pt-[5.5rem] md:pt-[6rem] pb-3 gap-3 md:gap-4">
+            <div className="relative z-10 min-h-full w-full flex flex-col items-center px-3 md:px-8 pt-[5.5rem] md:pt-[6rem] pb-4 gap-3 md:gap-4">
                 {/* Preview + pedestals are grouped together in a flex-1 area and
                  * vertically centered. This lands the pedestals on the horizon
                  * line of the background painting, with the preview card
                  * floating right above them -- not pinned to the top. */}
-                <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 md:gap-4">
+                <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 md:gap-4 pb-2">
                     {/* Preview dais */}
                     <div className="w-full max-w-5xl flex-shrink-0">
                         <PreviewDais pokemon={focusedPokemon} upgrades={upgrades} />
@@ -765,7 +794,7 @@ export const StarterSelect: React.FC<Props> = ({
                 </div>
 
                 {/* Selection state + action bar -- sticks to the bottom */}
-                <div className="w-full max-w-5xl flex-shrink-0 bg-white/95 text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a] px-4 py-2.5 md:px-5 md:py-3 flex items-center justify-between gap-3 flex-wrap">
+                <div className="w-full max-w-5xl flex-shrink-0 bg-white/95 text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a] px-4 py-2.5 md:px-5 md:py-3 flex items-center justify-between gap-3 flex-wrap relative z-10">
                     <div className="flex items-center gap-3 flex-wrap">
                         <SlotChip label="P1" pokemon={options[selected[0]]} />
                         <SlotChip label="P2" pokemon={options[selected[1]]} />
@@ -790,7 +819,7 @@ export const StarterSelect: React.FC<Props> = ({
                     </div>
                 </div>
 
-                <p className="text-[8px] font-press-start uppercase tracking-wider text-white/70 drop-shadow-[1px_1px_0_rgba(0,0,0,0.8)] flex-shrink-0">
+                <p className="text-[8px] font-press-start uppercase tracking-wider text-white/70 drop-shadow-[1px_1px_0_rgba(0,0,0,0.8)] flex-shrink-0 pointer-events-none text-center px-2">
                     ← → to move · Enter to select · Esc to go back
                 </p>
             </div>
@@ -810,7 +839,7 @@ export const StarterSelect: React.FC<Props> = ({
                             animate={{ scale: 1, y: 0 }}
                             exit={{ scale: 0.85, y: 20 }}
                             transition={{ type: 'spring', stiffness: 280, damping: 22 }}
-                            className="relative bg-white text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a,0_12px_24px_rgba(0,0,0,0.4)] max-w-xl w-[92%] p-6 md:p-8"
+                            className="relative bg-white text-gray-900 border-4 border-[#3c5aa6] rounded-2xl shadow-[0_6px_0_#1e3a8a,0_12px_24px_rgba(0,0,0,0.4)] max-w-xl w-[92%] max-h-[88vh] overflow-y-auto p-4 md:p-6"
                             onClick={e => e.stopPropagation()}
                         >
                             <div className="font-press-start text-sm md:text-base text-[#1e3a8a] uppercase tracking-wider mb-4">
@@ -835,12 +864,14 @@ export const StarterSelect: React.FC<Props> = ({
                             </div>
                             <div className="flex items-center justify-center gap-3">
                                 <button
+                                    ref={confirmNoBtnRef}
                                     onClick={() => setShowConfirm(false)}
                                     className="px-5 py-2 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-press-start text-[10px] uppercase tracking-wider border-b-4 border-gray-400 active:translate-y-0.5 active:border-b-2"
                                 >
                                     No
                                 </button>
                                 <button
+                                    ref={confirmYesBtnRef}
                                     onClick={confirmSelection}
                                     className="px-6 py-2 rounded-xl bg-gradient-to-b from-yellow-400 to-amber-500 hover:from-yellow-300 text-black font-press-start text-[10px] uppercase tracking-wider border-b-4 border-amber-800 active:translate-y-0.5 active:border-b-2"
                                 >

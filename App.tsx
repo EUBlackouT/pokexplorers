@@ -1887,7 +1887,7 @@ export default function App() {
               if (tile === 3 && playerState.storyFlags.includes('has_rod')) {
                   const roll = Math.random();
                   if (roll < 0.3) {
-                      setDialogue(["Something bit!", "A wild Magikarp appeared!"]);
+                      setDialogue(["Something bit!", "A wild Pokemon appeared!"]);
                       startBattle(1, false, false); // Wild battle
                   } else {
                       setDialogue(["Not even a nibble..."]);
@@ -3522,6 +3522,9 @@ export default function App() {
   };
 
   const startBattle = async (enemyCount: number, isBoss: boolean, isTrainer: boolean, trainerData?: TrainerData, biome?: string, tileType?: number) => {
+    // Clear any previous field dialogue so battle UI can't show stale text
+    // (e.g., fishing prompt lingering under a newly started encounter).
+    setDialogueRaw(null);
     if (isTrainer) trackTrainerEngagement();
     const isMultiplayer = !!multiplayer.roomId;
     const bId = isMultiplayer ? `wild_${multiplayer.roomId}_${Date.now()}` : null;
@@ -9606,7 +9609,43 @@ export default function App() {
       if (team[0]) playCry(team[0].id, team[0].name);
       // New run -> fresh procedural trainer rolls.
       proceduralTrainerRosterRef.current = {};
-      setPlayerState(prev=>({...prev, team})); 
+      setLoadedChunks({});
+      setDialogueRaw(null);
+      setPlayerState(prev => {
+          const startingPermits = 2 + catchers_permitBonus(prev.meta);
+          const startingMoney = purse_startingMoney(prev.meta);
+          const startComboShell = hasTalent(prev.meta, 'wild_instinct')
+              ? { speciesId: 0, speciesName: '(starter)', count: 0, best: prev.catchCombo?.best ?? 0 }
+              : undefined;
+          return {
+              ...prev,
+              team,
+              run: {
+                  ...prev.run,
+                  capturePermits: startingPermits,
+                  totalCaptures: 0,
+                  hasDied: false,
+                  distanceReached: 0,
+                  maxDistanceReached: 0,
+                  badgesEarned: 0,
+                  perks: [],
+                  trainerBond: { stacks: 0, lastFightDistance: 0 },
+              },
+              money: startingMoney,
+              badges: 0,
+              mapId: 'house_player',
+              chunkPos: { x: 0, y: 0 },
+              position: { x: 9, y: 9 },
+              p2Position: { x: 10, y: 9 },
+              inventory: { pokeballs: 0, potions: 5, revives: 0, rare_candy: 0, items: [] },
+              discoveredChunks: [],
+              discoveryPoints: 0,
+              defeatedTrainers: [],
+              storyFlags: [],
+              catchCombo: startComboShell,
+              routeState: createDefaultRouteState(),
+          };
+      }); 
       setPhase(GamePhase.OVERWORLD); 
   };
   
