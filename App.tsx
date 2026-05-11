@@ -1793,6 +1793,11 @@ export default function App() {
   async function handleInteraction(playerNum: 1 | 2) {
       if (networkRole === 'client' && playerNum === 1) return; 
       const pos = playerNum === 1 ? playerState.position : playerState.p2Position;
+      const chunkMatch = playerState.mapId.match(/^chunk_(-?\d+)_(-?\d+)$/);
+      const chunkDist = chunkMatch
+          ? Math.max(Math.abs(parseInt(chunkMatch[1], 10)), Math.abs(parseInt(chunkMatch[2], 10)))
+          : Number.POSITIVE_INFINITY;
+      const isEarlySupportChunk = chunkDist >= 1 && chunkDist <= 2;
       
       const currentMap = lookupMap(playerState.mapId, loadedChunks);
       if (!currentMap) return;
@@ -1817,12 +1822,27 @@ export default function App() {
                   const roll = Math.random();
                   let randomItem: keyof typeof playerState.inventory | 'riftEssence' = 'potions';
                   let qty = Math.floor(Math.random() * 3) + 1;
-                  
-                  if (roll < 0.4) randomItem = 'potions';
-                  else if (roll < 0.7) randomItem = 'revives';
-                  else {
-                      randomItem = 'riftEssence';
-                      qty = Math.floor(Math.random() * 5) + 5;
+
+                  if (isEarlySupportChunk) {
+                      // Early chunks prioritize sustain so players can keep
+                      // moving without exhaustive backtracking for healing.
+                      if (roll < 0.78) {
+                          randomItem = 'potions';
+                          qty = Math.floor(Math.random() * 3) + 2; // 2-4
+                      } else if (roll < 0.95) {
+                          randomItem = 'revives';
+                          qty = Math.floor(Math.random() * 2) + 1; // 1-2
+                      } else {
+                          randomItem = 'riftEssence';
+                          qty = Math.floor(Math.random() * 3) + 4; // 4-6
+                      }
+                  } else {
+                      if (roll < 0.4) randomItem = 'potions';
+                      else if (roll < 0.7) randomItem = 'revives';
+                      else {
+                          randomItem = 'riftEssence';
+                          qty = Math.floor(Math.random() * 5) + 5;
+                      }
                   }
 
                   setPlayerState(prev => {

@@ -525,6 +525,9 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
         const trainer = currentMap.trainers?.[key];
         const npc = currentMap.npcs?.[key];
+        const portalBelow = currentMap.portals?.[`${x},${y + 1}`];
+        const isCenterRoofSign = tile === 31 && typeof portalBelow === 'string' && portalBelow.startsWith('interior:center:');
+        const isMartRoofSign = tile === 41 && typeof portalBelow === 'string' && portalBelow.startsWith('interior:mart:');
         
         const myPos = myPlayerId === 1 ? p1Pos : p2Pos;
         const dx = Math.abs(x - myPos.x);
@@ -543,9 +546,6 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                          <span className="ml-1 text-yellow-400 font-bold">Lv.{trainer.level}</span>
                      </div>
                     <div className="relative w-20 h-20 -translate-y-2">
-                        <div className="absolute inset-0 rounded-full bg-indigo-900/70 border border-indigo-300/40 flex items-center justify-center text-[10px] font-bold text-indigo-100">
-                            NPC
-                        </div>
                         <img
                            src={trainer.sprite || 'https://play.pokemonshowdown.com/sprites/trainers/red.png'}
                            className="relative w-20 h-20 object-contain drop-shadow-xl scale-110"
@@ -569,9 +569,6 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                          {npc.name}
                      </div>
                     <div className="relative w-20 h-20 -translate-y-2">
-                        <div className="absolute inset-0 rounded-full bg-indigo-900/70 border border-indigo-300/40 flex items-center justify-center text-[10px] font-bold text-indigo-100">
-                            NPC
-                        </div>
                         <img
                            src={npc.sprite && npc.sprite.length > 2 ? npc.sprite : 'https://play.pokemonshowdown.com/sprites/trainers/lass.png'}
                            className="relative w-20 h-20 object-contain drop-shadow-xl scale-110"
@@ -698,7 +695,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 // Roof corners: left shingle cap / right shingle cap, center gets emblem.
                 if (tile === 30) className += ' roof-cap-l';
                 if (tile === 32) className += ' roof-cap-r';
-                if (tile === 31) content = (
+                if (isCenterRoofSign) content = (
                     <div className="tile-poke-center-sign" aria-label="Pokemon Center">
                         <div className="poke-sign-ball" />
                         <div className="poke-sign-label">CENTER</div>
@@ -717,7 +714,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 className += "tile-roof-blue tile-grass";
                 if (tile === 40) className += ' roof-cap-l';
                 if (tile === 42) className += ' roof-cap-r';
-                if (tile === 41) content = (
+                if (isMartRoofSign) content = (
                     <div className="tile-poke-mart-sign" aria-label="Pokemon Mart">
                         <div className="poke-sign-mart-letter">M</div>
                         <div className="poke-sign-label poke-sign-label-blue">MART</div>

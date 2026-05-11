@@ -1949,11 +1949,11 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
         const gymBadge = guaranteedGymBadge;
         const hx = 8;
         const hy = 8;
-        // Even/odd split: red roof (pokecenter-palette) vs blue roof (mart
-        // palette). Same tile IDs the random-gym branch uses below.
-        const roofTile = gymBadge % 2 === 0 ? 30 : 40;
-        const wTile   = gymBadge % 2 === 0 ? 33 : 43;
-        const sTile   = gymBadge % 2 === 0 ? 45 : 35;
+        // Gym exteriors should be visually distinct from Centers/Marts so
+        // players can scan towns quickly for healing/shop buildings.
+        const roofTile = 80;
+        const wTile   = 83;
+        const sTile   = 85;
 
         layout[hy][hx] = roofTile; layout[hy][hx + 1] = roofTile + 1; layout[hy][hx + 2] = roofTile + 2;
         layout[hy + 1][hx] = wTile; layout[hy + 1][hx + 1] = 50; layout[hy + 1][hx + 2] = sTile;
@@ -2212,8 +2212,8 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
                 // identity (trader / tutor / gift-giver / quest / trainer
                 // / lore NPC). This is the new variety layer that replaces
                 // the boring "clone of my bedroom" interior.
-                layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
-                layout[hy+1][hx] = 33; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 35;
+                layout[hy][hx] = 80; layout[hy][hx+1] = 81; layout[hy][hx+2] = 82;
+                layout[hy+1][hx] = 83; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 85;
                 portals[`${doorX},${doorY}`] = interiorPortal('house', cx, cy, doorX, doorY);
                 // Small decoration so different houses look visually
                 // distinct on the overworld too. Pick a prop from the
@@ -2232,8 +2232,8 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
                 // Instead we place a tough veteran trainer in the same
                 // structure. They gate no progression but give a hefty XP /
                 // money reward and scale with the chunk's distance.
-                layout[hy][hx] = 30; layout[hy][hx+1] = 31; layout[hy][hx+2] = 32;
-                layout[hy+1][hx] = 33; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 35;
+                layout[hy][hx] = 80; layout[hy][hx+1] = 81; layout[hy][hx+2] = 82;
+                layout[hy+1][hx] = 83; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 85;
                 const vetLevel = Math.min(80, levelBase + 6);
                 const vetTeam = [
                     rng.nextInt(1, 151), rng.nextInt(1, 151),
@@ -2491,6 +2491,20 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
         const spot = tryPlace(isOpen);
         if (spot) {
             layout[spot.y][spot.x] = 12; // Item Ball
+        }
+    }
+
+    // Early support pass (first 1-2 chunks from origin):
+    // ensure new runs see at least one accessible item cache quickly, with
+    // a small chance for a second cache so early healing feels less punishing.
+    if (dist >= 1 && dist <= 2) {
+        const hasItemBall = layout.some(row => row.includes(12));
+        if (!hasItemBall) {
+            const guaranteedSpot = tryPlace(isOpen);
+            if (guaranteedSpot) layout[guaranteedSpot.y][guaranteedSpot.x] = 12;
+        } else if (rng.next() < 0.35) {
+            const bonusSpot = tryPlace(isOpen);
+            if (bonusSpot) layout[bonusSpot.y][bonusSpot.x] = 12;
         }
     }
 
