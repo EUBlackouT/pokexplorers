@@ -136,6 +136,7 @@ function pickSheetFor(spriteUrl: string, isLocal: boolean, running: boolean): st
 const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: string, label: string, isRunning?: boolean, onClick?: () => void }> = ({ pos, isLocal, spriteUrl, label, isRunning = false, onClick }) => {
     const [facing, setFacing] = useState<TrainerFacing>('down');
     const [isMoving, setIsMoving] = useState(false);
+    const [sheetState, setSheetState] = useState<'loading' | 'ready' | 'error'>('loading');
     const stepParity = useRef<'A' | 'B'>('A');
     const prevPos = useRef(pos);
     const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -203,6 +204,19 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
     // makes the sprite "settle" cleanly after a sprint: feet land,
     // character stands normally.
     const sheet = pickSheetFor(spriteUrl, isLocal, isRunning && isMoving);
+
+    // Multiplayer-safe sprite loading:
+    // if an asset is missing/corrupted/network-blocked, render a fallback
+    // avatar instead of disappearing entirely.
+    useEffect(() => {
+        let alive = true;
+        setSheetState('loading');
+        const img = new Image();
+        img.onload = () => { if (alive) setSheetState('ready'); };
+        img.onerror = () => { if (alive) setSheetState('error'); };
+        img.src = sheet;
+        return () => { alive = false; };
+    }, [sheet]);
 
     // Resolve the correct cell for the current facing / walk phase
     // using the canonical Gen 3 rule set:
@@ -276,20 +290,30 @@ const PlayerCharacter: React.FC<{ pos: Coordinate, isLocal: boolean, spriteUrl: 
                         {label}
                     </div>
                 )}
-                <div
-                    className="relative z-10"
-                    style={{
-                        width: SPRITE_W,
-                        height: SPRITE_H,
-                        backgroundImage: `url(${sheet})`,
-                        backgroundSize: `${SHEET_W}px ${SHEET_H}px`,
-                        backgroundPosition: `${bgPosX}px 0px`,
-                        backgroundRepeat: 'no-repeat',
-                        imageRendering: 'pixelated',
-                        transform: flipX ? 'scaleX(-1)' : undefined,
-                        transformOrigin: 'center',
-                    }}
-                />
+                {sheetState === 'error' ? (
+                    <div
+                        className="relative z-10 flex items-end justify-center"
+                        style={{ width: SPRITE_W, height: SPRITE_H }}
+                    >
+                        <div className="w-7 h-12 rounded-t-[6px] rounded-b-sm bg-slate-700 border-2 border-slate-200 shadow-lg" />
+                    </div>
+                ) : (
+                    <div
+                        className="relative z-10"
+                        style={{
+                            width: SPRITE_W,
+                            height: SPRITE_H,
+                            backgroundImage: `url(${sheet})`,
+                            backgroundSize: `${SHEET_W}px ${SHEET_H}px`,
+                            backgroundPosition: `${bgPosX}px 0px`,
+                            backgroundRepeat: 'no-repeat',
+                            imageRendering: 'pixelated',
+                            transform: flipX ? 'scaleX(-1)' : undefined,
+                            transformOrigin: 'center',
+                            opacity: sheetState === 'loading' ? 0.8 : 1,
+                        }}
+                    />
+                )}
             </div>
         </div>
     );
