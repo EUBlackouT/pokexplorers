@@ -525,9 +525,21 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
 
         const trainer = currentMap.trainers?.[key];
         const npc = currentMap.npcs?.[key];
-        const portalBelow = currentMap.portals?.[`${x},${y + 1}`];
-        const isCenterRoofSign = tile === 31 && typeof portalBelow === 'string' && portalBelow.startsWith('interior:center:');
-        const isMartRoofSign = tile === 41 && typeof portalBelow === 'string' && portalBelow.startsWith('interior:mart:');
+        const portalAt = (px: number, py: number) => currentMap.portals?.[`${px},${py}`];
+        const isCenterDoor = (px: number, py: number) => {
+            const p = portalAt(px, py);
+            return typeof p === 'string' && p.startsWith('interior:center:');
+        };
+        const isMartDoor = (px: number, py: number) => {
+            const p = portalAt(px, py);
+            return typeof p === 'string' && p.startsWith('interior:mart:');
+        };
+        const isCenterRoofSign = tile === 31 && isCenterDoor(x, y + 1);
+        const isMartRoofSign = tile === 41 && isMartDoor(x, y + 1);
+        const isCenterRoofTile = (tile === 30 && isCenterDoor(x + 1, y + 1)) || isCenterRoofSign || (tile === 32 && isCenterDoor(x - 1, y + 1));
+        const isMartRoofTile = (tile === 40 && isMartDoor(x + 1, y + 1)) || isMartRoofSign || (tile === 42 && isMartDoor(x - 1, y + 1));
+        const isCenterWallTile = (tile === 33 && isCenterDoor(x + 1, y)) || (tile === 35 && isCenterDoor(x - 1, y));
+        const isMartWallTile = (tile === 43 && isMartDoor(x + 1, y)) || (tile === 45 && isMartDoor(x - 1, y));
         
         const myPos = myPlayerId === 1 ? p1Pos : p2Pos;
         const dx = Math.abs(x - myPos.x);
@@ -691,7 +703,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
             case 28: className += "tile-lava"; break;
             case 29: className += "tile-bridge"; break;
             case 30: case 31: case 32:
-                className += "tile-roof-red tile-grass";
+                className += `${isCenterRoofTile ? 'tile-roof-center' : 'tile-roof-red'} tile-grass`;
                 // Roof corners: left shingle cap / right shingle cap, center gets emblem.
                 if (tile === 30) className += ' roof-cap-l';
                 if (tile === 32) className += ' roof-cap-r';
@@ -703,7 +715,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 );
                 break;
             case 33: case 35: case 83: case 85:
-                className += "tile-wall-house tile-grass";
+                className += `tile-wall-house ${isCenterWallTile ? 'wall-center' : ''} tile-grass`;
                 if (tile === 33) className += ' wall-edge-l';
                 if (tile === 35) className += ' wall-edge-r';
                 if (tile === 83) className += ' wall-edge-l wall-base';
@@ -711,7 +723,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 break;
             case 34: className += "tile-window tile-wall-house tile-grass"; break;
             case 40: case 41: case 42:
-                className += "tile-roof-blue tile-grass";
+                className += `${isMartRoofTile ? 'tile-roof-mart' : 'tile-roof-blue'} tile-grass`;
                 if (tile === 40) className += ' roof-cap-l';
                 if (tile === 42) className += ' roof-cap-r';
                 if (isMartRoofSign) content = (
@@ -722,7 +734,7 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                 );
                 break;
             case 43: case 45:
-                className += "tile-wall-house wall-mart tile-grass";
+                className += `tile-wall-house wall-mart ${isMartWallTile ? 'wall-mart-front' : ''} tile-grass`;
                 if (tile === 43) className += ' wall-edge-l';
                 if (tile === 45) className += ' wall-edge-r';
                 break;
@@ -2288,6 +2300,40 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     border-top: 2px solid #1e3a8a;
                     z-index: 2;
                 }
+                .tile-roof-center {
+                    background:
+                        linear-gradient(180deg, #fff7f7 0%, #ffe4e6 55%, #fecdd3 100%);
+                    border-bottom: 8px solid #be123c;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.35), inset 0 0 0 2px rgba(190,24,93,0.16);
+                    position: relative;
+                }
+                .tile-roof-center::before {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    background: repeating-linear-gradient(
+                        to bottom,
+                        rgba(190,24,93,0.06) 0 4px,
+                        rgba(255,255,255,0.04) 4px 8px
+                    );
+                }
+                .tile-roof-mart {
+                    background:
+                        linear-gradient(180deg, #dbeafe 0%, #93c5fd 45%, #2563eb 100%);
+                    border-bottom: 8px solid #1e3a8a;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.32), inset 0 0 0 2px rgba(255,255,255,0.12);
+                    position: relative;
+                }
+                .tile-roof-mart::before {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    background: repeating-linear-gradient(
+                        to right,
+                        rgba(255,255,255,0.22) 0 7px,
+                        rgba(37,99,235,0.22) 7px 14px
+                    );
+                }
                 .tile-poke-mart-sign {
                     position: absolute;
                     top: -26px;
@@ -2346,6 +2392,14 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
                     z-index: 4;
                 }
                 .tile-wall-house.wall-mart { background: #dbeafe; }
+                .tile-wall-house.wall-center {
+                    background: linear-gradient(180deg, #fff 0%, #ffe4e6 100%);
+                    border-bottom-color: #be123c;
+                }
+                .tile-wall-house.wall-mart-front {
+                    background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+                    border-bottom-color: #1e3a8a;
+                }
 
                 /* Chimney for orange-roof houses */
                 .house-chimney {

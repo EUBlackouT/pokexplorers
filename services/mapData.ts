@@ -2,6 +2,7 @@
 import { MapZone, TrainerData, NPCData, InteractableData, Chunk, ChunkRole, RouteIncident, RouteState, RoutePreview } from '../types';
 import { getGymTeam } from '../data/gymTeams';
 import { interiorPortal, gymPortal } from './interiors';
+import { EARLY_IDS } from './pokeService';
 
 // --- TILE ID LEGEND ---
 // 0: Grass (Green)
@@ -776,11 +777,17 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
         ? null
         : null;
     void biomePool; // keep import graph clean -- App/Service fetch species later
+    const earlySpeciesSet = new Set<number>(EARLY_IDS);
     const candidatePool = arch.signaturePool;
+    const progressionPool =
+        dist <= 8
+            ? candidatePool.filter(id => earlySpeciesSet.has(id))
+            : candidatePool;
+    const safePool = progressionPool.length > 0 ? progressionPool : candidatePool;
     const team: number[] = [];
     for (let i = 0; i < teamSize; i++) {
-        const pick = Math.floor(hash4(cx, cy, 5555, i) * candidatePool.length);
-        team.push(candidatePool[pick]);
+        const pick = Math.floor(hash4(cx, cy, 5555, i) * safePool.length);
+        team.push(safePool[pick]);
     }
 
     const result: RouteTrainerPlacement[] = [
@@ -801,10 +808,15 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
             tierIndex2 === 2 ? 'ace' : tierIndex2 === 1 ? 'veteran' : 'rookie';
         const teamSize2 = 2 + tierIndex2;
         const level2 = levelFromDistance(dist, tierIndex2 * 2);
+        const progressionPool2 =
+            dist <= 8
+                ? arch2.signaturePool.filter(id => earlySpeciesSet.has(id))
+                : arch2.signaturePool;
+        const safePool2 = progressionPool2.length > 0 ? progressionPool2 : arch2.signaturePool;
         const team2: number[] = [];
         for (let i = 0; i < teamSize2; i++) {
-            const pick = Math.floor(hash4(cx, cy, 9999, i) * arch2.signaturePool.length);
-            team2.push(arch2.signaturePool[pick]);
+            const pick = Math.floor(hash4(cx, cy, 9999, i) * safePool2.length);
+            team2.push(safePool2[pick]);
         }
         result.push({
             archetype: arch2, name: name2, tier: tier2, tierIndex: tierIndex2,
@@ -1730,16 +1742,23 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
     const routeIncident = selectRouteIncident(cx, cy, biome, chunkRole, routeState);
 
     if (cx === 0 && cy === 0) {
+        const starterTownLayout = PALLET_LAYOUT.map(row => row.slice());
+        // Starter-town readability pass:
+        // - left house remains home/cottage look (orange roof)
+        // - right top building is now the guaranteed visible Center
+        starterTownLayout[2][2] = 80; starterTownLayout[2][3] = 81; starterTownLayout[2][4] = 82;
+        starterTownLayout[3][2] = 83; starterTownLayout[3][3] = 50; starterTownLayout[3][4] = 85;
+        starterTownLayout[2][12] = 30; starterTownLayout[2][13] = 31; starterTownLayout[2][14] = 32;
+        starterTownLayout[3][12] = 33; starterTownLayout[3][13] = 50; starterTownLayout[3][14] = 35;
         return {
-            x: 0, y: 0, id: 'chunk_0_0', name: 'Pallet Town', layout: PALLET_LAYOUT,
+            x: 0, y: 0, id: 'chunk_0_0', name: 'Pallet Town', layout: starterTownLayout,
             // Starter town: fix the long-standing portal mislabels. The
             // visible Mart roof's door at (10,9) now actually opens the
-            // Mart interior, not Oak's Lab. The right-hand red-roofed
-            // building at (13,3) becomes Oak's Lab (static); the left
-            // red-roofed building at (3,3) remains the player's bedroom.
+            // Mart interior. The right-hand top building at (13,3) is a
+            // guaranteed Center so new runs always have nearby healing.
             portals: {
                 "3,3": "house_player,9,8",                      // player's bedroom
-                "13,3": "lab,9,8",                              // Oak's Lab
+                "13,3": interiorPortal('center', 0, 0, 13, 3),  // Pallet Center
                 "10,9": interiorPortal('mart', 0, 0, 10, 9),    // Pallet Mart
             },
             wildLevelRange: [2, 5], biome: 'town',
@@ -2485,6 +2504,30 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
     const isOpen = (x: number, y: number) =>
         layout[y] && (layout[y][x] === bgTile || layout[y][x] === patchTile) &&
         !interactables[`${x},${y}`] && !npcs[`${x},${y}`] && !trainers[`${x},${y}`];
+
+    // Early healing reliability: ensure at least one visible Center in the
+    // first route ring so players don't have to brute-force random houses.
+    const hasCenterPortal = Object.values(portals).some(p => typeof p === 'string' && p.startsWith('interior:center:'));
+    if (dist >= 1 && dist <= 2 && !hasCenterPortal) {
+        const spot = tryPlace((x, y) =>
+            x + 2 < CHUNK_SIZE &&
+            y + 1 < CHUNK_SIZE &&
+            isOpen(x, y) &&
+            isOpen(x + 1, y) &&
+            isOpen(x + 2, y) &&
+            isOpen(x, y + 1) &&
+            isOpen(x + 1, y + 1) &&
+            isOpen(x + 2, y + 1)
+        );
+        if (spot) {
+            const hx = spot.x;
+            const hy = spot.y;
+            layout[hy][hx] = 30; layout[hy][hx + 1] = 31; layout[hy][hx + 2] = 32;
+            layout[hy + 1][hx] = 33; layout[hy + 1][hx + 1] = 50; layout[hy + 1][hx + 2] = 35;
+            portals[`${hx + 1},${hy + 1}`] = interiorPortal('center', cx, cy, hx + 1, hy + 1);
+            if (hy + 2 < CHUNK_SIZE && layout[hy + 2][hx + 1] === bgTile) layout[hy + 2][hx + 1] = 4;
+        }
+    }
 
     // Minor item cache (very common)
     if (dist > 1 && rng.next() < 0.45) {
