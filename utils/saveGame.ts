@@ -19,7 +19,18 @@
 import type { PlayerGlobalState } from '../types';
 
 const SAVE_KEY = 'pokexplorers_save_v1';
+const SAVE_BACKUP_KEY = 'pokexplorers_save_v1_backup';
 const CURRENT_VERSION = 1;
+const STORAGE_PROBE_KEY = '__pokexplorers_storage_probe__';
+const MAX_DISCOVERED_CHUNKS = 3200;
+const MAX_DEFEATED_TRAINERS = 2400;
+const MAX_STORY_FLAGS = 2600;
+const MAX_ROUTE_FLAGS = 300;
+const MAX_ROUTE_RECENT_INCIDENTS = 60;
+const MAX_ROUTE_RECENT_CHUNK_ROLES = 60;
+const MAX_ROUTE_ARCS = 36;
+const MAX_ROUTE_ECHOES = 36;
+const MAX_ROUTE_MEMORIES = 240;
 
 export interface SaveFile {
     version: number;
@@ -30,20 +41,93 @@ export interface SaveFile {
 const isBrowser = (): boolean =>
     typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
-export const hasSave = (): boolean => {
-    if (!isBrowser()) return false;
-    try {
-        return window.localStorage.getItem(SAVE_KEY) !== null;
-    } catch {
-        return false;
+type StorageBackend = {
+    name: 'localStorage' | 'sessionStorage';
+    storage: Storage;
+};
+
+const getStorageBackends = (): StorageBackend[] => {
+    if (!isBrowser()) return [];
+    const out: StorageBackend[] = [];
+    const tryBackend = (name: 'localStorage' | 'sessionStorage', storage: Storage | undefined) => {
+        if (!storage) return;
+        try {
+            storage.setItem(STORAGE_PROBE_KEY, '1');
+            storage.removeItem(STORAGE_PROBE_KEY);
+            out.push({ name, storage });
+        } catch {
+            // Access blocked or quota exhausted for this backend.
+        }
+    };
+    tryBackend('localStorage', window.localStorage);
+    tryBackend('sessionStorage', window.sessionStorage);
+    return out;
+};
+
+const readRawSave = (): string | null => {
+    const backends = getStorageBackends();
+    for (const backend of backends) {
+        for (const key of [SAVE_KEY, SAVE_BACKUP_KEY]) {
+            try {
+                const raw = backend.storage.getItem(key);
+                if (raw) return raw;
+            } catch {
+                // Try next backend.
+            }
+        }
     }
+    return null;
+};
+
+const tail = <T,>(arr: T[] | undefined, max: number): T[] => {
+    if (!Array.isArray(arr)) return [];
+    return arr.length > max ? arr.slice(arr.length - max) : [...arr];
+};
+
+const trimChunkMemoryStates = (states: Record<string, string[]> | undefined, maxKeys: number): Record<string, string[]> => {
+    if (!states || typeof states !== 'object') return {};
+    const keys = Object.keys(states);
+    const keep = keys.length > maxKeys ? keys.slice(keys.length - maxKeys) : keys;
+    const out: Record<string, string[]> = {};
+    for (const k of keep) out[k] = tail(states[k], 8);
+    return out;
+};
+
+const compactPlayerForSave = (player: PlayerGlobalState, aggressive: boolean): PlayerGlobalState => {
+    const route = player.routeState
+        ? {
+            ...player.routeState,
+            routeFlags: tail(player.routeState.routeFlags, MAX_ROUTE_FLAGS),
+            recentIncidentIds: tail(player.routeState.recentIncidentIds, MAX_ROUTE_RECENT_INCIDENTS),
+            recentChunkRoles: tail(player.routeState.recentChunkRoles, MAX_ROUTE_RECENT_CHUNK_ROLES),
+            activeRouteArcs: tail(player.routeState.activeRouteArcs, MAX_ROUTE_ARCS),
+            completedRouteArcs: tail(player.routeState.completedRouteArcs, MAX_ROUTE_ARCS),
+            failedRouteArcs: tail(player.routeState.failedRouteArcs, MAX_ROUTE_ARCS),
+            queuedEchoes: tail(player.routeState.queuedEchoes, MAX_ROUTE_ECHOES),
+            chunkMemoryStates: trimChunkMemoryStates(
+                player.routeState.chunkMemoryStates,
+                aggressive ? Math.floor(MAX_ROUTE_MEMORIES / 2) : MAX_ROUTE_MEMORIES,
+            ),
+        }
+        : player.routeState;
+
+    return {
+        ...player,
+        discoveredChunks: tail(player.discoveredChunks, aggressive ? Math.floor(MAX_DISCOVERED_CHUNKS / 2) : MAX_DISCOVERED_CHUNKS),
+        defeatedTrainers: tail(player.defeatedTrainers, aggressive ? Math.floor(MAX_DEFEATED_TRAINERS / 2) : MAX_DEFEATED_TRAINERS),
+        storyFlags: tail(player.storyFlags, aggressive ? Math.floor(MAX_STORY_FLAGS / 2) : MAX_STORY_FLAGS),
+        routeState: route,
+    };
+};
+
+export const hasSave = (): boolean => {
+    return loadSave() !== null;
 };
 
 export const loadSave = (): SaveFile | null => {
-    if (!isBrowser()) return null;
+    const raw = readRawSave();
+    if (!raw) return null;
     try {
-        const raw = window.localStorage.getItem(SAVE_KEY);
-        if (!raw) return null;
         const parsed = JSON.parse(raw) as SaveFile;
         if (!parsed.player || typeof parsed.version !== 'number') return null;
         return parsed;
@@ -54,25 +138,41 @@ export const loadSave = (): SaveFile | null => {
 };
 
 export const writeSave = (player: PlayerGlobalState): SaveFile | null => {
-    if (!isBrowser()) return null;
-    try {
-        const file: SaveFile = { version: CURRENT_VERSION, savedAt: Date.now(), player };
-        window.localStorage.setItem(SAVE_KEY, JSON.stringify(file));
-        return file;
-    } catch (err) {
-        // QuotaExceededError is the main failure mode here (team with lots
-        // of captured mon + discoveredChunks can run ~1-2MB). We surface
-        // nothing to the caller; `writeSave` returning null is the signal.
-        console.warn('[save] Failed to write save:', err);
-        return null;
+    const backends = getStorageBackends();
+    if (backends.length === 0) return null;
+
+    const attempts: Array<{ player: PlayerGlobalState; label: string }> = [
+        { player, label: 'full' },
+        { player: compactPlayerForSave(player, false), label: 'compact' },
+        { player: compactPlayerForSave(player, true), label: 'compact-aggressive' },
+    ];
+
+    for (const attempt of attempts) {
+        const file: SaveFile = { version: CURRENT_VERSION, savedAt: Date.now(), player: attempt.player };
+        const payload = JSON.stringify(file);
+        for (const backend of backends) {
+            try {
+                backend.storage.setItem(SAVE_KEY, payload);
+                backend.storage.setItem(SAVE_BACKUP_KEY, payload);
+                return file;
+            } catch (err) {
+                // Try next backend/compactness level.
+                console.warn(`[save] Failed to write ${attempt.label} save to ${backend.name}:`, err);
+            }
+        }
     }
+    return null;
 };
 
 export const deleteSave = (): void => {
-    if (!isBrowser()) return;
-    try {
-        window.localStorage.removeItem(SAVE_KEY);
-    } catch { /* noop */ }
+    for (const backend of getStorageBackends()) {
+        try {
+            backend.storage.removeItem(SAVE_KEY);
+            backend.storage.removeItem(SAVE_BACKUP_KEY);
+        } catch {
+            // noop
+        }
+    }
 };
 
 /** Last-saved timestamp or null if no save exists. */
@@ -111,8 +211,18 @@ export const importSaveFromString = (payload: string): SaveFile | null => {
     try {
         const parsed = JSON.parse(jsonText) as SaveFile;
         if (!parsed.player || typeof parsed.version !== 'number') return null;
-        window.localStorage.setItem(SAVE_KEY, jsonText);
-        return parsed;
+        const backends = getStorageBackends();
+        if (backends.length === 0) return null;
+        for (const backend of backends) {
+            try {
+                backend.storage.setItem(SAVE_KEY, jsonText);
+                backend.storage.setItem(SAVE_BACKUP_KEY, jsonText);
+                return parsed;
+            } catch {
+                // Try next backend.
+            }
+        }
+        return null;
     } catch (err) {
         console.warn('[save] Import failed:', err);
         return null;
