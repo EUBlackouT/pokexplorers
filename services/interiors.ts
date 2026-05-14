@@ -560,10 +560,14 @@ function buildCottageMoveTutor(seed: string, returnTo: string, rng: ReturnType<t
 function buildWorkshopTrainer(seed: string, returnTo: string, rng: ReturnType<typeof makeRng>): MapZone {
     const layout = layoutWorkshop();
     const voice = rng.pick(ARCHETYPE_GIFTS.trainer_dialogues);
-    // Level scales off the seed-hash magnitude so further-out houses host
-    // tougher trainers. This is a rough proxy for "distance from town".
     const seedNum = Array.from(seed).reduce((a, c) => a + c.charCodeAt(0), 0);
-    const level = 20 + (seedNum % 40);
+    const mapMatch = returnTo.match(/^chunk_(-?\d+)_(-?\d+),/);
+    const chunkDist = mapMatch
+        ? Math.sqrt((parseInt(mapMatch[1], 10) ** 2) + (parseInt(mapMatch[2], 10) ** 2))
+        : 8;
+    // Scale with actual world distance so early-game interiors cannot roll
+    // impossible level spikes (e.g. level-40+ workshop trainers near spawn).
+    const level = Math.max(6, Math.min(85, 6 + Math.floor(chunkDist * 1.3)));
     const reward = 600 + (seedNum % 8) * 200;
     const teamSpecies = [
         1 + ((seedNum * 31) % 386),

@@ -308,6 +308,11 @@ export interface Pokemon {
   // Per-battle "one-shot" flags for new early-pool abilities
   usedShellCurl?: boolean;
   usedEmberSpark?: boolean;
+  usedKeenFlareCrit?: boolean;
+  usedAnchorSync?: boolean;
+  usedFuseSpark?: boolean;
+  usedMeterShieldThisTurn?: boolean;
+  usedSpectatorRoarThisTurn?: boolean;
   // Per-action hint set by App.tsx when ally shares a target this turn
   allySharedTarget?: boolean;
   hasMovedThisTurn?: boolean;

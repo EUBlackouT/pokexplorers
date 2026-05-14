@@ -8,9 +8,11 @@ interface Props {
   xp?: number;
   maxXp?: number;
   status?: string;
+  abilityName?: string;
+  abilityDescription?: string;
 }
 
-export const HealthBar: React.FC<Props> = ({ current, max, label, level = 50, xp = 0, maxXp = 100, status }) => {
+export const HealthBar: React.FC<Props> = ({ current, max, label, level = 50, xp = 0, maxXp = 100, status, abilityName, abilityDescription }) => {
   const safeCurrent = isNaN(current) ? 0 : current;
   const safeMax = isNaN(max) ? 1 : max;
   const safeLevel = isNaN(level) ? 1 : level;
@@ -60,6 +62,14 @@ export const HealthBar: React.FC<Props> = ({ current, max, label, level = 50, xp
               </span>
             )}
             <span className="uppercase tracking-[0.15em] text-xs md:text-sm font-black drop-shadow-[0_2px_4px_rgba(0,0,0,1)] text-white/90 truncate">{label}</span>
+            {abilityName && (
+              <span
+                title={abilityDescription || abilityName}
+                className="hidden md:inline-block max-w-[95px] truncate rounded bg-indigo-900/70 border border-indigo-300/50 px-1.5 py-[1px] text-[8px] uppercase tracking-wide text-indigo-100"
+              >
+                {abilityName}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex flex-col items-end px-1">

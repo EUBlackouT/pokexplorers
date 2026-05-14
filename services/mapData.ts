@@ -2239,7 +2239,7 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
                 // door coords so it's deterministic.
                 const decorProp = [97, 98, 99][(doorX + doorY) % 3];
                 decorate(hx - 1, hy + 2, decorProp);
-            } else {
+            } else if (dist > 10) {
                 // Veteran Trainer Outpost (replaces the legacy RNG gym slot).
                 // We used to spawn a random extra gym here, but those diluted
                 // the "one unique gym per badge" feeling of the 8 curated
@@ -2269,6 +2269,14 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
                     winDialogue: "Heh. Kids these days are tougher than I thought.",
                 };
                 decorate(hx - 1, hy + 1, 97); // lamppost
+            } else {
+                // Near spawn, downgrade this slot to a normal house so we
+                // don't leak high-pressure veteran encounters too early.
+                layout[hy][hx] = 80; layout[hy][hx+1] = 81; layout[hy][hx+2] = 82;
+                layout[hy+1][hx] = 83; layout[hy+1][hx+1] = 50; layout[hy+1][hx+2] = 85;
+                portals[`${doorX},${doorY}`] = interiorPortal('house', cx, cy, doorX, doorY);
+                const decorProp = [97, 98, 99][(doorX + doorY + 1) % 3];
+                decorate(hx - 1, hy + 2, decorProp);
             }
         }
     } else if (poiRoll < 0.55 && dist > 150) {
@@ -3188,6 +3196,28 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
     Object.keys(trainers).forEach(reserveAroundSprite);
     Object.keys(npcs).forEach(reserveAroundSprite);
 
+    // Keep doorway approaches walkable. Props/foliage spawned in front of a
+    // portal can soft-block Centers/Marts/houses and feel like a broken map.
+    const clearEntranceApproach = (doorKey: string) => {
+        const [dx, dy] = doorKey.split(',').map(Number);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+        const approachYs = [dy + 1, dy + 2, dy + 3];
+        for (const ay of approachYs) {
+            if (ay < 0 || ay >= CHUNK_SIZE) continue;
+            const tile = layout[ay]?.[dx];
+            if (tile === undefined) continue;
+            const isBlockedFoliage =
+                tile === 11 || // tree
+                tile === 23 || tile === 24 || // cliff edge
+                tile === 53 || tile === 54 || tile === 55 || tile === 56 || tile === 57 || tile === 58 || tile === 59 || tile === 60 || tile === 61 || tile === 62 || tile === 63 || tile === 64 || // rocks/crystals
+                propTiles.has(tile);
+            if (isBlockedFoliage) {
+                layout[ay][dx] = 4;
+            }
+        }
+    };
+    Object.keys(portals).forEach(clearEntranceApproach);
+
     // Town biome identity pass: guarantee visible buildings so "town" chunks
     // don't read like empty fields with a label.
     if (biome === 'town' && dist >= 1) {
@@ -3211,9 +3241,9 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
                 }
                 if (candidates.length === 0) return false;
                 const pick = candidates[Math.floor(hash4(cx, cy, 32000 + seedOffset, 0) * candidates.length)];
-                const roof = kind === 'mart' ? 30 : 40;
-                const wall = kind === 'mart' ? 33 : 43;
-                const side = kind === 'mart' ? 45 : 35;
+                const roof = kind === 'mart' ? 40 : 80;
+                const wall = kind === 'mart' ? 43 : 83;
+                const side = kind === 'mart' ? 45 : 85;
                 layout[pick.y][pick.x] = roof;
                 layout[pick.y][pick.x + 1] = roof + 1;
                 layout[pick.y][pick.x + 2] = roof + 2;
@@ -3233,6 +3263,25 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
             if (builtA || builtB) poiTags.push('town_block');
         }
     }
+
+    // Final doorway safety pass (runs after all optional biome adjustments):
+    // guarantee a short walkable lane in front of every interior portal.
+    Object.entries(portals).forEach(([key, to]) => {
+        if (typeof to !== 'string' || !to.startsWith('interior:')) return;
+        const [dx, dy] = key.split(',').map(Number);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+        for (const ay of [dy + 1, dy + 2]) {
+            if (ay < 0 || ay >= CHUNK_SIZE) continue;
+            if (layout[ay]?.[dx] !== undefined) layout[ay][dx] = 4;
+        }
+    });
+
+    // Clamp generated trainer levels so far-distance event formulas don't
+    // exceed expected battle-level bounds.
+    Object.values(trainers).forEach((t) => {
+        const lvl = Number.isFinite(t.level) ? Math.floor(t.level) : 1;
+        t.level = Math.max(1, Math.min(100, lvl));
+    });
 
     return {
         x: cx, y: cy,

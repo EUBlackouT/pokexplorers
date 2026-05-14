@@ -112,6 +112,116 @@ import { TERA_TYPES, MEGA_ELIGIBLE, MEGA_ATK_MULT, MEGA_DEF_MULT, Z_DAMAGE_MULT 
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const BATTLE_LOG_TAIL = 60;
+const EMPTY_STAT_STAGES: StatStages = {
+    attack: 0,
+    defense: 0,
+    'special-attack': 0,
+    'special-defense': 0,
+    speed: 0,
+    accuracy: 0,
+    evasion: 0,
+};
+const resetBattleTransientState = (mon: Pokemon): Pokemon => ({
+    ...mon,
+    statStages: { ...EMPTY_STAT_STAGES },
+    // Full between-battle cleanse: keep long-term progression (HP/XP/level/items),
+    // clear battle-scoped debuffs and volatile control states.
+    status: undefined,
+    statusTurns: undefined,
+    hasMovedThisTurn: false,
+    tookDamageThisTurn: false,
+    isProtected: false,
+    isInvulnerable: false,
+    isTrapped: 0,
+    trappedTurns: 0,
+    confusionTurns: 0,
+    toxicTurns: 0,
+    isFlinching: false,
+    isLeechSeeded: false,
+    isCursed: false,
+    isNightmareActive: false,
+    perishTurns: undefined,
+    futureSightTurns: undefined,
+    mustRecharge: false,
+    chargingMove: undefined,
+    substituteHp: 0,
+    ignoresProtect: false,
+    usedSacrificialGuard: false,
+    usedTrickMirror: false,
+    usedBackdraftClause: false,
+    usedShellCurl: false,
+    usedKeenFlareCrit: false,
+    usedAnchorSync: false,
+    usedFuseSpark: false,
+    usedMeterShieldThisTurn: false,
+    usedSpectatorRoarThisTurn: false,
+    nextMoveDamageBoost: false,
+    nextMovePriorityBoost: 0,
+    nextMoveBoosts: undefined,
+    hasUsedJetstream: false,
+    hasUsedRuneBloomThisTurn: false,
+    lastMoveWasLink: false,
+    lastMoveMissed: false,
+    choiceMove: undefined,
+    metronomeCount: 0,
+    isTaunted: 0,
+    isEncored: 0,
+    encoredMove: undefined,
+    isDisabled: 0,
+    disabledMove: undefined,
+    isTormented: false,
+    isHealBlocked: 0,
+    isEmbargoed: 0,
+    isMagnetRaised: 0,
+    isTelekinesised: 0,
+    isIngrained: false,
+    isAquaRinged: false,
+    isImprisoned: false,
+    isHealingWishActive: false,
+    isLunarDanceActive: false,
+    isYawned: 0,
+});
+
+const auditFreshBattleMon = (mon: Pokemon, side: 'player' | 'enemy', slot: number): void => {
+    if (!import.meta.env?.DEV || !mon) return;
+    const stage = mon.statStages || EMPTY_STAT_STAGES;
+    const hasNonZeroStatStage =
+        (stage.attack || 0) !== 0 ||
+        (stage.defense || 0) !== 0 ||
+        (stage['special-attack'] || 0) !== 0 ||
+        (stage['special-defense'] || 0) !== 0 ||
+        (stage.speed || 0) !== 0 ||
+        (stage.accuracy || 0) !== 0 ||
+        (stage.evasion || 0) !== 0;
+    const lingeringFlags: string[] = [];
+    if (mon.status) lingeringFlags.push(`status=${mon.status}`);
+    if ((mon.statusTurns || 0) > 0) lingeringFlags.push(`statusTurns=${mon.statusTurns}`);
+    if ((mon.confusionTurns || 0) > 0) lingeringFlags.push(`confusionTurns=${mon.confusionTurns}`);
+    if ((mon.toxicTurns || 0) > 0) lingeringFlags.push(`toxicTurns=${mon.toxicTurns}`);
+    if (mon.isLeechSeeded) lingeringFlags.push('isLeechSeeded');
+    if (mon.isCursed) lingeringFlags.push('isCursed');
+    if (mon.isNightmareActive) lingeringFlags.push('isNightmareActive');
+    if ((mon.isTrapped || 0) > 0) lingeringFlags.push(`isTrapped=${mon.isTrapped}`);
+    if ((mon.trappedTurns || 0) > 0) lingeringFlags.push(`trappedTurns=${mon.trappedTurns}`);
+    if (mon.isProtected) lingeringFlags.push('isProtected');
+    if ((mon.isTaunted || 0) > 0) lingeringFlags.push(`isTaunted=${mon.isTaunted}`);
+    if ((mon.isEncored || 0) > 0) lingeringFlags.push(`isEncored=${mon.isEncored}`);
+    if ((mon.isDisabled || 0) > 0) lingeringFlags.push(`isDisabled=${mon.isDisabled}`);
+    if (mon.isTormented) lingeringFlags.push('isTormented');
+    if ((mon.isHealBlocked || 0) > 0) lingeringFlags.push(`isHealBlocked=${mon.isHealBlocked}`);
+    if ((mon.isEmbargoed || 0) > 0) lingeringFlags.push(`isEmbargoed=${mon.isEmbargoed}`);
+    if ((mon.isYawned || 0) > 0) lingeringFlags.push(`isYawned=${mon.isYawned}`);
+    if (hasNonZeroStatStage || lingeringFlags.length > 0) {
+        console.warn(
+            `[battle-reset] ${side} slot ${slot} (${mon.name}) entered battle with lingering state`,
+            {
+                statStages: stage,
+                lingeringFlags,
+            },
+        );
+    }
+};
 
 // True if `mapId` refers to a dynamically loaded map (chunk, interior,
 // puzzle) stored in `loadedChunks` rather than the static MAPS table.
@@ -1529,11 +1639,13 @@ export default function App() {
           speed *= (1 + swift_level(playerState.meta) * 0.05);
 
           if (actor.status === 'paralysis') speed *= 0.5;
+          if (actor.ability.name === 'FeverRush' && actor.status === 'burn') speed *= 2;
           if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
           if (actor.heldItem?.id === 'iron-ball') speed *= 0.5;
           if (actor.heldItem?.id === 'lagging-tail') speed *= 0.1;
 
           const priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
+          if (actor.ability.name === 'AnchorSync' && isFusion && !actor.usedAnchorSync) speed *= 0.85;
           
           const action = { actorIndex: currentActorIndex, targetIndex, move, item, isPlayer: true, isFusion, speed, priority, switchIndex };
           
@@ -1632,6 +1744,7 @@ export default function App() {
       
       let speed = (actor?.stats.speed || 0) * (1 + swift_level(playerState.meta) * 0.05);
       if (actor.status === 'paralysis') speed *= 0.5;
+      if (actor.ability.name === 'FeverRush' && actor.status === 'burn') speed *= 2;
       if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
       if (actor.heldItem?.id === 'lagging-tail') speed *= 0.5;
       if (actor.heldItem?.id === 'iron-ball') speed *= 0.5;
@@ -1652,6 +1765,7 @@ export default function App() {
       }
 
       let priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
+      if (actor.ability.name === 'AnchorSync' && isFusionMove && !actor.usedAnchorSync) speed *= 0.85;
       
       // Thunderous Step: Electric moves +1 priority at full HP
       if (actor.ability.name === 'ThunderousStep' && move?.type === 'Electric' && actor.currentHp === actor.maxHp) {
@@ -1877,7 +1991,15 @@ export default function App() {
 
               // Healing Spring
               if (tile === 66) {
-                  setPlayerState(prev => ({ ...prev, team: prev.team.map(p => ({ ...p, currentHp: p.maxHp, isFainted: false })) }));
+                  setPlayerState(prev => ({
+                      ...prev,
+                      team: prev.team.map(p => ({
+                          ...resetBattleTransientState(p),
+                          currentHp: p.maxHp,
+                          isFainted: false,
+                          status: undefined,
+                      })),
+                  }));
                   setDialogue(["Your team was fully healed by the spring!"]);
                   return;
               }
@@ -2012,7 +2134,7 @@ export default function App() {
                       setPlayerState(prev => ({
                           ...prev,
                           team: prev.team.map(p => ({
-                              ...p,
+                              ...resetBattleTransientState(p),
                               currentHp: p.maxHp,
                               isFainted: false,
                               status: undefined,
@@ -3487,7 +3609,18 @@ export default function App() {
       }
 
       if (playerNum === 1) setPlayerState(prev => ({ ...prev, position: newPos, team: updatedTeam })); else setPlayerState(prev => ({ ...prev, p2Position: newPos }));
-      if (tileType === 5) { setPlayerState(prev => ({ ...prev, team: prev.team.map(p => ({ ...p, currentHp: p.maxHp, isFainted: false })) })); setDialogue(["Team healed!"]); }
+      if (tileType === 5) {
+          setPlayerState(prev => ({
+              ...prev,
+              team: prev.team.map(p => ({
+                  ...resetBattleTransientState(p),
+                  currentHp: p.maxHp,
+                  isFainted: false,
+                  status: undefined,
+              })),
+          }));
+          setDialogue(["Team healed!"]);
+      }
       if (tileType === 10) setPhase(GamePhase.SHOP);
       
       let encounterRateMult = 1;
@@ -3740,7 +3873,7 @@ export default function App() {
       // In 2v2, only the first 2 pokemon are out. 
       // If enemy has 2+, it's a double battle.
       const isDouble = enemies.length >= 2;
-      const playerTeam = JSON.parse(JSON.stringify(playerState.team));
+      const playerTeam = JSON.parse(JSON.stringify(playerState.team)).map((p: Pokemon) => resetBattleTransientState(p));
       // Mark fainted for those not in the first 2 if it's a double battle? 
       // Actually, the UI only shows the first 2 living ones usually.
       // But the current UI maps over the whole team.
@@ -3842,6 +3975,11 @@ export default function App() {
 
       let firstActive = 0;
       while (firstActive < playerTeam.length && playerTeam[firstActive].isFainted) firstActive++;
+
+      // Dev-only guardrail: if anything leaks battle-only state into a fresh
+      // encounter, log it immediately so regressions are obvious.
+      playerTeam.slice(0, 2).forEach((m, idx) => auditFreshBattleMon(m, 'player', idx));
+      enemies.slice(0, 2).forEach((m, idx) => auditFreshBattleMon(m, 'enemy', idx));
 
       // Fresh battle = clean transition state. Without this, a re-entry
       // into BATTLE after a recovered crash (which set the guard true)
@@ -4135,6 +4273,7 @@ export default function App() {
        else if (speedStage < 0) speed *= (1 / (1 + 0.5 * Math.abs(speedStage)));
 
        if (mon.status === 'paralysis') speed *= 0.5;
+       if (mon.ability.name === 'FeverRush' && mon.status === 'burn') speed *= 2;
        if (mon.heldItem?.id === 'choice-scarf') speed *= 1.5;
        if (mon.heldItem?.id === 'lagging-tail') speed *= 0.5;
        if (mon.heldItem?.id === 'iron-ball') speed *= 0.5;
@@ -4182,14 +4321,41 @@ export default function App() {
 
     console.log('Enemy Moves:', enemyMoves);
 
-    const fullQueue = [...pendingMoves, ...enemyMoves].map(action => {
+    const preQueue = [...pendingMoves, ...enemyMoves].map(action => {
         const team = action.isPlayer ? playerTeam : enemyTeam;
         const actor = team[action.actorIndex];
         if (actor.heldItem?.id === 'quick-claw' && Math.random() < 0.2) {
             return { ...action, quickClawActivated: true };
         }
         return action;
-    }).sort((a,b) => {
+    });
+
+    // Cross Priority: if ally uses a +1 move, reroute this mon to the other
+    // foe and grant +0.5 effective priority so it trails the ally.
+    const applyCrossPriority = (pool: any[], team: Pokemon[]) => {
+        pool.forEach((action) => {
+            const actor = team[action.actorIndex];
+            if (!actor || actor.isFainted || actor.ability.name !== 'CrossPriority') return;
+            if (!action.move || typeof action.targetIndex !== 'number') return;
+            const isSingleTargetMove =
+                action.move.target !== 'Both foes' &&
+                action.move.target !== 'all-opponents' &&
+                !String(action.move.target || '').includes('all');
+            if (!isSingleTargetMove) return;
+            const allyAction = pool.find(
+                (a) => a !== action && a.isPlayer === action.isPlayer && a.actorIndex !== action.actorIndex && (a.priority || 0) >= 1
+            );
+            if (!allyAction || typeof allyAction.targetIndex !== 'number') return;
+            const opposite = allyAction.targetIndex === 0 ? 1 : 0;
+            action.targetIndex = opposite;
+            action.priority = Math.max((action.priority || 0) + 0.5, (allyAction.priority || 0) - 0.5);
+            action.crossPriorityTriggered = true;
+        });
+    };
+    applyCrossPriority(preQueue.filter(a => a.isPlayer), playerTeam);
+    applyCrossPriority(preQueue.filter(a => !a.isPlayer), enemyTeam);
+
+    const fullQueue = preQueue.sort((a,b) => {
          if (a.priority !== b.priority) return b.priority - a.priority;
          if (a.quickClawActivated && !b.quickClawActivated) return -1;
          if (!a.quickClawActivated && b.quickClawActivated) return 1;
@@ -4253,6 +4419,36 @@ export default function App() {
         }
         return null;
     };
+    const normalizeToken = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const maybeTriggerAbilityPopupFromLine = (ownerName: string, candidateRaw: string, seen: Set<string>) => {
+        const owner = resolveMon(ownerName.trim());
+        if (!owner) return;
+        const team = owner.side === 'player' ? tempPTeam : tempETeam;
+        const mon = team[owner.slot];
+        if (!mon?.ability?.name) return;
+        const formatted = formatAbilityName(mon.ability.name);
+        const candidateNorm = normalizeToken(candidateRaw);
+        const abilityNorm = normalizeToken(formatted);
+        if (!abilityNorm) return;
+        if (!candidateNorm.startsWith(abilityNorm) && !candidateNorm.includes(abilityNorm)) return;
+        const dedupeKey = `${owner.side}:${owner.slot}:${abilityNorm}:${lineCounterRef.current}`;
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        popupAbility(owner.side, owner.slot, formatted);
+    };
+    const maybeTriggerDefiant = (sourceName: string, targetName: string) => {
+        const source = resolveMon(sourceName.trim());
+        const target = resolveMon(targetName.trim());
+        if (!source || !target) return;
+        if (source.side === target.side) return;
+        const targetTeam = target.side === 'player' ? tempPTeam : tempETeam;
+        const targetMon = targetTeam[target.slot];
+        if (!targetMon || targetMon.isFainted) return;
+        if ((targetMon.ability?.name || '').toLowerCase() !== 'defiant') return;
+        if (!targetMon.statStages) targetMon.statStages = { ...EMPTY_STAT_STAGES };
+        targetMon.statStages.attack = Math.min(6, (targetMon.statStages.attack || 0) + 2);
+        tempLogs.push(`${targetMon.name}'s Defiant sharply raised its Attack!`);
+    };
     const STAT_KEYWORD: Record<string, 'attack' | 'defense' | 'special-attack' | 'special-defense' | 'speed' | 'accuracy' | 'evasion'> = {
         // Display labels (Pokemon-style title case + abbreviations)
         Attack: 'attack', Defense: 'defense', 'Sp. Atk': 'special-attack', 'Sp. Def': 'special-defense',
@@ -4269,8 +4465,20 @@ export default function App() {
         burned: 'burn', poisoned: 'poison', 'fast asleep': 'sleep', asleep: 'sleep',
         frozen: 'freeze', paralyzed: 'paralysis', confused: 'confusion',
     };
+    const lineCounterRef = { current: 0 };
     const dispatchLogPopup = (line: string): void => {
         try {
+            lineCounterRef.current += 1;
+            const seenAbilityPopups = new Set<string>();
+            const ownAbility = line.match(/^([^']+?)'s ([^.!?\n]+)/);
+            if (ownAbility) {
+                maybeTriggerAbilityPopupFromLine(ownAbility[1], ownAbility[2], seenAbilityPopups);
+            }
+            const byAbilityRe = /\b(?:by|from)\s+([^']+?)'s ([^.!?\n]+)/gi;
+            let byM: RegExpExecArray | null;
+            while ((byM = byAbilityRe.exec(line)) !== null) {
+                maybeTriggerAbilityPopupFromLine(byM[1], byM[2], seenAbilityPopups);
+            }
             // "X was <status>" / "X was <status> by Y's ..."
             for (const [kw, st] of Object.entries(STATUS_KEYWORD)) {
                 const re = new RegExp(`^([^']+?) was ${kw}`);
@@ -4284,10 +4492,16 @@ export default function App() {
             // "X's <Stat> rose/fell/sharply rose/sharply fell/was raised/was lowered"
             for (const [label, stat] of Object.entries(STAT_KEYWORD)) {
                 // generic "raised/lowered <stat>" e.g. "X's Intimidate lowered Y's Attack!"
+                const reDefiantLower = new RegExp(`^([^']+?)'s [^\\n]+ lowered\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
+                const reDefiantSharplyLower = new RegExp(`^([^']+?)'s [^\\n]+ sharply lowered\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
                 const reLower = new RegExp(`lowered\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
                 const reRaise = new RegExp(`(raised|boosted)\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
                 const reSharplyLower = new RegExp(`sharply lowered\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
                 const reSharplyRaise = new RegExp(`(sharply (raised|boosted))\\s+([^'\\n]+?)'s ${label.replace(/\\./g, '\\\\.')}`);
+                let d = line.match(reDefiantSharplyLower);
+                if (d) maybeTriggerDefiant(d[1], d[2]);
+                d = line.match(reDefiantLower);
+                if (d) maybeTriggerDefiant(d[1], d[2]);
                 let m = line.match(reSharplyLower);
                 if (m) { const w = resolveMon(m[1].trim()); if (w) popupStat(w.side, w.slot, stat, -2); return; }
                 m = line.match(reSharplyRaise);
@@ -4345,8 +4559,18 @@ export default function App() {
     };
 
     // Reset turn flags
-    tempPTeam.forEach((p: Pokemon) => { if (p) { p.hasMovedThisTurn = false; p.tookDamageThisTurn = false; p.isProtected = false; } });
-    tempETeam.forEach((p: Pokemon) => { if (p) { p.hasMovedThisTurn = false; p.tookDamageThisTurn = false; p.isProtected = false; } });
+    tempPTeam.forEach((p: Pokemon) => { if (p) { p.hasMovedThisTurn = false; p.tookDamageThisTurn = false; p.isProtected = false; p.usedMeterShieldThisTurn = false; p.usedSpectatorRoarThisTurn = false; } });
+    tempETeam.forEach((p: Pokemon) => { if (p) { p.hasMovedThisTurn = false; p.tookDamageThisTurn = false; p.isProtected = false; p.usedMeterShieldThisTurn = false; p.usedSpectatorRoarThisTurn = false; } });
+    const isKnockGuardProtected = (target: Pokemon, targetIsPlayer: boolean, sourceIsPlayer: boolean): boolean => {
+        // Knock Guard protects only the holder's ally from opposing item-removal.
+        if (targetIsPlayer === sourceIsPlayer) return false;
+        const team = targetIsPlayer ? tempPTeam : tempETeam;
+        const idx = team.findIndex((m, i) => i < 2 && m === target);
+        if (idx < 0 || idx > 1) return false;
+        const ally = team[1 - idx];
+        return !!ally && !ally.isFainted && ally.ability.name === 'KnockGuard';
+    };
+    const fuseSparkHits: { isPlayer: boolean; targetIndex: number; type: string; superEffective: boolean; actorId: number }[] = [];
 
     // Synergy Check: If both players use moves of the same type, they get a boost
     const playerActions = pendingMoves.filter(m => m.isPlayer && m.move);
@@ -4366,7 +4590,7 @@ export default function App() {
 
     // Helper to update React state mid-loop and wait
     const syncState = async (ms: number = 300) => {
-         setBattleState(prev => ({ ...prev, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-6), vfx: prev.vfx }));
+         setBattleState(prev => ({ ...prev, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-BATTLE_LOG_TAIL), vfx: prev.vfx }));
          await delay(ms); 
     }
 
@@ -4439,6 +4663,11 @@ export default function App() {
             if (actor.isFlinching) {
                 actor.isFlinching = false;
                 tempLogs.push(`${actor.name} flinched and couldn't move!`);
+                if (actor.ability.name === 'MeterShield' && !actor.usedMeterShieldThisTurn) {
+                    actor.usedMeterShieldThisTurn = true;
+                    setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
+                    tempLogs.push(`${actor.name}'s Meter Shield converted the setback into Link energy!`);
+                }
                 await syncState(800);
                 continue;
             }
@@ -4924,6 +5153,11 @@ export default function App() {
 
             if (actor.isFlinching) {
                 tempLogs.push(`${actor.name} flinched and couldn't move!`);
+                if (actor.ability.name === 'MeterShield' && !actor.usedMeterShieldThisTurn) {
+                    actor.usedMeterShieldThisTurn = true;
+                    setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
+                    tempLogs.push(`${actor.name}'s Meter Shield converted the setback into Link energy!`);
+                }
                 await syncState(800);
                 continue;
             }
@@ -4945,6 +5179,11 @@ export default function App() {
             if (actor.confusionTurns) actor.confusionTurns--;
 
             if (!statusCheck.canMove) {
+                if (actor.ability.name === 'MeterShield' && actor.status === 'paralysis' && !actor.usedMeterShieldThisTurn) {
+                    actor.usedMeterShieldThisTurn = true;
+                    setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
+                    tempLogs.push(`${actor.name}'s Meter Shield charged Link energy through paralysis!`);
+                }
                 continue;
             }
 
@@ -5287,6 +5526,11 @@ export default function App() {
             // Flinch check
             if (actor.isFlinching) {
                 tempLogs.push(`${actor.name} flinched and couldn't move!`);
+                if (actor.ability.name === 'MeterShield' && !actor.usedMeterShieldThisTurn) {
+                    actor.usedMeterShieldThisTurn = true;
+                    setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
+                    tempLogs.push(`${actor.name}'s Meter Shield converted the setback into Link energy!`);
+                }
                 actor.isFlinching = false;
                 await syncState(800);
                 continue;
@@ -5321,6 +5565,23 @@ export default function App() {
             actor.lastMoveMissed = false;
             const targetTeam = action.isPlayer ? tempETeam : tempPTeam;
             const isBothFoes = action.move.target === 'Both foes' || action.move.target === 'all-opponents';
+            let resolvedTargetIndex = action.targetIndex;
+            const isSingleTargetStatusMove = !isBothFoes && action.move.damage_class === 'status';
+            if (isSingleTargetStatusMove && typeof resolvedTargetIndex === 'number') {
+                const primaryTarget = targetTeam[resolvedTargetIndex];
+                const allyIdx = resolvedTargetIndex === 0 ? 1 : 0;
+                const ally = targetTeam[allyIdx];
+                if (
+                    primaryTarget &&
+                    ally &&
+                    !ally.isFainted &&
+                    ally.ability.name === 'LivingShield' &&
+                    !String(action.move.target || '').includes('user')
+                ) {
+                    resolvedTargetIndex = allyIdx;
+                    tempLogs.push(`${ally.name}'s Living Shield redirected the status move!`);
+                }
+            }
             // Spread moves only ever hit ACTIVE field slots (0 and 1). Without
             // the slice cap, AOE attacks (Earthquake/Surf/Discharge/etc.)
             // pulled the whole trainer roster into `targetsToHit` -- so a
@@ -5329,7 +5590,7 @@ export default function App() {
             // battle targeting without changing single-target moves.
             const targetsToHit = isBothFoes
                 ? targetTeam.slice(0, 2).filter((t: Pokemon) => t && !t.isFainted)
-                : [targetTeam[action.targetIndex]];
+                : [targetTeam[resolvedTargetIndex]];
             
             if (targetsToHit.length === 0 || targetsToHit.every(t => !t || t.isFainted)) {
                 tempLogs.push(`${actor.name}'s attack missed!`);
@@ -5364,6 +5625,9 @@ export default function App() {
                 const heal = Math.floor(actor.maxHp / 16);
                 actor.currentHp = Math.min(actor.maxHp, actor.currentHp + heal);
                 tempLogs.push(`${actor.name}'s Hot-Blooded restored its HP from the burn!`);
+            }
+            if ((action as any).crossPriorityTriggered) {
+                tempLogs.push(`${actor.name}'s Cross Priority shifted its focus to the other foe!`);
             }
 
             tempLogs.push(`${actor.name} used ${action.move.name}!`);
@@ -5821,6 +6085,26 @@ export default function App() {
                     if (finalDamage > 0) damageTarget.tookDamageThisTurn = true;
                     lastKoDamageTarget = damageTarget;
                     totalDamage += finalDamage;
+                    if (action.move?.damage_class !== 'status') {
+                        const hit = {
+                            isPlayer: action.isPlayer,
+                            targetIndex: realTargetIndex,
+                            type: moveTypeLC,
+                            superEffective: res.effectiveness > 1 && finalDamage > 0,
+                            actorId: actor.id,
+                        };
+                        if (actor.ability.name === 'FuseSpark' && hit.superEffective && !actor.usedFuseSpark) {
+                            const pairedHit = fuseSparkHits.find(
+                                h => h.isPlayer === hit.isPlayer && h.targetIndex === hit.targetIndex && h.superEffective && h.actorId !== hit.actorId && h.type !== hit.type
+                            );
+                            if (pairedHit) {
+                                actor.usedFuseSpark = true;
+                                setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 10) }));
+                                tempLogs.push(`${actor.name}'s Fuse Spark ignited team synergy! (+2 Link)`);
+                            }
+                        }
+                        fuseSparkHits.push(hit);
+                    }
 
                     // Primal Hunger Ability
                     if (actor.ability.name === 'PrimalHunger' && action.move?.isBiting) {
@@ -6010,8 +6294,12 @@ export default function App() {
                     // Contact Charge Ability
                     if (actor.ability.name === 'ItemShatter' && action.move?.contact) {
                         if (target.heldItem) {
-                            tempLogs.push(`${actor.name} shattered ${target.name}'s ${target.heldItem.name}!`);
-                            target.heldItem = undefined;
+                            if (isKnockGuardProtected(target, !action.isPlayer, action.isPlayer)) {
+                                tempLogs.push(`${target.name}'s item was protected by Knock Guard!`);
+                            } else {
+                                tempLogs.push(`${actor.name} shattered ${target.name}'s ${target.heldItem.name}!`);
+                                target.heldItem = undefined;
+                            }
                         }
                     }
 
@@ -6192,8 +6480,12 @@ export default function App() {
 
                 // Item Shatter Ability
                 if (actor.ability.name === 'ItemShatter' && target.heldItem && Math.random() < 0.3) {
-                    tempLogs.push(`${actor.name}'s Item Shatter destroyed ${target.name}'s ${target.heldItem.name}!`);
-                    target.heldItem = undefined;
+                    if (isKnockGuardProtected(target, !action.isPlayer, action.isPlayer)) {
+                        tempLogs.push(`${target.name}'s item was protected by Knock Guard!`);
+                    } else {
+                        tempLogs.push(`${actor.name}'s Item Shatter destroyed ${target.name}'s ${target.heldItem.name}!`);
+                        target.heldItem = undefined;
+                    }
                 }
 
                 // Armor Melt Ability
@@ -6267,11 +6559,14 @@ export default function App() {
 
                 // Spectator's Roar Ability
                 if (actor.ability.name === 'SpectatorSRoar' && res.isCritical) {
-                    const allyIdx = 1 - action.actorIndex;
-                    const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
-                    if (actor.statStages) actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
-                    if (ally && !ally.isFainted && ally.statStages) ally.statStages.speed = Math.min(6, (ally.statStages.speed || 0) + 1);
-                    tempLogs.push(`${actor.name}'s Spectator's Roar boosted Speed!`);
+                    if (!actor.usedSpectatorRoarThisTurn) {
+                        actor.usedSpectatorRoarThisTurn = true;
+                        const allyIdx = 1 - action.actorIndex;
+                        const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
+                        if (actor.statStages) actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
+                        if (ally && !ally.isFainted && ally.statStages) ally.statStages.speed = Math.min(6, (ally.statStages.speed || 0) + 1);
+                        tempLogs.push(`${actor.name}'s Spectator's Roar boosted Speed!`);
+                    }
                 }
 
                 // Gladiator's Spirit Ability
@@ -6566,6 +6861,10 @@ export default function App() {
                         return { ...prev, enemyComboMeter: newMeter, enemyFusionChargeActive: newMeter === 100 };
                     }
                 });
+                if (actor.ability.name === 'AnchorSync' && action.isFusion && !actor.usedAnchorSync) {
+                    actor.usedAnchorSync = true;
+                    tempLogs.push(`${actor.name}'s Anchor Sync anchored the Link strike!`);
+                }
 
                 // Wardrum Ability
                 if (actor.ability.name === 'Wardrum' && action.move?.type === 'Fighting' && Math.random() < 0.3) {
@@ -6758,6 +7057,10 @@ export default function App() {
                         targetAlly.currentHp = Math.min(targetAlly.maxHp, targetAlly.currentHp + heal);
                         tempLogs.push(`${targetAlly.name}'s Soul Link restored its HP!`);
                     }
+                    if (targetAlly && !targetAlly.isFainted && targetAlly.ability.name === 'LastAnchor') {
+                        setBattleState(prev => ({ ...prev, [action.isPlayer ? 'enemyComboMeter' : 'comboMeter']: Math.min(100, (action.isPlayer ? prev.enemyComboMeter : prev.comboMeter) + 10) }));
+                        tempLogs.push(`${targetAlly.name}'s Last Anchor surged +2 Link after its ally fell!`);
+                    }
 
                     // Grim Recovery Ability
                     if (actor.ability.name === 'GrimRecovery' && target.status) {
@@ -6879,37 +7182,49 @@ export default function App() {
                     }
 
                     if (action.isPlayer && !actor.isFainted) {
-                        // Massively boosted XP to reduce grinding as requested (reaching cap in ~2 battles)
-                        // Added Streak Bonus: +10% per streak point (max +100%)
+                        // XP on KO:
+                        // - Finisher gets full XP.
+                        // - Active ally gets assist XP so front-slot partners don't
+                        //   feel "frozen" at 0 XP if they miss the final hit.
                         const streakBonus = 1 + Math.min(1, battleState.battleStreak * 0.1);
-                        let itemXpMult = 1;
-                        if (actor.heldItem?.id === 'lucky-egg') itemXpMult = 1.5;
-                        // Trainer Bond XP multiplier: +8% per pip, max +80%.
-                        // Applies to BOTH wild and trainer KOs because the
-                        // bond is meant to feel like a "veteran" buff that
-                        // carries through any battle until decay catches up.
                         const bondXpMult = 1 + (playerState.run.trainerBond?.stacks ?? 0) * 0.08;
-                        const xpGain = Math.floor((target.baseStats.hp * target.level) * 25 * streakBonus * purse_xpMult(playerState.meta) * itemXpMult * bondXpMult * getDailyEvent().xpMult);
                         const playerLevelCap = getPlayerLevelCap(playerState.badges);
-                        const avgLevel = playerState.team.reduce((a, b) => a + b.level, 0) / playerState.team.length;
-                        const r = await gainExperience(actor, xpGain, playerLevelCap, avgLevel);
-                        if (r.leveledUp) {
-                            playLevelUpSfx();
-                            tempLogs.push(`${actor.name} grew to Lv. ${r.mon.level}!`);
-                            Object.assign(actor, r.mon); 
-                            if(r.newMoves.length) tempLogs.push(`${actor.name} learned ${r.newMoves.join(', ')}!`);
-                            // Mainline Pokemon behavior: don't interrupt the
-                            // battle to evolve. Flag the target species and
-                            // let the post-battle victory block play the
-                            // cinematic after combat wraps up.
-                            const nextId = await getEvolutionTarget(actor);
-                            if (nextId) {
-                                actor.pendingEvolutionId = nextId;
-                                tempLogs.push(`${actor.name} seems ready to evolve...`);
+                        const avgLevel = playerState.team.reduce((a, b) => a + b.level, 0) / Math.max(1, playerState.team.length);
+                        const recipients = tempPTeam.filter((p, idx) => idx < 2 && p && !p.isFainted);
+
+                        for (const recipient of recipients) {
+                            const isFinisher = recipient === actor;
+                            const assistMult = isFinisher ? 1 : 0.45;
+                            let itemXpMult = 1;
+                            if (recipient.heldItem?.id === 'lucky-egg') itemXpMult = 1.5;
+                            const xpGain = Math.max(
+                                1,
+                                Math.floor(
+                                    (target.baseStats.hp * target.level) *
+                                    25 *
+                                    streakBonus *
+                                    purse_xpMult(playerState.meta) *
+                                    itemXpMult *
+                                    bondXpMult *
+                                    getDailyEvent().xpMult *
+                                    assistMult,
+                                ),
+                            );
+                            const r = await gainExperience(recipient, xpGain, playerLevelCap, avgLevel);
+                            if (r.leveledUp) {
+                                playLevelUpSfx();
+                                tempLogs.push(`${recipient.name} grew to Lv. ${r.mon.level}!`);
+                                Object.assign(recipient, r.mon);
+                                if (r.newMoves.length) tempLogs.push(`${recipient.name} learned ${r.newMoves.join(', ')}!`);
+                                const nextId = await getEvolutionTarget(recipient);
+                                if (nextId) {
+                                    recipient.pendingEvolutionId = nextId;
+                                    tempLogs.push(`${recipient.name} seems ready to evolve...`);
+                                }
+                                await syncState(1000);
+                            } else {
+                                recipient.xp = r.mon.xp;
                             }
-                            await syncState(1000);
-                        } else {
-                            actor.xp = r.mon.xp;
                         }
                     }
                 }
@@ -6986,8 +7301,12 @@ export default function App() {
                 }
 
                 if (sec.itemRemoval) {
-                    realTarget.heldItem = undefined;
-                    tempLogs.push(`${realTarget.name}'s item was knocked off!`);
+                    if (realTarget.heldItem && isKnockGuardProtected(realTarget, !action.isPlayer, action.isPlayer)) {
+                        tempLogs.push(`${realTarget.name}'s item was protected by Knock Guard!`);
+                    } else {
+                        realTarget.heldItem = undefined;
+                        tempLogs.push(`${realTarget.name}'s item was knocked off!`);
+                    }
                 }
 
                 if (sec.recharge) {
@@ -7225,9 +7544,13 @@ export default function App() {
 
                 if (sec.itemSteal) {
                     if (realTarget.heldItem && !realActor.heldItem) {
-                        realActor.heldItem = realTarget.heldItem;
-                        realTarget.heldItem = undefined;
-                        tempLogs.push(`${realActor.name} stole ${realTarget.name}'s ${realActor.heldItem.name}!`);
+                        if (isKnockGuardProtected(realTarget, !action.isPlayer, action.isPlayer)) {
+                            tempLogs.push(`${realTarget.name}'s item was protected by Knock Guard!`);
+                        } else {
+                            realActor.heldItem = realTarget.heldItem;
+                            realTarget.heldItem = undefined;
+                            tempLogs.push(`${realActor.name} stole ${realTarget.name}'s ${realActor.heldItem.name}!`);
+                        }
                     }
                 }
 
@@ -8836,7 +9159,7 @@ export default function App() {
         // "battle over -- back to overworld" and the player saw the enemy
         // sprite vanish without a fall-down/fade. 750ms matches the
         // PokemonSprite faint duration.
-        setBattleState(prev => ({ ...prev, battleStreak: newStreak, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-6) }));
+        setBattleState(prev => ({ ...prev, battleStreak: newStreak, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-BATTLE_LOG_TAIL) }));
         await delay(900);
 
         // Permanent Death: Remove fainted monsters from team. Also strip
@@ -8844,7 +9167,12 @@ export default function App() {
         // bleed into the overworld / next encounter.
         const survivingTeam = tempPTeam
             .filter(p => !p.isFainted)
-            .map(p => ({ ...p, teraType: undefined, megaActive: false, zCharged: false }));
+            .map(p => ({
+                ...resetBattleTransientState(p),
+                teraType: undefined,
+                megaActive: false,
+                zCharged: false,
+            }));
         
         if (survivingTeam.length === 0) {
             handleRunEnd();
@@ -9360,7 +9688,7 @@ export default function App() {
         // fight.
         console.log('[Battle] Late-turn KO drained the enemy roster -- forcing victory branch.');
         battleExitInFlightRef.current = false; // allow the recovery path to fire properly
-        setBattleState(prev => ({ ...prev, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-6), phase: 'victory', pendingMoves: [] }));
+        setBattleState(prev => ({ ...prev, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-BATTLE_LOG_TAIL), phase: 'victory', pendingMoves: [] }));
         setBattleFading('victory');
         await delay(450);
         if (!pendingGauntletNextRef.current) {
@@ -9384,7 +9712,7 @@ export default function App() {
             ...prev, 
             playerTeam: tempPTeam, 
             enemyTeam: tempETeam, 
-            logs: tempLogs.slice(-6), 
+            logs: tempLogs.slice(-BATTLE_LOG_TAIL),
             phase: 'player_input', 
             turn: prev.turn + 1, 
             activePlayerIndex: finalMustSwitch ? finalSwitchingIdx : (firstAliveActiveIdx >= 0 ? firstAliveActiveIdx : 0), 
@@ -11260,6 +11588,11 @@ export default function App() {
                     auraSight={hasTalent(playerState.meta, 'aura_sight')}
                     isRunning={isRunning}
                 />
+                <div className="absolute bottom-3 left-3 z-30 pointer-events-none">
+                    <div className="rounded-lg border border-cyan-300/40 bg-slate-900/75 px-3 py-2 text-[9px] uppercase tracking-wider text-cyan-100 shadow-lg">
+                        <span className="font-black text-cyan-300">Enter</span> Pause · Party · Bag · Save
+                    </div>
+                </div>
                 <CatchComboBadge combo={playerState.catchCombo} />
                 <TrainerBondBadge bond={playerState.run.trainerBond} currentDistance={playerState.run.maxDistanceReached} />
                 {battleChallenge && (
@@ -11602,6 +11935,8 @@ export default function App() {
                                 max={mon.maxHp} 
                                 label={mon.name} 
                                 level={mon.level} 
+                                abilityName={formatAbilityName(mon.ability?.name)}
+                                abilityDescription={mon.ability?.description}
                                 status={mon.status} 
                               />
                               <StatStageStrip stages={mon.statStages} align="left" />
@@ -11677,6 +12012,8 @@ export default function App() {
                                 level={mon.level} 
                                 xp={mon.xp} 
                                 maxXp={mon.maxXp} 
+                                abilityName={formatAbilityName(mon.ability?.name)}
+                                abilityDescription={mon.ability?.description}
                                 status={mon.status} 
                               />
                               <StatStageStrip stages={mon.statStages} align="left" />

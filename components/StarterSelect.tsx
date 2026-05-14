@@ -315,9 +315,14 @@ const PreviewDais: React.FC<{ pokemon: Pokemon | null; upgrades: any }> = ({ pok
                             <div className="bg-gray-100 border border-gray-300 rounded-lg px-3 py-2">
                                 <div className="flex items-baseline gap-2 mb-0.5">
                                     <span className="text-[9px] md:text-[10px] font-press-start uppercase tracking-wider text-[#b91c1c]">Ability</span>
-                                    <span className="text-sm font-bold text-gray-900">{titleCase(formatAbilityName(pokemon.ability.name))}</span>
+                                    <span
+                                        title={pokemon.ability.description || titleCase(formatAbilityName(pokemon.ability.name))}
+                                        className="text-sm font-bold text-gray-900"
+                                    >
+                                        {titleCase(formatAbilityName(pokemon.ability.name))}
+                                    </span>
                                 </div>
-                                <p className="text-[11px] md:text-xs leading-snug text-gray-600 line-clamp-2">
+                                <p title={pokemon.ability.description || 'No description available.'} className="text-[11px] md:text-xs leading-snug text-gray-600 line-clamp-2">
                                     {pokemon.ability.description || 'No description available.'}
                                 </p>
                             </div>

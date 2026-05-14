@@ -55,7 +55,7 @@ const dedupeMoveSet = (moves: PokemonMove[], max: number = 4): PokemonMove[] => 
  * Draws from primary type first, then secondary as a bonus. Returns the
  * merged pool (primary listed twice so it weights more in random picks).
  */
-const TYPE_ABILITY_POOL: Record<string, string[]> = {
+export const TYPE_ABILITY_POOL: Record<string, string[]> = {
     normal: ['Symmetry', 'BuddyBerry', 'HarmonyEngine', 'LuckyBark', 'MoonCharm'],
     fire: ['EmberSpark', 'OverheatDrive', 'CrossfireBurn', 'HotBlooded', 'FlameBody'],
     water: ['RainDishPlus', 'TideTurner', 'Shoreline', 'WhirlpoolHeart', 'WaterVeil'],
@@ -76,6 +76,30 @@ const TYPE_ABILITY_POOL: Record<string, string[]> = {
     fairy: ['MoonCharm', 'RuneBloom', 'MysticFog', 'VerdantVeil'],
 };
 
+// Verified-runtime gate for custom abilities:
+// these names exist in NEW_ABILITIES metadata but currently have only
+// shallow or missing combat hooks. We block them from rolling until their
+// full gameplay logic is implemented and tested.
+export const UNVERIFIED_CUSTOM_ABILITIES = new Set<string>([
+    'AetherPresence',
+    'AngleShot',
+    'BoilingPoint',
+    'CompoundEyes',
+    'GaleHarness',
+    'KeenFlare',
+    'MindOverMatter',
+    'OzoneLayer',
+    'PiercingWill',
+    'ResinCoat',
+    'SelectiveFire',
+    'SereneGrace',
+    'ShadowShield',
+    'ShellArmor',
+    'SolidRock',
+    'SuperLuck',
+    'TremorSense',
+]);
+
 const getTypeFallbackAbilities = (types: string[]): string[] => {
     const primary = types[0]?.toLowerCase() ?? '';
     const secondary = types[1]?.toLowerCase() ?? '';
@@ -85,7 +109,7 @@ const getTypeFallbackAbilities = (types: string[]): string[] => {
     if (secondary && TYPE_ABILITY_POOL[secondary]?.length) {
         pool.push(TYPE_ABILITY_POOL[secondary][0]);
     }
-    return pool;
+    return pool.filter((a) => !UNVERIFIED_CUSTOM_ABILITIES.has(a));
 };
 
 // --- CONSTANTS ---
@@ -1543,6 +1567,8 @@ export const calculateDamage = (
   if (!isPlayer && enemyTailwindTurns > 0) attackerSpeed *= 2;
   if (!isPlayer && tailwindTurns > 0) defenderSpeed *= 2;
   if (isPlayer && enemyTailwindTurns > 0) defenderSpeed *= 2;
+  if (attacker.ability.name === 'FeverRush' && attacker.status === 'burn') attackerSpeed *= 2;
+  if (defender.ability.name === 'FeverRush' && defender.status === 'burn') defenderSpeed *= 2;
 
   const playerTeamCount = playerTeam.filter(p => !p.isFainted).length;
   const enemyTeamCount = enemyTeam.filter(p => !p.isFainted).length;
@@ -1725,7 +1751,7 @@ export const calculateDamage = (
   if (atkAbility === 'Overexertion') power *= 1.2;
   if (atkAbility === 'SyncBoost') power *= 1.1;
   if (atkAbility === 'TempoSync') power *= 1.2;
-  if (atkAbility === 'AnchorSync') power *= 1.3;
+  if (atkAbility === 'AnchorSync' && move.isFusion && !attacker.usedAnchorSync) power *= 1.1;
   if (atkAbility === 'MagneticField' && moveType === 'steel') power *= 1.3;
   if (atkAbility === 'IronBlood' && moveType === 'steel') power *= 1.2;
   if (atkAbility === 'Relentless') power *= 1.2;
@@ -1898,11 +1924,7 @@ export const calculateDamage = (
   if (atkAbility === 'FossilDrive' && moveType === 'rock') power *= 1.5;
   if (atkAbility === 'RuneDrive' && moveType === 'fairy') power *= 1.5;
   if (atkAbility === 'Ironstorm' && weather === 'sand' && moveType === 'steel') power *= 1.5;
-  if (atkAbility === 'FuseSpark' && moveType === 'electric') {
-      const myAlly = isPlayer ? playerTeam.find(p => p && !p.isFainted && p.id !== attacker.id) : enemyTeam.find(p => p && !p.isFainted && p.id !== attacker.id);
-      if (myAlly && myAlly.types.includes('fire')) power *= 1.5;
-  }
-  
+
   // Defender Abilities reducing Power
   if (defAbility === 'ThickFat' && (moveType === 'fire' || moveType === 'ice')) power *= 0.5;
   if (defAbility === 'Heatproof' && moveType === 'fire') power *= 0.5;
@@ -1924,7 +1946,6 @@ export const calculateDamage = (
   if (defAbility === 'OzoneLayer' && moveType === 'flying') power *= 0.75;
   if (defAbility === 'SiltArmor' && (moveType === 'water' || moveType === 'ground')) power *= 0.75;
   if (defAbility === 'ResinCoat' && moveType === 'fire') power *= 0.75;
-  if (defAbility === 'MeterShield' && (isPlayer ? enemyMeter > 25 : playerMeter > 25)) power *= 0.9;
   if (defAbility === 'Hearthguard' && weather === 'sun') power *= 0.8;
   
   if (defAbility === 'InterceptShell' && (move.priority || 0) > 0) {
@@ -1984,14 +2005,14 @@ export const calculateDamage = (
   if (attacker.heldItem?.id === 'scope-lens') critChance = (critChance === 0.125) ? 0.25 : 0.125;
   if (atkAbility === 'SuperLuck') critChance = (critChance === 0.25) ? 0.5 : (critChance === 0.125 ? 0.25 : 0.125);
   if (atkAbility === 'PressurePoint') critChance = (critChance === 0.25) ? 0.5 : (critChance === 0.125 ? 0.25 : 0.125);
-  if (atkAbility === 'KeenFlare' && attacker.turnCount === 1) critChance = 1.0;
+  if (atkAbility === 'KeenFlare' && !attacker.usedKeenFlareCrit && power > 0) critChance = 1.0;
   if (atkAbility === 'SyncStrike' && (isPlayer ? playerMeter > 50 : enemyMeter > 50)) critChance = 0.25;
   if (atkAbility === 'HexDrive' && defender.status) {
       if (critChance === 0.0625) critChance = 0.125;
       else if (critChance === 0.125) critChance = 0.25;
       else if (critChance === 0.25) critChance = 0.5;
   }
-  if (atkAbility === 'BrittleFreeze' && moveType === 'ice') critChance = 0.125;
+  if (atkAbility === 'BrittleFreeze' && moveType === 'ice') critChance = Math.min(1, critChance + 0.1);
   if (atkAbility === 'BladeDance' && move.max_hits && move.max_hits > 1) critChance = 0.25;
   if (atkAbility === 'MoonCharm' && (moveType === 'fairy' || moveType === 'normal')) {
       // +1 crit stage: 1/16 -> 1/8 -> 1/4 -> 1/2
@@ -2006,6 +2027,10 @@ export const calculateDamage = (
   if (isPlayer) critChance += (critBoost * 0.02);
   
   let isCritical = Math.random() < critChance;
+  if (atkAbility === 'KeenFlare' && !attacker.usedKeenFlareCrit && power > 0) {
+      isCritical = true;
+      attacker.usedKeenFlareCrit = true;
+  }
   if (atkAbility === 'Merciless' && defender.status === 'poison') isCritical = true;
   if ((move.name.toLowerCase() === 'aether roar' || move.name.toLowerCase() === 'aetherroar') && defender.status) isCritical = true;
   if (defAbility === 'BattleArmor' || defAbility === 'ShellArmor' || (defAbility === 'EarthenVeil' && weather === 'sand') || (defAbility === 'StoneVeil' && defender.currentHp === defender.maxHp)) isCritical = false;
@@ -2090,10 +2115,6 @@ export const calculateDamage = (
       if (atkAbility === 'SlowPulse' && attackerSpeed < defenderSpeed) stat *= 1.2;
       if (atkAbility === 'NightBloom' && weather === 'none' && (moveType === 'dark' || moveType === 'grass')) stat *= 1.2;
       if (atkAbility === 'Counterweight' && isPhysical && !isMovingFirst) stat *= 1.2;
-      if (atkAbility === 'FeverRush' && attacker.status === 'burn') {
-          // Speed is doubled, handled in speed calc but also boost offense slightly for flavor
-          stat *= 1.1;
-      }
 
       // Partner Boost: Ally Attack boost when user is at full HP
       const myAlly = isPlayer ? playerTeam.find(p => p && !p.isFainted && p.id !== attacker.id) : enemyTeam.find(p => p && !p.isFainted && p.id !== attacker.id);
@@ -2150,7 +2171,6 @@ export const calculateDamage = (
       if (defAbility === 'IceScales' && isSpecial) stat *= 2;
       if (defAbility === 'GrassPelt' && isPhysical) stat *= 1.5;
       if (defAbility === 'SyncShield') stat *= 1.3; // Base boost, but we'll add more in calculateDamage if meter > 50
-      if (defAbility === 'LivingShield' && defender.currentHp === defender.stats.hp) stat *= 2;
       if (defAbility === 'SiltArmor' && weather === 'sand') stat *= 1.5;
       if (defAbility === 'BorealCoat' && weather === 'snow') stat *= 1.5;
       if (weather === 'snow' && getEffectiveDefensiveTypes(defender).includes('ice')) stat *= 1.5;
@@ -2187,13 +2207,9 @@ export const calculateDamage = (
   if (isNaN(d) || d <= 0) d = 1;
 
   if (atkAbility === 'WildHunt' && defender.status) power *= 1.3;
-  if (atkAbility === 'LastAnchor' && (isPlayer ? playerTeam.filter(p => !p.isFainted).length === 1 : enemyTeam.filter(p => !p.isFainted).length === 1)) power *= 1.5;
 
   if ((atkAbility === 'Duelist' || atkAbility === 'DuelistSWill') && (isPlayer ? enemyTeam.filter(p => !p.isFainted).length === 1 : playerTeam.filter(p => !p.isFainted).length === 1)) {
       power *= 1.2;
-  }
-  if (atkAbility === 'CrossPriority' && move.priority && move.priority > 0) {
-      power *= 1.3;
   }
   // Defender Ability Damage Reduction
 
@@ -2224,10 +2240,6 @@ export const calculateDamage = (
       abilityDefMod *= 0.8;
   }
 
-  // Knock-Guard: Reduces damage from item-removing moves
-  if (defAbility === 'KnockGuard' && (move.name.includes('knock-off') || move.name.includes('thief') || move.name.includes('covet'))) {
-      abilityDefMod *= 0.5;
-  }
   if (defAbility === 'InterceptShell' && (move.priority || 0) > 0) {
       abilityDefMod *= 0.5;
   }
@@ -2535,6 +2547,7 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
   );
   const applyNewAbility = (name: string): boolean => {
       const newAbilityData = NEW_ABILITIES[name];
+      if (UNVERIFIED_CUSTOM_ABILITIES.has(name)) return false;
       if (!newAbilityData) return false;
       ability.name = name;
       ability.description = newAbilityData.description;
@@ -2717,7 +2730,92 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
       }
   }
 
-  const finalizedMoves = dedupeMoveSet(moves, 4);
+  let finalizedMoves = dedupeMoveSet(moves, 4);
+  const hasDamagingMove = finalizedMoves.some(
+      (mv) => (mv.power || 0) > 0 && mv.damage_class !== 'status',
+  );
+  // Starter viability guard:
+  // Species like Abra can roll status-only low-level sets (e.g. Teleport),
+  // which makes the first battles unwinnable. If a low-level wild/starter has
+  // no damaging move, pull in the earliest damaging move from its learnset.
+  if (!isTrainer && level <= 8 && !hasDamagingMove) {
+      const fallbackPool = [...uniqueAllMoves]
+          .sort((a, b) => a.level - b.level)
+          .filter((m) => !finalizedMoves.some((fm) => fm.name.toLowerCase() === m.name.toLowerCase()));
+      for (const candidate of fallbackPool) {
+          try {
+              let fallbackMove: PokemonMove | null = null;
+              if (NEW_MOVES[candidate.name]) {
+                  const moveData = NEW_MOVES[candidate.name];
+                  fallbackMove = {
+                      name: candidate.name,
+                      url: '',
+                      power: moveData.power,
+                      accuracy: moveData.accuracy,
+                      type: moveData.type.toLowerCase(),
+                      damage_class: moveData.category.toLowerCase() as any,
+                      pp: moveData.pp,
+                      priority: moveData.priority,
+                      target: moveData.target,
+                      stat_changes: moveData.stat_changes || [],
+                      meta: moveData.meta || { ailment: { name: 'none' }, category: { name: 'damage' } },
+                      weatherChange: (moveData as any).weatherChange as any,
+                      terrainChange: (moveData as any).terrainChange as any,
+                      flinchChance: moveData.flinchChance,
+                      min_hits: moveData.min_hits,
+                      max_hits: moveData.max_hits,
+                      sfx: moveData.sfx,
+                  };
+              } else if (candidate.url) {
+                  const mData = await fetchJson(candidate.url);
+                  fallbackMove = {
+                      name: mData.name,
+                      url: candidate.url,
+                      power: mData.power || 0,
+                      accuracy: mData.accuracy || 100,
+                      type: mData.type.name,
+                      damage_class: mData.damage_class?.name || 'physical',
+                      pp: mData.pp,
+                      priority: mData.priority || 0,
+                      target: mData.target?.name,
+                      stat_changes: mData.stat_changes,
+                      meta: mData.meta,
+                  };
+              }
+              if (!fallbackMove) continue;
+              populateMoveFlags(fallbackMove);
+              if ((fallbackMove.power || 0) > 0 && fallbackMove.damage_class !== 'status') {
+                  finalizedMoves = dedupeMoveSet([...finalizedMoves, fallbackMove], 4);
+                  break;
+              }
+          } catch (e) {
+              console.warn('Starter fallback move fetch failed for', candidate.name, e);
+          }
+      }
+      const stillNoDamage = !finalizedMoves.some((mv) => (mv.power || 0) > 0 && mv.damage_class !== 'status');
+      if (stillNoDamage) {
+          try {
+              const tData = await fetchJson('https://pokeapi.co/api/v2/move/33/');
+              const tackleMove: PokemonMove = {
+                  name: tData.name || 'tackle',
+                  url: 'https://pokeapi.co/api/v2/move/33/',
+                  power: tData.power || 40,
+                  accuracy: tData.accuracy || 100,
+                  type: tData.type?.name || 'normal',
+                  damage_class: tData.damage_class?.name || 'physical',
+                  pp: tData.pp || 35,
+                  priority: tData.priority || 0,
+                  target: tData.target?.name,
+                  stat_changes: tData.stat_changes,
+                  meta: tData.meta,
+              };
+              populateMoveFlags(tackleMove);
+              finalizedMoves = dedupeMoveSet([...finalizedMoves, tackleMove], 4);
+          } catch (e) {
+              console.warn('Starter hard fallback move fetch failed', e);
+          }
+      }
+  }
 
     return {
     id: data.id,
@@ -2768,17 +2866,21 @@ export const fetchCompetitivePokemon = async (id: number, level: number = 50): P
     const assignment = POKEMON_ASSIGNMENTS.find(a => a.pokemon.toLowerCase() === mon.name.toLowerCase());
     if (assignment && assignment.abilities_new.length > 0) {
         const newAbilityName = assignment.abilities_new[Math.floor(Math.random() * assignment.abilities_new.length)];
-        const newAbilityData = NEW_ABILITIES[newAbilityName];
-        if (newAbilityData) {
-            mon.ability = {
-                name: newAbilityName,
-                url: '',
-                isHidden: false,
-                description: newAbilityData.description,
-                category: newAbilityData.category,
-                tags: newAbilityData.tags,
-                notes: newAbilityData.notes
-            };
+        if (UNVERIFIED_CUSTOM_ABILITIES.has(newAbilityName)) {
+            // Leave current ability if this custom one is not yet runtime-verified.
+        } else {
+            const newAbilityData = NEW_ABILITIES[newAbilityName];
+            if (newAbilityData) {
+                mon.ability = {
+                    name: newAbilityName,
+                    url: '',
+                    isHidden: false,
+                    description: newAbilityData.description,
+                    category: newAbilityData.category,
+                    tags: newAbilityData.tags,
+                    notes: newAbilityData.notes
+                };
+            }
         }
     } else {
         const compAbilities = ['Intimidate', 'Regenerator', 'SpeedBoost', 'Moxie', 'BeastBoost', 'SoulHeart', 'Libero', 'Protean', 'HugePower', 'PurePower', 'Adaptability', 'Technician', 'Multiscale', 'Sturdy', 'Levitate'];

@@ -214,7 +214,10 @@ export const PokemonSummary: React.FC<{
 
                         <Panel title="Ability" accent="#fbbf24">
                             <div className="flex flex-wrap items-center gap-2 mb-2">
-                                <span className="text-sm uppercase tracking-wide text-amber-200 font-black truncate">
+                                <span
+                                    title={pokemon.ability.description || formatAbilityName(pokemon.ability.name)}
+                                    className="text-sm uppercase tracking-wide text-amber-200 font-black truncate"
+                                >
                                     {formatAbilityName(pokemon.ability.name)}
                                 </span>
                                 {pokemon.ability.isHidden && (
