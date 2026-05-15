@@ -142,7 +142,7 @@ export const BattleLog: React.FC<Props> = ({ logs }) => {
     return (
         <div
             ref={scroller}
-            className="bg-white/5 backdrop-blur-sm p-3 text-[11px] md:text-xs leading-snug overflow-y-auto max-h-32 md:max-h-none border-r border-white/10 scroll-smooth font-sans"
+            className="bg-white/5 backdrop-blur-sm p-3 text-[11px] md:text-xs leading-snug overflow-y-auto h-full min-h-0 max-h-full border-r border-white/10 scroll-smooth font-sans"
         >
             <AnimatePresence initial={false}>
                 {slice.map((line, i) => {
@@ -162,7 +162,7 @@ export const BattleLog: React.FC<Props> = ({ logs }) => {
                                     {style.icon}
                                 </span>
                             )}
-                            <span className="flex-1">{line}</span>
+                            <span className="flex-1 break-words whitespace-pre-wrap">{line}</span>
                         </motion.div>
                     );
                 })}

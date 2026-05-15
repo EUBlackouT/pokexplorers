@@ -113,6 +113,8 @@ const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUppe
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const BATTLE_LOG_TAIL = 60;
+type ActionTargetSide = 'enemy' | 'ally' | 'self';
+type TargetingMode = 'enemy' | 'ally' | 'ally-or-enemy' | 'self' | 'none' | 'all-opponents';
 const EMPTY_STAT_STAGES: StatStages = {
     attack: 0,
     defense: 0,
@@ -234,6 +236,33 @@ const isDynamicMap = (mapId: string): boolean =>
 
 const lookupMap = (mapId: string, loadedChunks: Record<string, any>): any =>
     isDynamicMap(mapId) ? loadedChunks[mapId] : MAPS[mapId];
+
+const normalizeTargetToken = (raw?: string): string =>
+    (raw || '').toLowerCase().replace(/[\s_-]+/g, '');
+
+const ALLY_OR_ENEMY_MOVE_NAMES = new Set<string>([
+    'pollenpuff',
+]);
+
+const getTargetingModeForSelection = (move?: PokemonMove, selectedItem?: string): TargetingMode => {
+    if (selectedItem) return 'enemy';
+    if (!move) return 'enemy';
+    const normalizedName = (move.name || '').toLowerCase().replace(/[\s_-]+/g, '');
+    if (ALLY_OR_ENEMY_MOVE_NAMES.has(normalizedName)) return 'ally-or-enemy';
+    const t = normalizeTargetToken(move.target);
+    if (t === 'user' || t === 'self') return 'self';
+    if (t === 'bothfoes' || t === 'allopponents') return 'all-opponents';
+    if (t === 'ally' || t === 'selectedally' || t === 'adjacentally' || t === 'userorally' || t === 'allyoruser') return 'ally';
+    if (t === 'allallies' || t === 'userandallies') return 'none';
+    if (
+        t === 'field' ||
+        t === 'entirefield' ||
+        t === 'allpokemon' ||
+        t === 'usersfield' ||
+        t === 'opponentsfield'
+    ) return 'none';
+    return 'enemy';
+};
 
 const createDefaultRouteState = () => ({
     routeTension: 0,
@@ -1589,10 +1618,44 @@ export default function App() {
       (networkRole === 'host' && myPokemonIndex === 0) || 
       (networkRole === 'client' && myPokemonIndex === 1)
   );
-  
+  const selectedTargetingMode = getTargetingModeForSelection(
+      battleState.ui.selectedMove as PokemonMove | undefined,
+      battleState.ui.selectedItem,
+  );
+  const targetOptions: Array<{ side: ActionTargetSide; index: number; label: string }> = React.useMemo(() => {
+      if (battleState.ui.selectionMode !== 'TARGET') return [];
+      const enemyActive = battleState.enemyTeam
+          .slice(0, 2)
+          .map((m, i) => ({ mon: m, i }))
+          .filter(({ mon }) => mon && !mon.isFainted);
+      const allyActive = battleState.playerTeam
+          .slice(0, 2)
+          .map((m, i) => ({ mon: m, i }))
+          .filter(({ mon }) => mon && !mon.isFainted);
+      if (selectedTargetingMode === 'enemy') {
+          return enemyActive.map(({ mon, i }) => ({ side: 'enemy' as ActionTargetSide, index: i, label: `Enemy: ${mon.name}` }));
+      }
+      if (selectedTargetingMode === 'ally') {
+          return allyActive.map(({ mon, i }) => ({
+              side: i === myPokemonIndex ? 'self' : 'ally',
+              index: i,
+              label: i === myPokemonIndex ? `Self: ${mon.name}` : `Ally: ${mon.name}`,
+          }));
+      }
+      if (selectedTargetingMode === 'ally-or-enemy') {
+          return [
+              ...allyActive.map(({ mon, i }) => ({
+                  side: i === myPokemonIndex ? 'self' : 'ally',
+                  index: i,
+                  label: i === myPokemonIndex ? `Self: ${mon.name}` : `Ally: ${mon.name}`,
+              })),
+              ...enemyActive.map(({ mon, i }) => ({ side: 'enemy' as ActionTargetSide, index: i, label: `Enemy: ${mon.name}` })),
+          ];
+      }
+      return [];
+  }, [battleState.ui.selectionMode, battleState.enemyTeam, battleState.playerTeam, myPokemonIndex, selectedTargetingMode]);
 
-
-  function queueAction(targetIndex: number, item?: string, move?: PokemonMove, isFusion?: boolean, switchIndex?: number, forcedActorIndex?: number) {
+  function queueAction(targetIndex: number, item?: string, move?: PokemonMove, isFusion?: boolean, switchIndex?: number, forcedActorIndex?: number, targetSide: ActionTargetSide = 'enemy') {
       if (battleState.mustSwitch) {
           if (switchIndex !== undefined) {
               setBattleState(prev => {
@@ -1647,7 +1710,7 @@ export default function App() {
           const priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
           if (actor.ability.name === 'AnchorSync' && isFusion && !actor.usedAnchorSync) speed *= 0.85;
           
-          const action = { actorIndex: currentActorIndex, targetIndex, move, item, isPlayer: true, isFusion, speed, priority, switchIndex };
+          const action = { actorIndex: currentActorIndex, targetIndex, targetSide, move, item, isPlayer: true, isFusion, speed, priority, switchIndex };
           
           setBattleState(prev => {
               const newPending = [...prev.pendingMoves, action];
@@ -1796,7 +1859,7 @@ export default function App() {
           (actor as any)._usedLinkCrystal = true;
       }
 
-      const action = { actorIndex: currentActorIndex, targetIndex, move, item, isPlayer: true, isFusion: isFusionMove, speed, priority, switchIndex };
+      const action = { actorIndex: currentActorIndex, targetIndex, targetSide, move, item, isPlayer: true, isFusion: isFusionMove, speed, priority, switchIndex };
       setBattleState(prev => {
           const newPending = [...prev.pendingMoves, action];
           // Only ACTIVE field slots (0/1) can act this turn. Counting
@@ -1831,7 +1894,8 @@ export default function App() {
       item?: string,
       move?: PokemonMove,
       isFusion?: boolean,
-      switchIndex?: number
+      switchIndex?: number,
+      targetSide: ActionTargetSide = 'enemy',
   ) {
       if (networkRole === 'client') {
           // Active slot for the client is always index 1 in our co-op
@@ -1839,15 +1903,15 @@ export default function App() {
           // and clear the local selection UI so the menu collapses.
           multiplayer.send({
               type: 'INPUT_BATTLE_ACTION',
-              payload: { targetIndex, item, move, isFusion: !!isFusion, switchIndex, activePlayerIndex: 1 }
+              payload: { targetIndex, targetSide, item, move, isFusion: !!isFusion, switchIndex, activePlayerIndex: 1 }
           });
           setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: null } }));
       } else {
-          queueAction(targetIndex, item, move, isFusion, switchIndex);
+          queueAction(targetIndex, item, move, isFusion, switchIndex, undefined, targetSide);
       }
   }
 
-  function handleTargetSelect(targetIndex: number) {
+  function handleTargetSelect(targetIndex: number, targetSide: ActionTargetSide = 'enemy') {
       unlockAudio();
       if (battleState.ui.selectionMode === 'TARGET') {
           const move = battleState.ui.selectedMove;
@@ -1856,21 +1920,36 @@ export default function App() {
           if (networkRole === 'client') {
               multiplayer.send({
                   type: 'INPUT_BATTLE_ACTION',
-                  payload: { targetIndex, item, move, isFusion: battleState.ui.isFusionNext, activePlayerIndex: 1 }
+                  payload: { targetIndex, targetSide, item, move, isFusion: battleState.ui.isFusionNext, activePlayerIndex: 1 }
               });
               setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: null } }));
           } else {
-              if (item === 'combo') queueAction(targetIndex, 'combo');
-              else if (move) queueAction(targetIndex, undefined, move);
+              if (item === 'combo') queueAction(targetIndex, 'combo', undefined, false, undefined, undefined, targetSide);
+              else if (move) queueAction(targetIndex, undefined, move, false, undefined, undefined, targetSide);
               // Bugfix: previously passed the literal string 'pokeball' which
               // does not exist in ITEMS (the real id is 'poke-ball'). The
               // resolver dropped the action silently so capture permits
               // appeared to do nothing. Use the actual selectedItem id, with
               // 'poke-ball' as the safe fallback for the Capture Permit path.
-              else queueAction(targetIndex, item || 'poke-ball');
+              else queueAction(targetIndex, item || 'poke-ball', undefined, false, undefined, undefined, targetSide);
           }
       }
   };
+
+  function handleMoveSelect(move: PokemonMove) {
+      unlockAudio();
+      if (!isMyTurn) return;
+      const mode = getTargetingModeForSelection(move, undefined);
+      if (mode === 'self' || mode === 'none') {
+          dispatchBattleAction(myPokemonIndex, undefined, move, false, undefined, 'self');
+          return;
+      }
+      if (mode === 'all-opponents') {
+          dispatchBattleAction(0, undefined, move, false, undefined, 'enemy');
+          return;
+      }
+      setBattleState(prev => ({ ...prev, ui: { selectionMode: 'TARGET', selectedMove: move, selectedItem: undefined } }));
+  }
 
   function handleRun() {
       if (networkRole === 'client') {
@@ -4336,6 +4415,7 @@ export default function App() {
         pool.forEach((action) => {
             const actor = team[action.actorIndex];
             if (!actor || actor.isFainted || actor.ability.name !== 'CrossPriority') return;
+            if ((action.targetSide || 'enemy') !== 'enemy') return;
             if (!action.move || typeof action.targetIndex !== 'number') return;
             const isSingleTargetMove =
                 action.move.target !== 'Both foes' &&
@@ -5563,15 +5643,19 @@ export default function App() {
 
             // Move Logic
             actor.lastMoveMissed = false;
-            const targetTeam = action.isPlayer ? tempETeam : tempPTeam;
+            const actorTeam = action.isPlayer ? tempPTeam : tempETeam;
+            const opponentTeam = action.isPlayer ? tempETeam : tempPTeam;
+            const actionTargetSide: ActionTargetSide = (action.targetSide || 'enemy') as ActionTargetSide;
+            const targetTeam = actionTargetSide === 'enemy' ? opponentTeam : actorTeam;
             const isBothFoes = action.move.target === 'Both foes' || action.move.target === 'all-opponents';
-            let resolvedTargetIndex = action.targetIndex;
+            let resolvedTargetIndex = actionTargetSide === 'self' ? action.actorIndex : action.targetIndex;
             const isSingleTargetStatusMove = !isBothFoes && action.move.damage_class === 'status';
             if (isSingleTargetStatusMove && typeof resolvedTargetIndex === 'number') {
                 const primaryTarget = targetTeam[resolvedTargetIndex];
                 const allyIdx = resolvedTargetIndex === 0 ? 1 : 0;
                 const ally = targetTeam[allyIdx];
                 if (
+                    actionTargetSide === 'enemy' &&
                     primaryTarget &&
                     ally &&
                     !ally.isFainted &&
@@ -5589,7 +5673,7 @@ export default function App() {
             // bench mons. Capping to slice(0,2) restores standard double-
             // battle targeting without changing single-target moves.
             const targetsToHit = isBothFoes
-                ? targetTeam.slice(0, 2).filter((t: Pokemon) => t && !t.isFainted)
+                ? opponentTeam.slice(0, 2).filter((t: Pokemon) => t && !t.isFainted)
                 : [targetTeam[resolvedTargetIndex]];
             
             if (targetsToHit.length === 0 || targetsToHit.every(t => !t || t.isFainted)) {
@@ -10588,7 +10672,7 @@ export default function App() {
     } else if (data.type === 'INPUT_MOVE') { 
         if (isHostRef.current) handleMapMove(data.payload, 2);
     } else if (data.type === 'INPUT_BATTLE_ACTION') { 
-        if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex);
+        if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex, data.payload.targetSide || 'enemy');
     } else if (data.type === 'INPUT_MENU') {
         if (isHostRef.current) {
             // Defensive: payload may be a bare string (legacy clients) or
@@ -11880,10 +11964,17 @@ export default function App() {
                                               isFusion: true,
                                               meta: fusion.meta || { ailment: { name: 'none' }, category: { name: 'damage' } }
                                           };
-                                          setBattleState(prev => ({
-                                              ...prev,
-                                              ui: { ...prev.ui, selectionMode: 'TARGET', selectedMove: fusionMove, isFusionNext: true }
-                                          }));
+                                          const mode = getTargetingModeForSelection(fusionMove, undefined);
+                                          if (mode === 'self' || mode === 'none') {
+                                              dispatchBattleAction(myPokemonIndex, undefined, fusionMove, true, undefined, 'self');
+                                          } else if (mode === 'all-opponents') {
+                                              dispatchBattleAction(0, undefined, fusionMove, true, undefined, 'enemy');
+                                          } else {
+                                              setBattleState(prev => ({
+                                                  ...prev,
+                                                  ui: { ...prev.ui, selectionMode: 'TARGET', selectedMove: fusionMove, isFusionNext: true }
+                                              }));
+                                          }
                                       }
                                   }
                               }}
@@ -11913,7 +12004,11 @@ export default function App() {
                                         battleState.weather === 'grass' ? 'bg-emerald-500/60 border-lime-300/80' :
                                         'bg-green-600/60 border-green-400/80'}`}
                                   />
-                                  <PokemonSprite pokemon={mon} isTargetable={isTargeting} onSelect={() => handleTargetSelect(i)} />
+                                  <PokemonSprite
+                                      pokemon={mon}
+                                      isTargetable={isTargeting && targetOptions.some(opt => opt.side === 'enemy' && opt.index === i)}
+                                      onSelect={() => handleTargetSelect(i, 'enemy')}
+                                  />
                                   <SilentErrorBoundary tag="EnemyBattleBuffFx">
                                       <BattleBuffFx side="enemy" slot={i as 0 | 1} />
                                   </SilentErrorBoundary>
@@ -11988,7 +12083,12 @@ export default function App() {
                                           }}
                                       />
                                   )}
-                                  <PokemonSprite pokemon={mon} isBack />
+                                  <PokemonSprite
+                                      pokemon={mon}
+                                      isBack
+                                      isTargetable={isTargeting && targetOptions.some(opt => opt.side !== 'enemy' && opt.index === i)}
+                                      onSelect={() => handleTargetSelect(i, i === myPokemonIndex ? 'self' : 'ally')}
+                                  />
                                   <SilentErrorBoundary tag="PlayerBattleBuffFx">
                                       <BattleBuffFx side="player" slot={i as 0 | 1} />
                                   </SilentErrorBoundary>
@@ -12027,7 +12127,7 @@ export default function App() {
               *  secondary monitors don't cede ~50% of the viewport to
               *  the UI chrome (which was blocking the player's
               *  Pokemon on <600px tall displays). */}
-             <div className="bg-gray-800 border-t-4 border-gray-600 p-2 md:p-4 h-auto min-h-[12rem] [@media(min-height:720px)]:min-h-[14rem] [@media(min-height:900px)]:min-h-[16rem] z-20 relative flex-none">
+             <div className="bg-gray-800 border-t-4 border-gray-600 p-2 md:p-4 h-[12rem] [@media(min-height:720px)]:h-[14rem] [@media(min-height:900px)]:h-[16rem] max-h-[42vh] z-20 relative flex-none overflow-hidden">
                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-4 h-full">
                      <BattleLog logs={battleState.logs} />
                      <div className="col-span-2 bg-gray-700 p-2 md:p-4 rounded-lg overflow-y-auto">
@@ -12040,10 +12140,7 @@ export default function App() {
                                                   key={i} 
                                                   move={m} 
                                                   type={m.type || 'normal'} 
-                                                  onClick={() => { 
-                                                      unlockAudio();
-                                                      if (isMyTurn) setBattleState(prev=>({...prev, ui:{selectionMode:'TARGET', selectedMove:m}})) 
-                                                  }} 
+                                                  onClick={() => handleMoveSelect(m)} 
                                                   disabled={!isMyTurn || (activePlayer.sealedMoveName === m.name && (activePlayer.sealedTurns || 0) > 0)} 
                                               />
                                           );
@@ -12107,6 +12204,26 @@ export default function App() {
                                   <div className="text-yellow-400 text-xl animate-pulse font-bold tracking-widest">
                                       SELECT TARGET
                                   </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 w-full max-w-xl">
+                                      {targetOptions.map((opt, idx) => (
+                                          <button
+                                              key={`${opt.side}-${opt.index}-${idx}`}
+                                              onClick={() => handleTargetSelect(opt.index, opt.side)}
+                                              className={`rounded-lg border-2 px-3 py-2 text-sm font-bold transition-colors ${
+                                                  opt.side === 'enemy'
+                                                      ? 'bg-red-700/70 border-red-400 text-red-100 hover:bg-red-600/80'
+                                                      : opt.side === 'self'
+                                                          ? 'bg-emerald-700/70 border-emerald-300 text-emerald-100 hover:bg-emerald-600/80'
+                                                          : 'bg-green-700/70 border-green-300 text-green-100 hover:bg-green-600/80'
+                                              }`}
+                                          >
+                                              {opt.label}
+                                          </button>
+                                      ))}
+                                  </div>
+                                  {targetOptions.length === 0 && (
+                                      <div className="text-xs text-gray-300">No valid targets for this action.</div>
+                                  )}
                                   <button 
                                       onClick={() => setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: null } }))}
                                       className="bg-gray-600 hover:bg-gray-500 text-white px-6 py-2 rounded border-2 border-gray-400 text-sm transition-colors"
