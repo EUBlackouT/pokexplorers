@@ -2,7 +2,7 @@
 import { MapZone, TrainerData, NPCData, InteractableData, Chunk, ChunkRole, RouteIncident, RouteState, RoutePreview } from '../types';
 import { getGymTeam } from '../data/gymTeams';
 import { interiorPortal, gymPortal } from './interiors';
-import { EARLY_IDS } from './pokeService';
+import { EARLY_IDS, MID_IDS, LATE_IDS, BIOME_POOLS } from './pokeService';
 
 // --- TILE ID LEGEND ---
 // 0: Grass (Green)
@@ -719,6 +719,42 @@ const getRouteTrainerSpawnPolicy = (dist: number): RouteTrainerSpawnPolicy => {
     };
 };
 
+const ROUTE_EARLY_MAX_DIST = 10;
+const ROUTE_MID_MAX_DIST = 28;
+
+const getRouteProgressionSpeciesSet = (dist: number): Set<number> => {
+    if (dist <= ROUTE_EARLY_MAX_DIST) return new Set<number>(EARLY_IDS);
+    if (dist <= ROUTE_MID_MAX_DIST) return new Set<number>([...EARLY_IDS, ...MID_IDS]);
+    return new Set<number>([...EARLY_IDS, ...MID_IDS, ...LATE_IDS]);
+};
+
+const buildRouteTrainerSpeciesPool = (
+    biome: string,
+    signaturePool: number[],
+    dist: number,
+): number[] => {
+    const allowed = getRouteProgressionSpeciesSet(dist);
+    const biomeBase = BIOME_POOLS[biome] ?? BIOME_POOLS.forest ?? [];
+    const biomeFiltered = biomeBase.filter(id => allowed.has(id));
+    const signatureFiltered = signaturePool.filter(id => allowed.has(id));
+    const biomeUnique = Array.from(new Set(biomeFiltered));
+    const signatureUnique = Array.from(new Set(signatureFiltered));
+
+    // Weighted blend:
+    // - Biome pool gives broad variety and prevents "same few trainer species".
+    // - Signature pool keeps each trainer archetype identity recognizable.
+    const weighted = [
+        ...biomeUnique,
+        ...biomeUnique,
+        ...signatureUnique,
+    ];
+    const uniqueWeighted = Array.from(new Set(weighted));
+    if (uniqueWeighted.length > 0) return uniqueWeighted;
+    if (biomeUnique.length > 0) return biomeUnique;
+    if (signatureUnique.length > 0) return signatureUnique;
+    return Array.from(allowed);
+};
+
 export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTrainerPlacement[] => {
     const dist = Math.sqrt(cx * cx + cy * cy);
     if (dist < 1) return []; // keep origin chunk trainer-free, allow nearby routes
@@ -777,17 +813,25 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
         ? null
         : null;
     void biomePool; // keep import graph clean -- App/Service fetch species later
-    const earlySpeciesSet = new Set<number>(EARLY_IDS);
-    const candidatePool = arch.signaturePool;
-    const progressionPool =
-        dist <= 8
-            ? candidatePool.filter(id => earlySpeciesSet.has(id))
-            : candidatePool;
-    const safePool = progressionPool.length > 0 ? progressionPool : candidatePool;
+    const safePool = buildRouteTrainerSpeciesPool(biome, arch.signaturePool, dist);
     const team: number[] = [];
+    const usedSpecies = new Set<number>();
     for (let i = 0; i < teamSize; i++) {
-        const pick = Math.floor(hash4(cx, cy, 5555, i) * safePool.length);
-        team.push(safePool[pick]);
+        let pick = Math.floor(hash4(cx, cy, 5555, i) * safePool.length);
+        let chosen = safePool[pick];
+        if (safePool.length > 1 && usedSpecies.has(chosen)) {
+            // Early routes felt repetitive ("double same-species squads" back-to-back).
+            // Deterministically step through an alternate slot before allowing duplicates.
+            for (let hop = 1; hop < safePool.length; hop++) {
+                const alt = safePool[(pick + hop) % safePool.length];
+                if (!usedSpecies.has(alt)) {
+                    chosen = alt;
+                    break;
+                }
+            }
+        }
+        team.push(chosen);
+        usedSpecies.add(chosen);
     }
 
     const result: RouteTrainerPlacement[] = [
@@ -808,15 +852,23 @@ export const getRouteTrainers = (cx: number, cy: number, biome: string): RouteTr
             tierIndex2 === 2 ? 'ace' : tierIndex2 === 1 ? 'veteran' : 'rookie';
         const teamSize2 = 2 + tierIndex2;
         const level2 = levelFromDistance(dist, tierIndex2 * 2);
-        const progressionPool2 =
-            dist <= 8
-                ? arch2.signaturePool.filter(id => earlySpeciesSet.has(id))
-                : arch2.signaturePool;
-        const safePool2 = progressionPool2.length > 0 ? progressionPool2 : arch2.signaturePool;
+        const safePool2 = buildRouteTrainerSpeciesPool(biome, arch2.signaturePool, dist);
         const team2: number[] = [];
+        const usedSpecies2 = new Set<number>();
         for (let i = 0; i < teamSize2; i++) {
-            const pick = Math.floor(hash4(cx, cy, 9999, i) * safePool2.length);
-            team2.push(safePool2[pick]);
+            let pick = Math.floor(hash4(cx, cy, 9999, i) * safePool2.length);
+            let chosen = safePool2[pick];
+            if (safePool2.length > 1 && usedSpecies2.has(chosen)) {
+                for (let hop = 1; hop < safePool2.length; hop++) {
+                    const alt = safePool2[(pick + hop) % safePool2.length];
+                    if (!usedSpecies2.has(alt)) {
+                        chosen = alt;
+                        break;
+                    }
+                }
+            }
+            team2.push(chosen);
+            usedSpecies2.add(chosen);
         }
         result.push({
             archetype: arch2, name: name2, tier: tier2, tierIndex: tierIndex2,
@@ -1021,11 +1073,11 @@ export const getBiomeAt = (cx: number, cy: number): string => {
 };
 
 const CHUNK_ROLE_WEIGHTS: Record<ChunkRole, number> = {
-    breather: 0.64,
+    breather: 0.56,
     temptation: 0.95,
     obstacle: 0.82,
-    threat: 1.32,
-    mystery: 0.88,
+    threat: 1.45,
+    mystery: 0.92,
     consequence: 1.1,
     setpiece: 0.72,
 };
@@ -1033,18 +1085,18 @@ const CHUNK_ROLE_WEIGHTS: Record<ChunkRole, number> = {
 type RouteCadencePreset = 'tutorial' | 'standard' | 'dangerous' | 'mystery' | 'faction_war' | 'high_variance';
 
 const BIOME_FAMILY_WEIGHTS: Record<string, Record<string, number>> = {
-    forest: { pokemon_ecology: 1.45, mystery: 1.25, environment: 1.08, human_trouble: 0.9, faction: 0.85, rival: 0.82, companion: 0.9, poi: 1.0, economy: 0.82, setpiece: 0.75 },
+    forest: { pokemon_ecology: 1.45, mystery: 1.25, environment: 1.28, human_trouble: 0.86, faction: 0.85, rival: 0.82, companion: 0.9, poi: 1.06, economy: 0.82, setpiece: 0.78 },
     mountain: { pokemon_ecology: 0.95, mystery: 1.0, environment: 1.45, human_trouble: 0.9, faction: 1.15, rival: 0.95, companion: 0.85, poi: 1.0, economy: 0.8, setpiece: 0.9 },
     swamp: { pokemon_ecology: 1.0, mystery: 1.4, environment: 1.35, human_trouble: 0.9, faction: 0.95, rival: 0.8, companion: 0.9, poi: 1.0, economy: 0.7, setpiece: 0.9 },
     desert: { pokemon_ecology: 0.9, mystery: 1.0, environment: 1.35, human_trouble: 0.9, faction: 0.85, rival: 0.9, companion: 0.8, poi: 1.25, economy: 0.85, setpiece: 0.9 },
     coast: { pokemon_ecology: 1.0, mystery: 1.0, environment: 1.35, human_trouble: 1.1, faction: 1.0, rival: 0.9, companion: 0.95, poi: 1.0, economy: 1.1, setpiece: 0.85 },
     urban: { pokemon_ecology: 0.6, mystery: 0.95, environment: 0.85, human_trouble: 1.45, faction: 1.3, rival: 1.05, companion: 1.0, poi: 0.9, economy: 1.3, setpiece: 0.75 },
     haunted: { pokemon_ecology: 0.85, mystery: 1.6, environment: 1.0, human_trouble: 0.75, faction: 0.9, rival: 0.9, companion: 0.7, poi: 1.2, economy: 0.6, setpiece: 1.05 },
-    town: { pokemon_ecology: 0.75, mystery: 0.82, environment: 0.95, human_trouble: 1.12, faction: 1.1, rival: 0.85, companion: 1.25, poi: 0.95, economy: 1.2, setpiece: 0.55 },
-    lake: { pokemon_ecology: 1.2, mystery: 1.0, environment: 1.15, human_trouble: 0.9, faction: 0.9, rival: 0.8, companion: 0.95, poi: 1.0, economy: 0.8, setpiece: 0.8 },
+    town: { pokemon_ecology: 0.75, mystery: 0.82, environment: 1.12, human_trouble: 1.02, faction: 1.1, rival: 0.85, companion: 1.22, poi: 1.02, economy: 1.2, setpiece: 0.55 },
+    lake: { pokemon_ecology: 1.2, mystery: 1.0, environment: 1.32, human_trouble: 0.86, faction: 0.9, rival: 0.8, companion: 0.95, poi: 1.08, economy: 0.8, setpiece: 0.8 },
     canyon: { pokemon_ecology: 1.0, mystery: 0.95, environment: 1.3, human_trouble: 0.95, faction: 1.1, rival: 0.95, companion: 0.85, poi: 1.0, economy: 0.8, setpiece: 0.85 },
     snow: { pokemon_ecology: 1.05, mystery: 1.05, environment: 1.25, human_trouble: 0.85, faction: 0.9, rival: 0.85, companion: 0.9, poi: 0.95, economy: 0.75, setpiece: 0.8 },
-    cave: { pokemon_ecology: 0.95, mystery: 1.15, environment: 1.2, human_trouble: 0.8, faction: 0.9, rival: 0.8, companion: 0.85, poi: 1.2, economy: 0.7, setpiece: 0.9 },
+    cave: { pokemon_ecology: 0.95, mystery: 1.15, environment: 1.3, human_trouble: 0.8, faction: 0.9, rival: 0.8, companion: 0.85, poi: 1.2, economy: 0.7, setpiece: 0.9 },
 };
 
 const getFamilyWeight = (biome: string, family: string): number => {
@@ -1459,14 +1511,22 @@ const pickChunkRole = (cx: number, cy: number, biome: string, routeState?: Route
         }
     } else if (lane === 'lane_strange') {
         weights.mystery += 0.26;
-        weights.setpiece += 0.28;
-        weights.threat += 0.1;
-        weights.breather = Math.max(0.35, weights.breather - 0.2);
+        weights.setpiece += 0.16;
+        weights.threat += 0.02;
+        weights.breather = Math.max(0.4, weights.breather - 0.06);
+        if (recentDangerWindow >= 2 || (rs.pacing.recentDangerCount || 0) >= 2) {
+            // Strange should stay volatile, but still needs occasional decompression.
+            weights.breather += 0.34;
+            weights.threat = Math.max(0.42, weights.threat - 0.16);
+            weights.consequence = Math.max(0.4, weights.consequence - 0.16);
+            weights.obstacle = Math.max(0.4, weights.obstacle - 0.08);
+            weights.setpiece = Math.max(0.2, weights.setpiece - 0.14);
+        }
     } else {
-        weights.breather += 0.1;
+        weights.breather += 0.05;
         weights.temptation += 0.08;
-        weights.threat = Math.max(0.4, weights.threat - 0.18);
-        weights.setpiece = Math.max(0.15, weights.setpiece - 0.2);
+        weights.threat = Math.max(0.42, weights.threat - 0.1);
+        weights.setpiece = Math.max(0.18, weights.setpiece - 0.15);
     }
     if (biome === 'town') {
         weights.breather += 0.4;
@@ -1662,7 +1722,7 @@ const selectRouteIncident = (cx: number, cy: number, biome: string, role: ChunkR
         if (ownership === 'poacher_controlled') weight *= incident.family === 'faction' || incident.family === 'human_trouble' ? 1.1 : 0.92;
         if (ownership === 'cursed') weight *= incident.family === 'mystery' || incident.family === 'setpiece' ? 1.45 : 0.8;
         if (ownership === 'rival_influenced') weight *= incident.family === 'rival' ? 1.18 : 0.92;
-        if (incident.family === 'environment') weight *= ['mountain', 'swamp', 'desert', 'coast'].includes(biome) ? 1.35 : 1.18;
+        if (incident.family === 'environment') weight *= ['mountain', 'swamp', 'desert', 'coast'].includes(biome) ? 1.45 : 1.3;
         if (incident.family === 'human_trouble' && !['urban', 'coast', 'town'].includes(biome)) weight *= 0.84;
         if (incident.family === 'faction' && ownership === 'neutral' && tension < 6) weight *= 0.82;
         if (incident.family === 'rival' && !flags.has('rivalTookShortcut') && !flags.has('rivalAnnoyed')) weight *= 0.86;
@@ -1672,21 +1732,22 @@ const selectRouteIncident = (cx: number, cy: number, biome: string, role: ChunkR
         if (tension >= 6 && (incident.family === 'faction' || incident.family === 'environment')) weight *= 1.25;
         if (curiosity >= 6 && (incident.family === 'mystery' || incident.family === 'poi')) weight *= 1.3;
         if (role === 'obstacle' || role === 'threat') {
-            if (incident.family === 'environment') weight *= 1.55;
+            if (incident.family === 'environment') weight *= 1.75;
             if (incident.family === 'economy') weight *= 0.65;
         }
         if (role === 'mystery') {
-            if (incident.family === 'mystery' || incident.family === 'poi') weight *= 1.25;
+            if (incident.family === 'mystery') weight *= 1.25;
+            if (incident.family === 'poi') weight *= 1.45;
             if (incident.family === 'economy') weight *= 0.7;
         }
         if (role === 'consequence') {
-            if (incident.family === 'environment') weight *= 1.2;
+            if (incident.family === 'environment') weight *= 1.35;
             if (incident.family === 'economy') weight *= 0.7;
         }
         if (role === 'setpiece') {
-            if (incident.family === 'setpiece') weight *= 1.75;
-            else if (incident.family === 'mystery' || incident.family === 'rival' || incident.family === 'faction') weight *= 1.2;
-            else weight *= 0.8;
+            if (incident.family === 'setpiece') weight *= 2.35;
+            else if (incident.family === 'mystery' || incident.family === 'rival' || incident.family === 'faction') weight *= 1.05;
+            else weight *= 0.72;
         }
         if (role === 'consequence') {
             if (incident.family === 'faction' || incident.family === 'human_trouble' || incident.family === 'economy') weight *= 1.2;
@@ -3102,9 +3163,15 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
                 const greetingIdx = Math.floor(hash4(cx, cy, 31102, 0) * arch.greeting.length);
                 const lossIdx = Math.floor(hash4(cx, cy, 31103, 0) * arch.loss.length);
                 const level = Math.max(3, Math.min(100, Math.floor(dist * 0.85) + 3));
+                const fallbackPool = buildRouteTrainerSpeciesPool(biome, arch.signaturePool, dist);
+                const firstIdx = Math.floor(hash4(cx, cy, 31104, 0) * fallbackPool.length);
+                let secondIdx = Math.floor(hash4(cx, cy, 31105, 0) * fallbackPool.length);
+                if (fallbackPool.length > 1 && secondIdx === firstIdx) {
+                    secondIdx = (secondIdx + 1) % fallbackPool.length;
+                }
                 const team = [
-                    arch.signaturePool[Math.floor(hash4(cx, cy, 31104, 0) * arch.signaturePool.length)],
-                    arch.signaturePool[Math.floor(hash4(cx, cy, 31105, 0) * arch.signaturePool.length)],
+                    fallbackPool[firstIdx],
+                    fallbackPool[secondIdx],
                 ];
                 const trainerId = `route_fallback_${cx}_${cy}`;
                 trainers[`${spot.x},${spot.y}`] = {

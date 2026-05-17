@@ -116,17 +116,29 @@ export const DEPTH_PERKS: DepthPerk[] = [
 ];
 
 export const computeExplorerScore = (inputs: ScoreInputs): ExplorerScore => {
+    const safe = (v: number): number => (Number.isFinite(v) ? Math.max(0, v) : 0);
+    const normalized: ScoreInputs = {
+        farthestDistance: safe(inputs.farthestDistance),
+        chunksDiscovered: safe(inputs.chunksDiscovered),
+        badges: safe(inputs.badges),
+        totalCaptures: safe(inputs.totalCaptures),
+        shiniesCaught: safe(inputs.shiniesCaught),
+        trainersDefeated: safe(inputs.trainersDefeated),
+        biggestStreak: safe(inputs.biggestStreak),
+        totalMoneyEarned: safe(inputs.totalMoneyEarned),
+        riftStabilityCleared: !!inputs.riftStabilityCleared,
+    };
     const entries: ScoreBreakdown[] = [
-        { label: 'Farthest Distance', raw: inputs.farthestDistance, weight: WEIGHTS.farthestDistance, contribution: inputs.farthestDistance * WEIGHTS.farthestDistance },
-        { label: 'Chunks Discovered', raw: inputs.chunksDiscovered, weight: WEIGHTS.chunksDiscovered, contribution: inputs.chunksDiscovered * WEIGHTS.chunksDiscovered },
-        { label: 'Badges Earned',     raw: inputs.badges,           weight: WEIGHTS.badges,           contribution: inputs.badges * WEIGHTS.badges },
-        { label: 'Pokemon Caught',    raw: inputs.totalCaptures,    weight: WEIGHTS.totalCaptures,    contribution: inputs.totalCaptures * WEIGHTS.totalCaptures },
-        { label: 'Shiny Catches',     raw: inputs.shiniesCaught,    weight: WEIGHTS.shiniesCaught,    contribution: inputs.shiniesCaught * WEIGHTS.shiniesCaught },
-        { label: 'Trainers Defeated', raw: inputs.trainersDefeated, weight: WEIGHTS.trainersDefeated, contribution: inputs.trainersDefeated * WEIGHTS.trainersDefeated },
-        { label: 'Best Win Streak',   raw: inputs.biggestStreak,    weight: WEIGHTS.biggestStreak,    contribution: inputs.biggestStreak * WEIGHTS.biggestStreak },
-        { label: 'Money Earned',      raw: inputs.totalMoneyEarned, weight: WEIGHTS.totalMoneyEarned, contribution: Math.floor(inputs.totalMoneyEarned * WEIGHTS.totalMoneyEarned) },
+        { label: 'Farthest Distance', raw: normalized.farthestDistance, weight: WEIGHTS.farthestDistance, contribution: normalized.farthestDistance * WEIGHTS.farthestDistance },
+        { label: 'Chunks Discovered', raw: normalized.chunksDiscovered, weight: WEIGHTS.chunksDiscovered, contribution: normalized.chunksDiscovered * WEIGHTS.chunksDiscovered },
+        { label: 'Badges Earned',     raw: normalized.badges,           weight: WEIGHTS.badges,           contribution: normalized.badges * WEIGHTS.badges },
+        { label: 'Pokemon Caught',    raw: normalized.totalCaptures,    weight: WEIGHTS.totalCaptures,    contribution: normalized.totalCaptures * WEIGHTS.totalCaptures },
+        { label: 'Shiny Catches',     raw: normalized.shiniesCaught,    weight: WEIGHTS.shiniesCaught,    contribution: normalized.shiniesCaught * WEIGHTS.shiniesCaught },
+        { label: 'Trainers Defeated', raw: normalized.trainersDefeated, weight: WEIGHTS.trainersDefeated, contribution: normalized.trainersDefeated * WEIGHTS.trainersDefeated },
+        { label: 'Best Win Streak',   raw: normalized.biggestStreak,    weight: WEIGHTS.biggestStreak,    contribution: normalized.biggestStreak * WEIGHTS.biggestStreak },
+        { label: 'Money Earned',      raw: normalized.totalMoneyEarned, weight: WEIGHTS.totalMoneyEarned, contribution: Math.floor(normalized.totalMoneyEarned * WEIGHTS.totalMoneyEarned) },
     ];
-    if (inputs.riftStabilityCleared) {
+    if (normalized.riftStabilityCleared) {
         entries.push({
             label: 'Rift Cleared',
             raw: 1,
@@ -138,7 +150,7 @@ export const computeExplorerScore = (inputs: ScoreInputs): ExplorerScore => {
 
     let titleIndex = 0;
     for (let i = TITLES.length - 1; i >= 0; i--) {
-        if (inputs.farthestDistance >= TITLES[i].at) {
+        if (normalized.farthestDistance >= TITLES[i].at) {
             titleIndex = i;
             break;
         }

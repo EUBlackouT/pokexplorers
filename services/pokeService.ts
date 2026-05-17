@@ -132,14 +132,14 @@ export const EARLY_IDS = [
     722, 725, 728, 731, 734, 736, 744, 747, 749, 751, 753, 755, 757, 759, 761, 767, 769, 777, 778, 782, 810, 813, 816, 819, 821, 824, 829, 831, 833, 837, 840, 843, 848, 850, 852, 854, 856, 859, 868, 872, 877, 878, 885, 906, 909, 912, 915, 917, 919, 921, 924, 926, 928, 932, 935, 938, 940, 942, 946, 948, 950, 951, 953, 955, 957, 960, 963, 965, 967, 969, 971, 973, 974, 996
 ];
 
-const MID_IDS = [
+export const MID_IDS = [
     2, 5, 8, 11, 14, 17, 20, 22, 24, 26, 28, 30, 33, 36, 38, 40, 42, 44, 47, 49, 51, 53, 55, 57, 59, 61, 64, 67, 70, 73, 75, 78, 80, 82, 85, 87, 89, 91, 93, 97, 99, 101, 103, 105, 107, 110, 112, 117, 119, 121, 124, 125, 126, 130, 134, 135, 136, 139, 141, 148,
     153, 156, 159, 162, 164, 166, 168, 171, 176, 178, 180, 184, 188, 192, 195, 196, 197, 199, 203, 205, 208, 210, 212, 217, 219, 221, 224, 226, 229, 232, 237, 242, 247,
     253, 256, 259, 262, 264, 266, 271, 274, 277, 278, 281, 284, 286, 288, 291, 294, 297, 299, 301, 303, 305, 308, 310, 314, 317, 319, 321, 323, 326, 330, 332, 334, 336, 338, 340, 342, 344, 346, 348, 351, 354, 356, 358, 362, 364, 367, 372, 375,
     388, 391, 394, 397, 400, 404, 407, 409, 411, 413, 416, 419, 421, 423, 426, 428, 430, 432, 435, 437, 440, 444, 448, 450, 452, 454, 457, 460, 461, 462, 463, 465, 466, 467, 469, 470, 471, 472, 473, 474, 476, 477, 478
 ];
 
-const LATE_IDS = [
+export const LATE_IDS = [
     3, 6, 9, 12, 15, 18, 31, 34, 45, 62, 65, 68, 71, 76, 94, 123, 127, 128, 131, 142, 143, 149, 214, 227, 230, 241, 242, 248, 323, 350, 359, 373, 376, 445, 447, 448, 461, 462, 464, 466, 467, 468, 472, 473, 474, 475, 477, 534, 553, 567, 571, 576, 579, 601, 604, 609, 612, 621, 625, 628, 630, 635, 637, 671, 673, 681, 685, 687, 689, 691, 693, 695, 697, 699, 706, 713, 715, 740, 743, 746, 750, 752, 754, 756, 758, 760, 763, 766, 768, 770, 771, 773, 776, 778, 779, 780, 781, 784, 820, 823, 826, 828, 830, 832, 834, 836, 839, 842, 844, 845, 847, 849, 851, 853, 855, 858, 861, 863, 865, 867, 869, 871, 873, 875, 876, 877, 879, 884, 887, 907, 908, 911, 914, 916, 918, 920, 923, 925, 927, 930, 931, 934, 937, 939, 941, 943, 945, 947, 949, 952, 954, 956, 959, 962, 964, 966, 968, 970, 972, 975, 977, 978, 980, 998, 1000
 ];
 
@@ -254,7 +254,7 @@ const isPunchMove = (move: PokemonMove): boolean => {
 };
 
 // Check if a move makes contact (Simplified list)
-const isContactMove = (move: PokemonMove, attacker?: Pokemon): boolean => {
+export const isContactMove = (move: PokemonMove, attacker?: Pokemon): boolean => {
     if (attacker?.heldItem?.id === 'punching-glove' && isPunchMove(move)) return false;
     if (move.contact !== undefined) return move.contact;
     // Heuristic: Most physical moves are contact, most special/status are not.
@@ -400,8 +400,12 @@ export const getDamageMultiplier = (
 
 export const calculateAccuracy = (attacker: Pokemon, defender: Pokemon, move: PokemonMove, isPlayer: boolean, playerTeam: (Pokemon | null)[], enemyTeam: (Pokemon | null)[], weather: WeatherType = 'none', movingFirst: boolean = true): boolean => {
     if (move.accuracy === null || move.accuracy === 0) return true; // Always hits
-    const atkAbility = attacker.ability.name;
-    const defAbility = defender.ability.name;
+    const gasActive = [attacker, defender, ...playerTeam, ...enemyTeam].some(p => p && !p.isFainted && p.ability?.name === 'NeutralizingGas');
+    const normalizeAbility = (name: string): string => (gasActive && name !== 'NeutralizingGas' ? '' : name);
+    const atkAbility = normalizeAbility(attacker.ability.name);
+    const defAbility = normalizeAbility(defender.ability.name);
+    const attackerItemId = atkAbility === 'Klutz' ? undefined : attacker.heldItem?.id;
+    const defenderItemId = defAbility === 'Klutz' ? undefined : defender.heldItem?.id;
 
     if (atkAbility === 'NoGuard' || defAbility === 'NoGuard') return true;
     if (atkAbility === 'TremorSense' && move.type === 'ground') return true;
@@ -429,15 +433,21 @@ export const calculateAccuracy = (attacker: Pokemon, defender: Pokemon, move: Po
 
     if (atkAbility === 'CompoundEyes') finalAccuracy *= 1.3;
     if (atkAbility === 'VictoryStar') finalAccuracy *= 1.1;
+    if (atkAbility === 'Illuminate') finalAccuracy *= 1.1;
+    if (move.damage_class === 'physical' && atkAbility === 'Hustle') finalAccuracy *= 0.8;
+
+    const ally = (isPlayer ? playerTeam : enemyTeam).find(p => p && !p.isFainted && p.id !== attacker.id);
+    if (ally?.ability?.name === 'VictoryStar') finalAccuracy *= 1.1;
 
     if (defAbility === 'SandVeil' && weather === 'sand') finalAccuracy *= 0.8;
     if (defAbility === 'SnowCloak' && (weather === 'hail' || weather === 'snow')) finalAccuracy *= 0.8;
     if (defAbility === 'TangledFeet' && defender.status === 'confusion') finalAccuracy *= 0.5;
+    if (defAbility === 'WonderSkin' && move.damage_class === 'status') finalAccuracy *= 0.5;
 
     // Item Modifiers
-    if (attacker.heldItem?.id === 'wide-lens') finalAccuracy *= 1.1;
-    if (attacker.heldItem?.id === 'zoom-lens' && !movingFirst) finalAccuracy *= 1.2;
-    if (defender.heldItem?.id === 'bright-powder') finalAccuracy *= 0.9;
+    if (attackerItemId === 'wide-lens') finalAccuracy *= 1.1;
+    if (attackerItemId === 'zoom-lens' && !movingFirst) finalAccuracy *= 1.2;
+    if (defenderItemId === 'bright-powder') finalAccuracy *= 0.9;
 
     return Math.random() * 100 < finalAccuracy;
 };
@@ -457,6 +467,10 @@ export const applySecondaryEffect = (
 
     // Covert Cloak
     if (defender.heldItem?.id === 'covert-cloak' && !isStatusMove) {
+        return result;
+    }
+    // Shield Dust blocks additional effects from damaging moves.
+    if (defender.ability.name === 'ShieldDust' && !isStatusMove) {
         return result;
     }
 
@@ -495,6 +509,9 @@ export const applySecondaryEffect = (
     // Flinch
     let flinchChance = move.flinchChance || 0;
     if (attacker.heldItem?.id === 'kings-rock' || attacker.heldItem?.id === 'razor-fang') {
+        flinchChance = Math.max(flinchChance, 10);
+    }
+    if (attacker.ability.name === 'Stench' && !isStatusMove) {
         flinchChance = Math.max(flinchChance, 10);
     }
     if (flinchChance > 0 && roll < flinchChance) {
@@ -1477,13 +1494,13 @@ export const handleEndOfTurnStatus = (pokemon: Pokemon, weather: WeatherType = '
     if (damage > 0) return { damage, msg };
 
     // Weather damage
-    if (weather === 'sand' && !pokemon.types.includes('rock') && !pokemon.types.includes('ground') && !pokemon.types.includes('steel')) {
+    if (weather === 'sand' && !pokemon.types.includes('rock') && !pokemon.types.includes('ground') && !pokemon.types.includes('steel') && pokemon.ability.name !== 'Overcoat') {
         damage = Math.floor(pokemon.maxHp / 16);
         msg = `${pokemon.name} is buffeted by the sandstorm!`;
-    } else if (weather === 'snow' && !pokemon.types.includes('ice')) {
+    } else if (weather === 'snow' && !pokemon.types.includes('ice') && pokemon.ability.name !== 'Overcoat') {
         damage = Math.floor(pokemon.maxHp / 16);
         msg = `${pokemon.name} is buffeted by the snow!`;
-    } else if (weather === 'ashstorm' && !pokemon.types.includes('fire') && !pokemon.types.includes('rock') && !pokemon.types.includes('steel')) {
+    } else if (weather === 'ashstorm' && !pokemon.types.includes('fire') && !pokemon.types.includes('rock') && !pokemon.types.includes('steel') && pokemon.ability.name !== 'Overcoat') {
         damage = Math.floor(pokemon.maxHp / 16);
         msg = `${pokemon.name} is buffeted by the ashstorm!`;
     }
@@ -1545,14 +1562,49 @@ export const calculateDamage = (
   if (terrain === 'psychic' && isGrounded(defender) && move.priority && move.priority > 0) {
       return { damage: 0, effectiveness: 0, isCritical: false, isStab: false, msg: `${defender.name} is protected by the Psychic Terrain!`, hits: 0 };
   }
+  const defenderSide = isPlayer ? enemyTeam : playerTeam;
+  if ((move.priority || 0) > 0 && defenderSide.some(p => p && !p.isFainted && (p.ability.name === 'Dazzling' || p.ability.name === 'QueenlyMajesty'))) {
+      return { damage: 0, effectiveness: 0, isCritical: false, isStab: false, msg: `${defender.name}'s side blocked the priority move!`, hits: 0 };
+  }
+  const moveNameLower = move.name.toLowerCase();
+  const isExplosionFamily = moveNameLower === 'explosion' || moveNameLower === 'self-destruct' || moveNameLower === 'mind blown';
+  if (isExplosionFamily) {
+      const allActive = [...playerTeam.slice(0, 2), ...enemyTeam.slice(0, 2)];
+      if (allActive.some(p => p && !p.isFainted && p.ability.name === 'Damp')) {
+          return { damage: 0, effectiveness: 0, isCritical: false, isStab: false, msg: `Damp prevented the explosion!`, hits: 0 };
+      }
+  }
+  const allActiveMons = [attacker, defender, ...playerTeam.slice(0, 2), ...enemyTeam.slice(0, 2)];
+  const weatherSuppressed = allActiveMons.some(p => p && !p.isFainted && (p.ability.name === 'AirLock' || p.ability.name === 'CloudNine'));
+  if (weatherSuppressed) weather = 'none';
 
   const level = attacker.level || 1;
-  const atkAbility = attacker.ability?.name || '';
-  const defAbility = defender.ability?.name || '';
+  const gasActive = [attacker, defender, ...playerTeam, ...enemyTeam].some(p => p && !p.isFainted && p.ability?.name === 'NeutralizingGas');
+  const normalizeAbility = (name: string): string => (gasActive && name !== 'NeutralizingGas' ? '' : name);
+  const atkAbility = normalizeAbility(attacker.ability?.name || '');
+  const defAbility = normalizeAbility(defender.ability?.name || '');
+  const attackerItemId = atkAbility === 'Klutz' ? undefined : attacker.heldItem?.id;
+  const defenderItemId = defAbility === 'Klutz' ? undefined : defender.heldItem?.id;
   let moveType = move.type || 'normal';
   const isPhysical = move.damage_class === 'physical';
   const isSpecial = move.damage_class === 'special';
-  const makesContact = isContactMove(move);
+  let makesContact = isContactMove(move, attacker);
+  if (atkAbility === 'LongReach') makesContact = false;
+  const normalBasedMove = moveType.toLowerCase() === 'normal';
+  let typeShiftPowerMod = 1;
+  if (atkAbility === 'Normalize') {
+      moveType = 'normal';
+      typeShiftPowerMod *= 1.2;
+  } else if (normalBasedMove && atkAbility === 'Pixilate') {
+      moveType = 'fairy';
+      typeShiftPowerMod *= 1.2;
+  } else if (normalBasedMove && atkAbility === 'Refrigerate') {
+      moveType = 'ice';
+      typeShiftPowerMod *= 1.2;
+  } else if (normalBasedMove && atkAbility === 'LiquidVoice' && move.isSound) {
+      moveType = 'water';
+      typeShiftPowerMod *= 1.2;
+  }
 
   let attackerSpeed = attacker.stats.speed * (Math.pow(1.5, attacker.statStages?.speed || 0));
   if (isPlayer) attackerSpeed *= (1 + speedBoost * 0.05);
@@ -1561,8 +1613,20 @@ export const calculateDamage = (
   if (!isPlayer) defenderSpeed *= (1 + speedBoost * 0.05);
   if (attacker.status === 'paralysis') attackerSpeed *= 0.5;
   if (defender.status === 'paralysis') defenderSpeed *= 0.5;
-  if (attacker.heldItem?.id === 'iron-ball') attackerSpeed *= 0.5;
-  if (defender.heldItem?.id === 'iron-ball') defenderSpeed *= 0.5;
+  if (attacker.ability.name === 'QuickFeet' && attacker.status) attackerSpeed *= (attacker.status === 'paralysis' ? 3 : 1.5);
+  if (defender.ability.name === 'QuickFeet' && defender.status) defenderSpeed *= (defender.status === 'paralysis' ? 3 : 1.5);
+  if (attacker.ability.name === 'SwiftSwim' && weather === 'rain') attackerSpeed *= 2;
+  if (defender.ability.name === 'SwiftSwim' && weather === 'rain') defenderSpeed *= 2;
+  if (attacker.ability.name === 'Chlorophyll' && weather === 'sun') attackerSpeed *= 2;
+  if (defender.ability.name === 'Chlorophyll' && weather === 'sun') defenderSpeed *= 2;
+  if (attacker.ability.name === 'SandRush' && weather === 'sand') attackerSpeed *= 2;
+  if (defender.ability.name === 'SandRush' && weather === 'sand') defenderSpeed *= 2;
+  if (attacker.ability.name === 'SlushRush' && (weather === 'snow' || weather === 'hail')) attackerSpeed *= 2;
+  if (defender.ability.name === 'SlushRush' && (weather === 'snow' || weather === 'hail')) defenderSpeed *= 2;
+  if (attacker.ability.name === 'Unburden' && !attacker.heldItem) attackerSpeed *= 2;
+  if (defender.ability.name === 'Unburden' && !defender.heldItem) defenderSpeed *= 2;
+  if (attackerItemId === 'iron-ball') attackerSpeed *= 0.5;
+  if (defenderItemId === 'iron-ball') defenderSpeed *= 0.5;
   if (isPlayer && tailwindTurns > 0) attackerSpeed *= 2;
   if (!isPlayer && enemyTailwindTurns > 0) attackerSpeed *= 2;
   if (!isPlayer && tailwindTurns > 0) defenderSpeed *= 2;
@@ -1597,7 +1661,8 @@ export const calculateDamage = (
   }
   if (name === 'low kick' || name === 'grass knot') {
       // Approximate weight-based power
-      basePower = 60 + Math.floor(Math.random() * 40); 
+      const weightShift = defender.ability.name === 'HeavyMetal' ? 1.4 : defender.ability.name === 'LightMetal' ? 0.7 : 1;
+      basePower = Math.max(20, Math.floor((60 + Math.floor(Math.random() * 40)) * weightShift)); 
   }
   if (name === 'knock off' && defender.heldItem) {
       basePower *= 1.5;
@@ -1693,7 +1758,7 @@ export const calculateDamage = (
       return { damage: 0, effectiveness: 0, isCritical: false, isStab: false, msg: `But it failed!`, hits: 0 };
   }
 
-  const typeMultiplier = move.type ? getDamageMultiplier(move.type, defender, attacker, weather, terrain) : 1;
+  const typeMultiplier = moveType ? getDamageMultiplier(moveType, defender, attacker, weather, terrain) : 1;
   let finalTypeMultiplier = typeMultiplier;
   let abilityDefMod = 1;
 
@@ -1707,6 +1772,7 @@ export const calculateDamage = (
   // --- POWER CALCULATION ---
   let power = basePower || 0;
   if (isNaN(power)) power = 0;
+  power *= typeShiftPowerMod;
   
   // Terrain Modifiers
   if (isGrounded(attacker)) {
@@ -1734,7 +1800,7 @@ export const calculateDamage = (
   if (atkAbility === 'WaterBubble' && moveType === 'water') power *= 2;
   if (atkAbility === 'Steelworker' && moveType === 'steel') power *= 1.5;
   if (atkAbility === 'Transistor' && moveType === 'electric') power *= 1.5;
-  if (atkAbility === 'DragonMaw' && moveType === 'dragon') power *= 1.5;
+  if ((atkAbility === 'DragonMaw' || atkAbility === 'DragonsMaw') && moveType === 'dragon') power *= 1.5;
   if (atkAbility === 'RockyPayload' && moveType === 'rock') power *= 1.5;
   if (atkAbility === 'Adaptability' && attacker.types.includes(moveType)) power *= 1.33;
   if (atkAbility === 'ToxicBoost' && attacker.status === 'poison' && isPhysical) power *= 1.5;
@@ -2102,7 +2168,9 @@ export const calculateDamage = (
       if (atkAbility === 'SlowStart' && isPhysical && attacker.turnCount !== undefined && attacker.turnCount <= 5) stat *= 0.5; 
       if (atkAbility === 'Defeatist' && attacker.currentHp <= attacker.maxHp / 2) stat *= 0.5;
       if (atkAbility === 'Protosynthesis' && (weather === 'sun' || attacker.isBoosterEnergyActive)) stat *= 1.3;
-      if (atkAbility === 'QuarkDrive' && (weather === 'electric' || attacker.isBoosterEnergyActive)) stat *= 1.3; 
+      if (atkAbility === 'QuarkDrive' && (terrain === 'electric' || weather === 'electric' || attacker.isBoosterEnergyActive)) stat *= 1.3; 
+      if (atkAbility === 'OrichalcumPulse' && weather === 'sun' && isPhysical) stat *= 1.33;
+      if (atkAbility === 'HadronEngine' && terrain === 'electric' && isSpecial) stat *= 1.33;
       
       // New Abilities
       if (atkAbility === 'Overclock' && isSpecial && isMovingFirst) stat *= 1.2;
@@ -2121,9 +2189,30 @@ export const calculateDamage = (
       if (myAlly && myAlly.ability.name === 'PartnerBoost' && myAlly.currentHp === myAlly.maxHp && isPhysical) {
           stat *= 1.3;
       }
+      if (atkAbility === 'Rivalry') {
+          const sameParity = (attacker.id % 2) === (defender.id % 2);
+          stat *= sameParity ? 1.25 : 0.75;
+      }
+      if (myAlly && myAlly.ability.name === 'FlowerGift' && weather === 'sun' && isPhysical) {
+          stat *= 1.5;
+      }
+      if (isSpecial && myAlly && !myAlly.isFainted) {
+          if ((atkAbility === 'Plus' && myAlly.ability.name === 'Minus') || (atkAbility === 'Minus' && myAlly.ability.name === 'Plus')) {
+              stat *= 1.5;
+          }
+      }
+      if (myAlly && !myAlly.isFainted && myAlly.ability.name === 'PowerSpot') {
+          stat *= 1.3;
+      }
+      if (isPhysical && myAlly && !myAlly.isFainted && myAlly.ability.name === 'SteelySpirit' && moveType === 'steel') {
+          stat *= 1.5;
+      }
+      if ((atkAbility === 'TabletsOfRuin' && isPhysical) || (atkAbility === 'VesselOfRuin' && isSpecial)) {
+          stat *= 0.75;
+      }
 
       // Item Modifiers
-      const heldItem = attacker.heldItem?.id;
+      const heldItem = attackerItemId;
       if (heldItem === 'choice-band' && isPhysical) stat *= 1.5;
       if (heldItem === 'choice-specs' && isSpecial) stat *= 1.5;
 
@@ -2171,6 +2260,8 @@ export const calculateDamage = (
       if (defAbility === 'IceScales' && isSpecial) stat *= 2;
       if (defAbility === 'GrassPelt' && isPhysical) stat *= 1.5;
       if (defAbility === 'SyncShield') stat *= 1.3; // Base boost, but we'll add more in calculateDamage if meter > 50
+      const defenderAlly = (isPlayer ? enemyTeam : playerTeam).find(p => p && !p.isFainted && p.id !== defender.id);
+      if (defenderAlly && defenderAlly.ability.name === 'FlowerGift' && weather === 'sun' && isSpecial) stat *= 1.5;
       if (defAbility === 'SiltArmor' && weather === 'sand') stat *= 1.5;
       if (defAbility === 'BorealCoat' && weather === 'snow') stat *= 1.5;
       if (weather === 'snow' && getEffectiveDefensiveTypes(defender).includes('ice')) stat *= 1.5;
@@ -2187,9 +2278,12 @@ export const calculateDamage = (
       if (atkAbility === 'ArmorMelt' && isSpecial && stage > 0) {
           stat = defender.stats[statName];
       }
+      if ((atkAbility === 'SwordOfRuin' && isPhysical) || (atkAbility === 'BeadsOfRuin' && isSpecial)) {
+          stat *= 0.75;
+      }
 
       // Item Modifiers
-      const heldItem = defender.heldItem?.id;
+      const heldItem = defenderItemId;
       if (heldItem === 'assault-vest' && isSpecial) stat *= 1.5;
       if (heldItem === 'eviolite') {
           // Simplified: assume if it has an evolution, it gets the boost
@@ -2263,6 +2357,23 @@ export const calculateDamage = (
   if ((defAbility === 'SolidRock' || defAbility === 'Filter' || defAbility === 'PrismArmor') && typeMultiplier > 1) {
       abilityDefMod *= 0.75;
   }
+  const activeMons = [attacker, defender, ...playerTeam, ...enemyTeam].filter(p => p && !p.isFainted);
+  const hasAuraBreak = activeMons.some(p => p.ability.name === 'AuraBreak');
+  const darkAuraActive = activeMons.some(p => p.ability.name === 'DarkAura');
+  const fairyAuraActive = activeMons.some(p => p.ability.name === 'FairyAura');
+  if (moveType === 'dark' && darkAuraActive) {
+      abilityDefMod *= hasAuraBreak ? 0.75 : 1.33;
+  }
+  if (moveType === 'fairy' && fairyAuraActive) {
+      abilityDefMod *= hasAuraBreak ? 0.75 : 1.33;
+  }
+  if (defender.turnCount !== undefined && defender.turnCount <= 1 && atkAbility === 'Stakeout') {
+      abilityDefMod *= 2;
+  }
+  const allyToDefender = (isPlayer ? enemyTeam : playerTeam).find(p => p && !p.isFainted && p.id !== defender.id);
+  if (allyToDefender && allyToDefender.ability.name === 'FriendGuard') {
+      abilityDefMod *= 0.75;
+  }
   if (defAbility === 'PunkRock' && move.name.includes('sound')) abilityDefMod *= 0.5;
   if (defAbility === 'SyncShield' && (isPlayer ? enemyMeter > 50 : playerMeter > 50)) abilityDefMod *= 0.8;
   
@@ -2287,7 +2398,8 @@ export const calculateDamage = (
   if (atkAbility === 'BondBreaker' && defender.lastMoveWasLink) abilityDefMod *= 1.2; 
   if (defAbility === 'BasaltArmor' && typeMultiplier > 1) abilityDefMod *= 0.75;
 
-  if (defender.isProtected && !attacker.ignoresProtect) {
+  const ignoresProtect = attacker.ignoresProtect || (atkAbility === 'UnseenFist' && makesContact);
+  if (defender.isProtected && !ignoresProtect) {
       if (atkAbility === 'Ironstorm' && moveType === 'steel') {
           abilityDefMod *= 0.25;
       } else {
@@ -3075,6 +3187,8 @@ export const checkEvolution = async (pokemon: Pokemon): Promise<boolean> => {
 
 export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap: number = 100, teamAverageLevel: number = 0): Promise<{ mon: Pokemon, leveledUp: boolean, newMoves: string[] }> => {
     let p = { ...pokemon };
+    if (!Number.isFinite(p.xp)) p.xp = 0;
+    if (!Number.isFinite(amount) || amount <= 0) amount = 1;
     if (p.level >= levelCap) {
         p.xp = 0; // Cap reached
         return { mon: p, leveledUp: false, newMoves: [] };
@@ -3087,7 +3201,7 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
         finalAmount *= (1 + (diff * 0.5)); // 50% boost per level behind
     }
 
-    p.xp += Math.floor(finalAmount);
+    p.xp += Math.max(1, Math.floor(finalAmount));
     
     let leveledUp = false;
     const learnedMoves: string[] = [];

@@ -14,6 +14,7 @@
     "diagnostics:incidents": "tsx scripts/incidents-diagnostics.ts",
     "diagnostics:routearcs": "tsx scripts/routearcs-diagnostics.ts",
     "diagnostics:abilities": "tsx scripts/abilities-diagnostics.ts",
+    "diagnostics:abilities-runtime": "tsx scripts/abilities-runtime-smoke.ts",
     "electron:dev": "cross-env NODE_ENV=development electron .",
     "electron:build": "npm run build && electron-builder"
   },

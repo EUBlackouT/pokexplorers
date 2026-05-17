@@ -21,11 +21,16 @@ export const PokemonSummary: React.FC<{
 }> = ({ pokemon, inventory, upgrades, onGiveItem, onClose }) => {
     const [showItemPicker, setShowItemPicker] = useState(false);
     useEscapeKey(() => { if (showItemPicker) setShowItemPicker(false); else onClose(); });
+    const safeUpgrades = upgrades ?? ({ attackBoost: 0, defenseBoost: 0, speedBoost: 0 } as MetaState['upgrades']);
+    const safeItems = Array.isArray(inventory?.items) ? (inventory.items as string[]) : [];
+    const safeAbility = pokemon.ability ?? ({ name: 'Unknown', description: 'No description available.' } as any);
+    const safeNature = pokemon.nature ?? ({ name: 'Hardy', increased: undefined, decreased: undefined } as any);
+    const safeTypes = Array.isArray(pokemon.types) && pokemon.types.length > 0 ? pokemon.types : ['normal'];
 
     const getBoostedStat = (key: keyof StatBlock, value: number) => {
-        if (key === 'attack' || key === 'special-attack') return Math.floor(value * (1 + (upgrades.attackBoost * 0.05)));
-        if (key === 'defense' || key === 'special-defense') return Math.floor(value * (1 + (upgrades.defenseBoost * 0.05)));
-        if (key === 'speed') return Math.floor(value * (1 + (upgrades.speedBoost * 0.05)));
+        if (key === 'attack' || key === 'special-attack') return Math.floor(value * (1 + (safeUpgrades.attackBoost * 0.05)));
+        if (key === 'defense' || key === 'special-defense') return Math.floor(value * (1 + (safeUpgrades.defenseBoost * 0.05)));
+        if (key === 'speed') return Math.floor(value * (1 + (safeUpgrades.speedBoost * 0.05)));
         return value;
     };
 
@@ -39,20 +44,20 @@ export const PokemonSummary: React.FC<{
     ];
 
     const battleItems = useMemo(() => {
-        const list = (inventory.items as string[]).filter(
+        const list = safeItems.filter(
             (id) =>
                 ITEMS[id]?.category === 'battle' ||
                 ITEMS[id]?.category === 'healing' ||
                 ITEMS[id]?.category === 'evolution'
         );
-        if (inventory.potions > 0) list.push('potion');
-        if (inventory.revives > 0) list.push('revive');
-        if (inventory.rare_candy > 0) list.push('rare-candy');
+        if ((inventory?.potions || 0) > 0) list.push('potion');
+        if ((inventory?.revives || 0) > 0) list.push('revive');
+        if ((inventory?.rare_candy || 0) > 0) list.push('rare-candy');
         return list;
-    }, [inventory]);
+    }, [inventory, safeItems]);
 
-    const primaryType = pokemon.types[0] ?? 'normal';
-    const secondaryType = pokemon.types[1] ?? primaryType;
+    const primaryType = safeTypes[0] ?? 'normal';
+    const secondaryType = safeTypes[1] ?? primaryType;
     const primaryColor = TYPE_COLORS[primaryType] ?? '#64748b';
     const secondaryColor = TYPE_COLORS[secondaryType] ?? primaryColor;
     const statTotal = stats.reduce((acc, s) => acc + getBoostedStat(s.key, pokemon.stats[s.key]), 0);
@@ -143,7 +148,7 @@ export const PokemonSummary: React.FC<{
                                 {pokemon.name}
                             </BrandTitle>
                             <div className="flex items-center justify-center md:justify-start gap-2 mt-2 flex-wrap">
-                                {pokemon.types.map((t) => (
+                                {safeTypes.map((t) => (
                                     <span
                                         key={t}
                                         className="px-2.5 py-1 rounded-full text-[9px] uppercase tracking-[0.25em] font-black border border-black/30 shadow-md"
@@ -215,28 +220,28 @@ export const PokemonSummary: React.FC<{
                         <Panel title="Ability" accent="#fbbf24">
                             <div className="flex flex-wrap items-center gap-2 mb-2">
                                 <span
-                                    title={pokemon.ability.description || formatAbilityName(pokemon.ability.name)}
+                                    title={safeAbility.description || formatAbilityName(safeAbility.name)}
                                     className="text-sm uppercase tracking-wide text-amber-200 font-black truncate"
                                 >
-                                    {formatAbilityName(pokemon.ability.name)}
+                                    {formatAbilityName(safeAbility.name)}
                                 </span>
-                                {pokemon.ability.isHidden && (
+                                {safeAbility.isHidden && (
                                     <span className="px-1.5 py-0.5 bg-purple-700/80 border border-purple-400 text-purple-100 text-[7px] uppercase tracking-widest rounded-full">Hidden</span>
                                 )}
-                                {pokemon.ability.category && (
-                                    <span className="px-1.5 py-0.5 bg-slate-700 border border-slate-500 text-slate-200 text-[7px] uppercase tracking-widest rounded-full">{pokemon.ability.category}</span>
+                                {safeAbility.category && (
+                                    <span className="px-1.5 py-0.5 bg-slate-700 border border-slate-500 text-slate-200 text-[7px] uppercase tracking-widest rounded-full">{safeAbility.category}</span>
                                 )}
                             </div>
-                            {pokemon.ability.description ? (
+                            {safeAbility.description ? (
                                 <p className="text-[8px] text-slate-300 leading-relaxed italic border-l-2 border-amber-400/60 pl-2">
-                                    {pokemon.ability.description}
+                                    {safeAbility.description}
                                 </p>
                             ) : (
                                 <p className="text-[8px] text-slate-500 italic">No description on record.</p>
                             )}
-                            {pokemon.ability.tags && pokemon.ability.tags.length > 0 && (
+                            {safeAbility.tags && safeAbility.tags.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-2">
-                                    {pokemon.ability.tags.slice(0, 5).map((t) => (
+                                    {safeAbility.tags.slice(0, 5).map((t: string) => (
                                         <span key={t} className="text-[6px] text-cyan-300/90 uppercase tracking-[0.2em]">#{t}</span>
                                     ))}
                                 </div>
@@ -244,11 +249,11 @@ export const PokemonSummary: React.FC<{
                         </Panel>
 
                         <Panel title="Nature" accent="#f472b6">
-                            <div className="text-sm uppercase font-black tracking-wide">{pokemon.nature.name}</div>
-                            {pokemon.nature.increased ? (
+                            <div className="text-sm uppercase font-black tracking-wide">{safeNature.name}</div>
+                            {safeNature.increased ? (
                                 <div className="flex items-center justify-between gap-2 text-[8px] uppercase tracking-widest mt-2">
-                                    <span className="text-emerald-300">▲ {pokemon.nature.increased.replace('-', ' ')}</span>
-                                    <span className="text-rose-300">▼ {pokemon.nature.decreased?.replace('-', ' ')}</span>
+                                    <span className="text-emerald-300">▲ {safeNature.increased.replace('-', ' ')}</span>
+                                    <span className="text-rose-300">▼ {safeNature.decreased?.replace('-', ' ')}</span>
                                 </div>
                             ) : (
                                 <div className="text-[8px] text-slate-500 italic mt-2 uppercase tracking-widest">Neutral nature</div>
@@ -264,8 +269,8 @@ export const PokemonSummary: React.FC<{
                                     const base = pokemon.baseStats[s.key];
                                     const total = getBoostedStat(s.key, pokemon.stats[s.key]);
                                     const boosted = total > pokemon.stats[s.key];
-                                    const isIncreased = pokemon.nature.increased === s.key;
-                                    const isDecreased = pokemon.nature.decreased === s.key;
+                                    const isIncreased = safeNature.increased === s.key;
+                                    const isDecreased = safeNature.decreased === s.key;
                                     const fill = Math.min(100, (total / STAT_BAR_MAX) * 100);
                                     return (
                                         <div key={s.key} className="grid grid-cols-[36px_1fr_auto] items-center gap-2">

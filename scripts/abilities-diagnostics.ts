@@ -85,7 +85,12 @@ if (assignableMissing.length > 0) {
 }
 console.log('[abilities] Generic popup hook detected:', hasGenericAbilityPopupHook ? 'YES' : 'NO');
 
-if (missingRefs.length > 0 || assignableWeak.length > 0 || assignableMissing.length > 0 || !hasGenericAbilityPopupHook) {
+if (
+    missingRefs.length > 0 ||
+    assignableWeak.length > 0 ||
+    assignableMissing.length > 0 ||
+    !hasGenericAbilityPopupHook
+) {
     console.error('[abilities] FAIL');
     process.exit(1);
 }

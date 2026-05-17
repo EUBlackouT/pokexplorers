@@ -126,10 +126,11 @@ const queueEchoUnique = (
     entry: { incidentId: string; triggerAfterChunk: number; expiresAfterChunk?: number; priority: EchoPriority },
 ) => {
     const duplicate = queue.find((e) => e.incidentId === entry.incidentId && Math.abs((e.triggerAfterChunk || 0) - entry.triggerAfterChunk) <= 2);
-    if (duplicate) return;
+    if (duplicate) return false;
     queue.push(entry);
     queue.sort((a, b) => (a.triggerAfterChunk || 0) - (b.triggerAfterChunk || 0));
     if (queue.length > 9) queue.splice(9);
+    return true;
 };
 
 const classifyEchoPriority = (incidentId: string): EchoPriority => {
@@ -294,7 +295,7 @@ const runSimulation = (chunks: number, runSeed: number, laneStrategy: LaneStrate
                 if (!arcId) return;
                 const idx = state.activeRouteArcs.findIndex((a: any) => a.id === arcId);
                 if (mode === 'start' && idx === -1 && state.activeRouteArcs.length < 3) {
-                    state.activeRouteArcs.push({ id: arcId, title: arcId.replace(/-/g, ' '), stageIndex: 0, maxStages: chunkFloor < 15 ? 3 : 5, expiresAfterChunks: chunkFloor < 15 ? 6 : 9, age: 0 });
+                    state.activeRouteArcs.push({ id: arcId, title: arcId.replace(/-/g, ' '), stageIndex: 0, maxStages: chunkFloor < 15 ? 3 : 5, expiresAfterChunks: chunkFloor < 15 ? 10 : 14, age: 0 });
                     arcsStarted++;
                     return;
                 }
@@ -324,14 +325,14 @@ const runSimulation = (chunks: number, runSeed: number, laneStrategy: LaneStrate
                 const delay = Math.max(1, minDelay + Math.floor(hash(point.cx, point.cy, runSeed + incidentId.length) * Math.max(1, (maxDelay - minDelay + 1))));
                 const triggerAfterChunk = chunkFloor + delay;
                 const expiresAfterChunk = triggerAfterChunk + (p === 'high' ? 5 : p === 'medium' ? 4 : 2);
-                queueEchoUnique(state.queuedEchoes, { incidentId, triggerAfterChunk, expiresAfterChunk, priority: p });
-                echoByPriority[p].queued++;
+                const queued = queueEchoUnique(state.queuedEchoes, { incidentId, triggerAfterChunk, expiresAfterChunk, priority: p });
+                if (queued) echoByPriority[p].queued++;
             };
 
             queueEcho(outcome.queueEchoIncidentId, outcome.echoDelayChunks || 2, (outcome.echoDelayChunks || 2) + 3);
             const followUpChanceBase = incident.followUp?.echoChance || 0.55;
             const followUpChance = (incident.family === 'rival' || incident.family === 'faction') ? Math.min(0.55, followUpChanceBase) : followUpChanceBase;
-            if (incident.followUp?.possibleNextIncidentIds?.length && state.queuedEchoes.length < 4 && hash(point.cx, point.cy, runSeed + i + 99) < followUpChance) {
+            if (incident.followUp?.possibleNextIncidentIds?.length && state.queuedEchoes.length < 4 && hash(point.cx, point.cy, runSeed + i + 99) < Math.min(0.45, followUpChance)) {
                 const nextId = incident.followUp.possibleNextIncidentIds[Math.floor(hash(point.cx, point.cy, runSeed + 444) * incident.followUp.possibleNextIncidentIds.length)];
                 queueEcho(nextId, incident.followUp.minChunksLater || 2, incident.followUp.maxChunksLater || 5);
             }
@@ -365,7 +366,7 @@ const runSimulation = (chunks: number, runSeed: number, laneStrategy: LaneStrate
             meaningfulBeat = true;
         }
         state.activeRouteArcs = state.activeRouteArcs.filter((a: any) => a.age <= (a.expiresAfterChunks || 8));
-        const completable = state.activeRouteArcs.filter((a: any) => (a.stageIndex || 0) >= ((a.maxStages || 4) - 1) && (a.age || 0) >= 6 && hash(point.cx, point.cy, runSeed + 717) < 0.12);
+        const completable = state.activeRouteArcs.filter((a: any) => (a.stageIndex || 0) >= ((a.maxStages || 4) - 1) && (a.age || 0) >= 7 && hash(point.cx, point.cy, runSeed + 717) < 0.12);
         for (const arc of completable) {
             arcsCompleted++;
             state.completedRouteArcs.push(arc.id);
@@ -473,6 +474,8 @@ const averageRuns = (runs: ReturnType<typeof runSimulation>[]) => {
 };
 
 const printDiagnostic = (avg: any, chunks: number, runs: number, laneStrategy: LaneStrategy) => {
+    const chunksSeen = Math.max(1, avg.chunksSeen || chunks);
+    const per100 = (value: number): number => (value / chunksSeen) * 100;
     console.log('Overworld Cadence Diagnostics');
     console.log('-----------------------------');
     console.log(`[route-walk] runs=${runs} chunks=${chunks} strategy=${laneStrategy}`);
@@ -490,19 +493,20 @@ const printDiagnostic = (avg: any, chunks: number, runs: number, laneStrategy: L
         console.log(summarizeRange(fam, pct, min, max));
     }
     console.log('Route Arcs:');
-    console.log(summarizeRange('starts /100', avg.arcsStarted, scalarTargets.arcStarts[0], scalarTargets.arcStarts[1], ''));
-    console.log(summarizeRange('completions /100', avg.arcsCompleted, scalarTargets.arcCompletions[0], scalarTargets.arcCompletions[1], ''));
-    console.log(summarizeRange('failures /100', avg.arcsFailed, scalarTargets.arcFailures[0], scalarTargets.arcFailures[1], ''));
+    console.log(summarizeRange('starts /100', per100(avg.arcsStarted), scalarTargets.arcStarts[0], scalarTargets.arcStarts[1], ''));
+    console.log(summarizeRange('completions /100', per100(avg.arcsCompleted), scalarTargets.arcCompletions[0], scalarTargets.arcCompletions[1], ''));
+    console.log(summarizeRange('failures /100', per100(avg.arcsFailed), scalarTargets.arcFailures[0], scalarTargets.arcFailures[1], ''));
     console.log(summarizeRange('unresolved at end', avg.unresolvedArcs, scalarTargets.unresolvedArcs[0], scalarTargets.unresolvedArcs[1], ''));
     console.log('Echoes:');
-    console.log(summarizeRange('queued /100', avg.queuedEchoes, scalarTargets.queuedEchoes[0], scalarTargets.queuedEchoes[1], ''));
-    console.log(summarizeRange('triggered /100', avg.triggeredEchoes, scalarTargets.triggeredEchoes[0], scalarTargets.triggeredEchoes[1], ''));
-    console.log(summarizeRange('expired /100', avg.expiredEchoes, scalarTargets.expiredEchoes[0], scalarTargets.expiredEchoes[1], ''));
+    console.log(summarizeRange('queued /100', per100(avg.queuedEchoes), scalarTargets.queuedEchoes[0], scalarTargets.queuedEchoes[1], ''));
+    console.log(summarizeRange('triggered /100', per100(avg.triggeredEchoes), scalarTargets.triggeredEchoes[0], scalarTargets.triggeredEchoes[1], ''));
+    console.log(summarizeRange('expired /100', per100(avg.expiredEchoes), scalarTargets.expiredEchoes[0], scalarTargets.expiredEchoes[1], ''));
     console.log(`[route-walk] echoPriority high=${avg.echoByPriority.high.triggered.toFixed(1)} medium=${avg.echoByPriority.medium.triggered.toFixed(1)} low=${avg.echoByPriority.low.triggered.toFixed(1)}`);
     console.log('Cadence:');
-    console.log(summarizeRange('setpieces /100', avg.setpieces, scalarTargets.setpieces[0], scalarTargets.setpieces[1], ''));
+    console.log(summarizeRange('setpieces /100', per100(avg.setpieces), scalarTargets.setpieces[0], scalarTargets.setpieces[1], ''));
     console.log(`${scoreLabel(avg.setpieceBackToBack < 0.5, avg.setpieceBackToBack > 1)} setpiece back-to-back avg=${avg.setpieceBackToBack.toFixed(2)}`);
-    console.log(`${scoreLabel(avg.breathers >= 13 && avg.breathers <= 25, avg.breathers < 10)} breathers /100=${avg.breathers.toFixed(1)}`);
+    const breathersPer100 = per100(avg.breathers);
+    console.log(`${scoreLabel(breathersPer100 >= 13 && breathersPer100 <= 25, breathersPer100 < 10)} breathers /100=${breathersPer100.toFixed(1)}`);
     console.log(`${scoreLabel(avg.avgChunksBetweenMajorEvents >= 2 && avg.avgChunksBetweenMajorEvents <= 5, avg.avgChunksBetweenMajorEvents > 6)} avg chunks between major events=${avg.avgChunksBetweenMajorEvents.toFixed(2)}`);
     console.log(`${scoreLabel(avg.longestDeadStretch <= 3, avg.longestDeadStretch > 4)} longest dead stretch=${avg.longestDeadStretch.toFixed(2)}`);
     console.log(`${scoreLabel(avg.repeatedWarnings <= 4, avg.repeatedWarnings > 8)} repetition warnings=${avg.repeatedWarnings.toFixed(2)}`);
@@ -510,9 +514,12 @@ const printDiagnostic = (avg: any, chunks: number, runs: number, laneStrategy: L
     console.log(`${scoreLabel(avg.breatherSpacingWarnings < 1, avg.breatherSpacingWarnings > 2)} breather spacing warnings=${avg.breatherSpacingWarnings.toFixed(2)}`);
     console.log(`${scoreLabel(avg.overloadWarnings <= 2, avg.overloadWarnings > 5)} overload warnings=${avg.overloadWarnings.toFixed(2)}`);
     console.log('Support Systems:');
-    console.log(`${scoreLabel(avg.companionRate >= 1, avg.companionRate < 0.2)} companion moments /100=${avg.companionRate.toFixed(1)}`);
-    console.log(`${scoreLabel(avg.contractRate >= 0.3, false)} contract moments /100=${avg.contractRate.toFixed(1)}`);
-    console.log(`${scoreLabel(avg.ownershipShifts >= 0.4, false)} ownership shifts /100=${avg.ownershipShifts.toFixed(1)}`);
+    const companionPer100 = per100(avg.companionRate);
+    const contractPer100 = per100(avg.contractRate);
+    const ownershipPer100 = per100(avg.ownershipShifts);
+    console.log(`${scoreLabel(companionPer100 >= 1, companionPer100 < 0.2)} companion moments /100=${companionPer100.toFixed(1)}`);
+    console.log(`${scoreLabel(contractPer100 >= 0.3, false)} contract moments /100=${contractPer100.toFixed(1)}`);
+    console.log(`${scoreLabel(ownershipPer100 >= 0.4, false)} ownership shifts /100=${ownershipPer100.toFixed(1)}`);
 };
 
 const laneComparison = (chunks: number, seed: number, forcedBiome?: string) => {

@@ -5,6 +5,7 @@ import { ITEMS } from '../../services/itemData';
 import { TYPE_COLORS } from '../../services/pokeService';
 import { PokemonSummary } from './PokemonSummary';
 import { MoveRelearner } from './MoveRelearner';
+import { SilentErrorBoundary } from '../ui/SilentErrorBoundary';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { getPartyFloor, getPlayerLevelCap } from '../../utils/progression';
 import { getBgmVolume, getSfxVolume, getMuted, setBgmVolume, setSfxVolume, setMuted } from '../../services/soundService';
@@ -125,13 +126,15 @@ export const PauseMenu: React.FC<{
 
             {/* Sub-screens stay above */}
             {selectedMon && (
-                <PokemonSummary
-                    pokemon={selectedMon}
-                    inventory={state.inventory}
-                    upgrades={state.meta.upgrades}
-                    onGiveItem={(itemId) => onGiveItem(selectedMon, itemId)}
-                    onClose={() => setSelectedMon(null)}
-                />
+                <SilentErrorBoundary tag="PausePokemonSummary" fallback={null}>
+                    <PokemonSummary
+                        pokemon={selectedMon}
+                        inventory={state.inventory}
+                        upgrades={state.meta.upgrades}
+                        onGiveItem={(itemId) => onGiveItem(selectedMon, itemId)}
+                        onClose={() => setSelectedMon(null)}
+                    />
+                </SilentErrorBoundary>
             )}
             {showRelearner && (
                 <MoveRelearner

@@ -24,6 +24,7 @@ import {
     TYPE_COLORS,
     getEffectiveDefensiveTypes,
     getIncidentBattleSpecies,
+    isContactMove,
 } from './services/pokeService';
 import { playSound, playCry, playMoveSfx, playEffectivenessSfx, playFaintSfx, playLevelUpSfx, playBGM, stopBGM, BGM_TRACKS, transitionFromBattleMusic, unlockAudio, getAudioStatus, clearAudioFails, prefetchMoveSfx, type BattleMusicExitOutcome } from './services/soundService';
 import { MAPS, generateRiftMap, generateChunk, generateCaveMap, generatePuzzleMap, CHUNK_SIZE, WORLD_MAX_DIST, getNextGymTarget, compassDirectionName, getGrassAura, getChunkOutbreak, formatRouteMemory } from './services/mapData';
@@ -110,6 +111,8 @@ import {
 import { TERA_TYPES, MEGA_ELIGIBLE, MEGA_ATK_MULT, MEGA_DEF_MULT, Z_DAMAGE_MULT } from './data/riftForms';
 
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+const toFiniteInt = (value: unknown, fallback = 0): number =>
+    Number.isFinite(value as number) ? Math.floor(value as number) : fallback;
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const BATTLE_LOG_TAIL = 60;
@@ -250,9 +253,18 @@ const getTargetingModeForSelection = (move?: PokemonMove, selectedItem?: string)
     const normalizedName = (move.name || '').toLowerCase().replace(/[\s_-]+/g, '');
     if (ALLY_OR_ENEMY_MOVE_NAMES.has(normalizedName)) return 'ally-or-enemy';
     const t = normalizeTargetToken(move.target);
+    if (t === 'selectedpokemon' || t === 'adjacentpokemon') return 'ally-or-enemy';
     if (t === 'user' || t === 'self') return 'self';
     if (t === 'bothfoes' || t === 'allopponents') return 'all-opponents';
-    if (t === 'ally' || t === 'selectedally' || t === 'adjacentally' || t === 'userorally' || t === 'allyoruser') return 'ally';
+    if (
+        t === 'ally' ||
+        t === 'selectedally' ||
+        t === 'adjacentally' ||
+        t === 'userorally' ||
+        t === 'allyoruser' ||
+        t === 'adjacentallyorself' ||
+        t === 'adjacentallyoruser'
+    ) return 'ally';
     if (t === 'allallies' || t === 'userandallies') return 'none';
     if (
         t === 'field' ||
@@ -551,6 +563,42 @@ export default function App() {
       if (Array.isArray(next)) { setDialogueRaw({ lines: next }); return; }
       setDialogueRaw(next);
   }, []);
+
+  // Save/gameplay safety net: avoid persistent NaN values propagating through
+  // HUD/economy/score after malformed save imports or edge-case reward math.
+  useEffect(() => {
+      const money = toFiniteInt(playerState.money, 0);
+      const lifetime = playerState.lifetime ?? {} as any;
+      const repairedLifetime = {
+          ...lifetime,
+          shiniesCaught: toFiniteInt(lifetime.shiniesCaught, 0),
+          trainersDefeated: toFiniteInt(lifetime.trainersDefeated, 0),
+          biggestStreak: toFiniteInt(lifetime.biggestStreak, 0),
+          currentStreak: toFiniteInt(lifetime.currentStreak, 0),
+          totalMoneyEarned: toFiniteInt(lifetime.totalMoneyEarned, 0),
+          graveyardsVisited: toFiniteInt(lifetime.graveyardsVisited, 0),
+      };
+      const needsRepair =
+          !Number.isFinite(playerState.money) ||
+          !Number.isFinite(lifetime.shiniesCaught) ||
+          !Number.isFinite(lifetime.trainersDefeated) ||
+          !Number.isFinite(lifetime.biggestStreak) ||
+          !Number.isFinite(lifetime.currentStreak) ||
+          !Number.isFinite(lifetime.totalMoneyEarned) ||
+          !Number.isFinite(lifetime.graveyardsVisited);
+      if (!needsRepair) return;
+      setPlayerState(prev => ({
+          ...prev,
+          money,
+          lifetime: {
+              ...(prev.lifetime || {}),
+              ...repairedLifetime,
+          },
+      }));
+      if (import.meta.env?.DEV) {
+          console.warn('[state-repair] Detected non-finite player state metrics, applied numeric fallback repair.');
+      }
+  }, [playerState.money, playerState.lifetime]);
   // Back-compat alias so the rest of the file's many `dialogue && ...`
   // null-checks keep reading naturally.
   const dialogue = dialogueRaw;
@@ -1602,11 +1650,14 @@ export default function App() {
   const isBagMode = battleState.ui.selectionMode === 'ITEM';
   const isSwitchMode = battleState.ui.selectionMode === 'SWITCH';
   
-  const isTrapped = activePlayer && activePlayer.ability.name !== 'PhaseStep' && (
+  const isTrapped = activePlayer && activePlayer.ability.name !== 'PhaseStep' && activePlayer.ability.name !== 'RunAway' && (
       (activePlayer.isTrapped && activePlayer.isTrapped > 0) ||
       battleState.enemyTeam.some(e => {
           if (e.isFainted) return false;
           if (e.ability.name === 'MagneticField' && activePlayer.types.map(t => t.toLowerCase()).includes('steel')) return true;
+          if (e.ability.name === 'MagnetPull' && activePlayer.types.map(t => t.toLowerCase()).includes('steel')) return true;
+          if (e.ability.name === 'ShadowTag') return true;
+          if (e.ability.name === 'ArenaTrap' && !activePlayer.types.map(t => t.toLowerCase()).includes('flying') && activePlayer.ability.name !== 'Levitate') return true;
           if (e.ability.name === 'ShadowTagger' && activePlayer.currentHp < e.currentHp) return true;
           return false;
       })
@@ -1622,6 +1673,14 @@ export default function App() {
       battleState.ui.selectedMove as PokemonMove | undefined,
       battleState.ui.selectedItem,
   );
+  const weatherSuppressed = React.useMemo(
+      () =>
+          [...battleState.playerTeam.slice(0, 2), ...battleState.enemyTeam.slice(0, 2)].some(
+              mon => mon && !mon.isFainted && (mon.ability.name === 'AirLock' || mon.ability.name === 'CloudNine'),
+          ),
+      [battleState.playerTeam, battleState.enemyTeam],
+  );
+  const effectiveBattleWeather: WeatherType = weatherSuppressed ? 'none' : battleState.weather;
   const targetOptions: Array<{ side: ActionTargetSide; index: number; label: string }> = React.useMemo(() => {
       if (battleState.ui.selectionMode !== 'TARGET') return [];
       const enemyActive = battleState.enemyTeam
@@ -1703,11 +1762,24 @@ export default function App() {
 
           if (actor.status === 'paralysis') speed *= 0.5;
           if (actor.ability.name === 'FeverRush' && actor.status === 'burn') speed *= 2;
+          if (actor.ability.name === 'QuickFeet' && actor.status) speed *= (actor.status === 'paralysis' ? 3 : 1.5);
+          if (actor.ability.name === 'SwiftSwim' && effectiveBattleWeather === 'rain') speed *= 2;
+          if (actor.ability.name === 'Chlorophyll' && effectiveBattleWeather === 'sun') speed *= 2;
+          if (actor.ability.name === 'SandRush' && effectiveBattleWeather === 'sand') speed *= 2;
+          if (actor.ability.name === 'SlushRush' && (effectiveBattleWeather === 'hail' || effectiveBattleWeather === 'snow')) speed *= 2;
+          if (actor.ability.name === 'Unburden' && !actor.heldItem) speed *= 2;
+          if (actor.ability.name === 'SlowStart' && (actor.turnCount || 0) <= 5) speed *= 0.5;
           if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
           if (actor.heldItem?.id === 'iron-ball') speed *= 0.5;
           if (actor.heldItem?.id === 'lagging-tail') speed *= 0.1;
 
-          const priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
+          let priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
+          const isHealingMove = !!(move?.meta?.healing && move.meta.healing > 0);
+          if (actor.ability.name === 'Prankster' && move?.damage_class === 'status') priority += 1;
+          if (actor.ability.name === 'GaleWings' && move?.type?.toLowerCase() === 'flying' && actor.currentHp === actor.maxHp) priority += 1;
+          if (actor.ability.name === 'Triage' && isHealingMove) priority += 3;
+          if (actor.ability.name === 'MyceliumMight' && move?.damage_class === 'status') priority -= 0.2;
+          if (actor.ability.name === 'Stall') priority -= 0.1;
           if (actor.ability.name === 'AnchorSync' && isFusion && !actor.usedAnchorSync) speed *= 0.85;
           
           const action = { actorIndex: currentActorIndex, targetIndex, targetSide, move, item, isPlayer: true, isFusion, speed, priority, switchIndex };
@@ -1776,8 +1848,27 @@ export default function App() {
       }
 
       if (switchIndex !== undefined) {
+          if (actor.ability.name === 'RunAway') {
+              // Run Away overrides trapping checks.
+          } else {
           if (actor.trappedTurns && actor.trappedTurns > 0) {
               setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE' }, logs: [...prev.logs, `${actor.name} is trapped and cannot switch!`] }));
+              return;
+          }
+          const actorTypesLower = actor.types.map(t => t.toLowerCase());
+          const opponentWithArenaTrap = battleState.enemyTeam.find(mon => mon && !mon.isFainted && mon.ability.name === 'ArenaTrap' && !actorTypesLower.includes('flying') && actor.ability.name !== 'Levitate');
+          if (opponentWithArenaTrap) {
+              setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE' }, logs: [...prev.logs, `${actor.name} is trapped by ${opponentWithArenaTrap.name}'s Arena Trap!`] }));
+              return;
+          }
+          const opponentWithShadowTag = battleState.enemyTeam.find(mon => mon && !mon.isFainted && mon.ability.name === 'ShadowTag');
+          if (opponentWithShadowTag) {
+              setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE' }, logs: [...prev.logs, `${actor.name} is trapped by ${opponentWithShadowTag.name}'s Shadow Tag!`] }));
+              return;
+          }
+          const opponentWithMagnetPull = battleState.enemyTeam.find(mon => mon && !mon.isFainted && mon.ability.name === 'MagnetPull' && actorTypesLower.includes('steel'));
+          if (opponentWithMagnetPull) {
+              setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE' }, logs: [...prev.logs, `${actor.name} is trapped by ${opponentWithMagnetPull.name}'s Magnet Pull!`] }));
               return;
           }
           // Shadow Tagger Ability
@@ -1785,6 +1876,7 @@ export default function App() {
           if (opponentWithShadowTagger) {
               setBattleState(prev => ({ ...prev, ui: { ...prev.ui, selectionMode: 'MOVE' }, logs: [...prev.logs, `${actor.name} is trapped by ${opponentWithShadowTagger.name}'s Shadow Tagger!`] }));
               return;
+          }
           }
       }
 
@@ -1808,6 +1900,13 @@ export default function App() {
       let speed = (actor?.stats.speed || 0) * (1 + swift_level(playerState.meta) * 0.05);
       if (actor.status === 'paralysis') speed *= 0.5;
       if (actor.ability.name === 'FeverRush' && actor.status === 'burn') speed *= 2;
+      if (actor.ability.name === 'QuickFeet' && actor.status) speed *= (actor.status === 'paralysis' ? 3 : 1.5);
+      if (actor.ability.name === 'SwiftSwim' && effectiveBattleWeather === 'rain') speed *= 2;
+      if (actor.ability.name === 'Chlorophyll' && effectiveBattleWeather === 'sun') speed *= 2;
+      if (actor.ability.name === 'SandRush' && effectiveBattleWeather === 'sand') speed *= 2;
+      if (actor.ability.name === 'SlushRush' && (effectiveBattleWeather === 'hail' || effectiveBattleWeather === 'snow')) speed *= 2;
+      if (actor.ability.name === 'Unburden' && !actor.heldItem) speed *= 2;
+      if (actor.ability.name === 'SlowStart' && (actor.turnCount || 0) <= 5) speed *= 0.5;
       if (actor.heldItem?.id === 'choice-scarf') speed *= 1.5;
       if (actor.heldItem?.id === 'lagging-tail') speed *= 0.5;
       if (actor.heldItem?.id === 'iron-ball') speed *= 0.5;
@@ -1828,6 +1927,12 @@ export default function App() {
       }
 
       let priority = (item || switchIndex !== undefined) ? 6 : (move?.priority || 0);
+      const isHealingMove = !!(move?.meta?.healing && move.meta.healing > 0);
+      if (actor.ability.name === 'Prankster' && move?.damage_class === 'status') priority += 1;
+      if (actor.ability.name === 'GaleWings' && move?.type?.toLowerCase() === 'flying' && actor.currentHp === actor.maxHp) priority += 1;
+      if (actor.ability.name === 'Triage' && isHealingMove) priority += 3;
+      if (actor.ability.name === 'MyceliumMight' && move?.damage_class === 'status') priority -= 0.2;
+      if (actor.ability.name === 'Stall') priority -= 0.1;
       if (actor.ability.name === 'AnchorSync' && isFusionMove && !actor.usedAnchorSync) speed *= 0.85;
       
       // Thunderous Step: Electric moves +1 priority at full HP
@@ -2389,8 +2494,10 @@ export default function App() {
                   const questLine = npc.dialogue.find(l => l.startsWith('__QUEST__'));
                   if (!questLine) { setDialogue(npc.dialogue); return; }
                   const [, , itemId, countStr, cashStr] = questLine.split('__');
-                  const count = parseInt(countStr, 10);
-                  const cash = parseInt(cashStr, 10);
+                  const parsedCount = parseInt(countStr, 10);
+                  const parsedCash = parseInt(cashStr, 10);
+                  const count = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 1;
+                  const cash = Number.isFinite(parsedCash) && parsedCash >= 0 ? parsedCash : 0;
                   const doneFlag = `quest_done_${npc.id}`;
                   const acceptFlag = `quest_accept_${npc.id}`;
                   const niceItem = itemId.replace(/-/g, ' ');
@@ -4089,9 +4196,12 @@ export default function App() {
       const isPlayer = battleState.playerTeam.some(mon => mon && mon.id === p.id);
       const team = isPlayer ? battleState.playerTeam : battleState.enemyTeam;
       const ally = team.find(mon => mon && !mon.isFainted && mon.id !== p.id);
+      const opposingActives = (isPlayer ? battleState.enemyTeam : battleState.playerTeam).slice(0, 2);
+      const berrySuppressed = opposingActives.some(mon => mon && !mon.isFainted && mon.ability.name === 'Unnerve');
       const side: 'player' | 'enemy' = isPlayer ? 'player' : 'enemy';
       const slot = Math.max(0, team.findIndex(mon => mon?.id === p.id)) as 0 | 1;
       const allySlot = ally ? (Math.max(0, team.findIndex(mon => mon?.id === ally.id)) as 0 | 1) : 0;
+      const initialItemId = p.heldItem?.id;
 
       // --- ShellCurl: first time below 50% HP each battle, +1 Def / +1 SpD. ---
       // Sits at the top of checkBerries because it shares the "crossed 50%"
@@ -4126,8 +4236,8 @@ export default function App() {
           popupAbility(side, holderSlot, 'Buddy Berry');
       };
 
-      if (p.heldItem?.id === 'sitrus-berry' && p.currentHp <= p.maxHp / 2) {
-          const heal = Math.floor(p.maxHp / 4);
+      if (p.heldItem?.id === 'sitrus-berry' && p.currentHp <= p.maxHp / 2 && !berrySuppressed) {
+          const heal = Math.floor(p.maxHp / (p.ability.name === 'Ripen' ? 2 : 4));
           p.currentHp = Math.min(p.maxHp, p.currentHp + heal);
           logs.push(`${p.name} consumed its Sitrus Berry and restored HP!`);
           popupItem(side, slot, 'Sitrus Berry');
@@ -4150,43 +4260,43 @@ export default function App() {
           fireBuddyBerry(p);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'oran-berry' && p.currentHp <= p.maxHp / 2) {
-          const heal = 10;
+      if (p.heldItem?.id === 'oran-berry' && p.currentHp <= p.maxHp / 2 && !berrySuppressed) {
+          const heal = p.ability.name === 'Ripen' ? 20 : 10;
           p.currentHp = Math.min(p.maxHp, p.currentHp + heal);
           logs.push(`${p.name} consumed its Oran Berry and restored HP!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'pecha-berry' && (p.status === 'poison' || p.status === 'toxic')) {
+      if (p.heldItem?.id === 'pecha-berry' && (p.status === 'poison' || p.status === 'toxic') && !berrySuppressed) {
           p.status = undefined;
           logs.push(`${p.name} consumed its Pecha Berry and cured its poison!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'cheri-berry' && p.status === 'paralysis') {
+      if (p.heldItem?.id === 'cheri-berry' && p.status === 'paralysis' && !berrySuppressed) {
           p.status = undefined;
           logs.push(`${p.name} consumed its Cheri Berry and cured its paralysis!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'chesto-berry' && p.status === 'sleep') {
+      if (p.heldItem?.id === 'chesto-berry' && p.status === 'sleep' && !berrySuppressed) {
           p.status = undefined;
           logs.push(`${p.name} consumed its Chesto Berry and woke up!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'rawst-berry' && p.status === 'burn') {
+      if (p.heldItem?.id === 'rawst-berry' && p.status === 'burn' && !berrySuppressed) {
           p.status = undefined;
           logs.push(`${p.name} consumed its Rawst Berry and cured its burn!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'aspear-berry' && p.status === 'freeze') {
+      if (p.heldItem?.id === 'aspear-berry' && p.status === 'freeze' && !berrySuppressed) {
           p.status = undefined;
           logs.push(`${p.name} consumed its Aspear Berry and defrosted!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'persim-berry' && p.confusionTurns && p.confusionTurns > 0) {
+      if (p.heldItem?.id === 'persim-berry' && p.confusionTurns && p.confusionTurns > 0 && !berrySuppressed) {
           p.confusionTurns = 0;
           logs.push(`${p.name} consumed its Persim Berry and cured its confusion!`);
           p.heldItem = undefined;
       }
-      if (p.heldItem?.id === 'lum-berry' && (p.status || (p.confusionTurns && p.confusionTurns > 0))) {
+      if (p.heldItem?.id === 'lum-berry' && (p.status || (p.confusionTurns && p.confusionTurns > 0)) && !berrySuppressed) {
           const oldStatus = p.status || 'confusion';
           p.status = undefined;
           p.confusionTurns = 0;
@@ -4211,6 +4321,21 @@ export default function App() {
 
           fireBuddyBerry(p);
           p.heldItem = undefined;
+      }
+      if (initialItemId?.includes('berry') && !p.heldItem) {
+          if (p.ability.name === 'Gluttony') {
+              logs.push(`${p.name}'s Gluttony kicked in!`);
+          }
+          if (p.ability.name === 'CheekPouch') {
+              const heal = Math.floor(p.maxHp / 3);
+              p.currentHp = Math.min(p.maxHp, p.currentHp + heal);
+              logs.push(`${p.name}'s Cheek Pouch restored additional HP!`);
+          }
+          if (ally && ally.ability.name === 'Symbiosis' && ally.heldItem && !p.heldItem) {
+              p.heldItem = { ...ally.heldItem };
+              ally.heldItem = undefined;
+              logs.push(`${ally.name}'s Symbiosis passed an item to ${p.name}!`);
+          }
       }
   };
 
@@ -4353,6 +4478,13 @@ export default function App() {
 
        if (mon.status === 'paralysis') speed *= 0.5;
        if (mon.ability.name === 'FeverRush' && mon.status === 'burn') speed *= 2;
+       if (mon.ability.name === 'QuickFeet' && mon.status) speed *= (mon.status === 'paralysis' ? 3 : 1.5);
+       if (mon.ability.name === 'SwiftSwim' && effectiveBattleWeather === 'rain') speed *= 2;
+       if (mon.ability.name === 'Chlorophyll' && effectiveBattleWeather === 'sun') speed *= 2;
+       if (mon.ability.name === 'SandRush' && effectiveBattleWeather === 'sand') speed *= 2;
+       if (mon.ability.name === 'SlushRush' && (effectiveBattleWeather === 'hail' || effectiveBattleWeather === 'snow')) speed *= 2;
+       if (mon.ability.name === 'Unburden' && !mon.heldItem) speed *= 2;
+       if (mon.ability.name === 'SlowStart' && (mon.turnCount || 0) <= 5) speed *= 0.5;
        if (mon.heldItem?.id === 'choice-scarf') speed *= 1.5;
        if (mon.heldItem?.id === 'lagging-tail') speed *= 0.5;
        if (mon.heldItem?.id === 'iron-ball') speed *= 0.5;
@@ -4377,6 +4509,12 @@ export default function App() {
        }
 
        let priority = move.priority || 0;
+       const isHealingMove = !!(move?.meta?.healing && move.meta.healing > 0);
+       if (mon.ability.name === 'Prankster' && move?.damage_class === 'status') priority += 1;
+       if (mon.ability.name === 'GaleWings' && move?.type?.toLowerCase() === 'flying' && mon.currentHp === mon.maxHp) priority += 1;
+       if (mon.ability.name === 'Triage' && isHealingMove) priority += 3;
+       if (mon.ability.name === 'MyceliumMight' && move?.damage_class === 'status') priority -= 0.2;
+       if (mon.ability.name === 'Stall') priority -= 0.1;
        
        // Thunderous Step Ability
        if (mon.ability.name === 'ThunderousStep' && mon.currentHp === mon.maxHp && move.type === 'Electric') {
@@ -4743,11 +4881,20 @@ export default function App() {
             if (actor.isFlinching) {
                 actor.isFlinching = false;
                 tempLogs.push(`${actor.name} flinched and couldn't move!`);
+                if (actor.ability.name === 'Steadfast' && actor.statStages) {
+                    actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
+                    tempLogs.push(`${actor.name}'s Steadfast raised its Speed!`);
+                }
                 if (actor.ability.name === 'MeterShield' && !actor.usedMeterShieldThisTurn) {
                     actor.usedMeterShieldThisTurn = true;
                     setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
                     tempLogs.push(`${actor.name}'s Meter Shield converted the setback into Link energy!`);
                 }
+                await syncState(800);
+                continue;
+            }
+            if (actor.ability.name === 'Truant' && ((actor.turnCount || 0) % 2 === 1)) {
+                tempLogs.push(`${actor.name} is loafing around due to Truant!`);
                 await syncState(800);
                 continue;
             }
@@ -4772,7 +4919,7 @@ export default function App() {
                 tempLogs.push(`${oldMon.name}, come back!`);
                 
                 // Trapped check
-                if (oldMon.isTrapped && oldMon.isTrapped > 0 && oldMon.ability.name !== 'PhaseStep') {
+                if (oldMon.isTrapped && oldMon.isTrapped > 0 && oldMon.ability.name !== 'PhaseStep' && oldMon.ability.name !== 'RunAway') {
                     tempLogs.push(`${oldMon.name} is trapped and cannot switch!`);
                     await syncState(800);
                     continue;
@@ -4783,6 +4930,15 @@ export default function App() {
                     const heal = Math.floor(oldMon.maxHp / 3);
                     oldMon.currentHp = Math.min(oldMon.maxHp, oldMon.currentHp + heal);
                     tempLogs.push(`${oldMon.name}'s Regenerator restored its HP!`);
+                }
+                if (oldMon.ability.name === 'NaturalCure' && oldMon.status) {
+                    oldMon.status = undefined;
+                    oldMon.statusTurns = undefined;
+                    oldMon.toxicTurns = 0;
+                    tempLogs.push(`${oldMon.name}'s Natural Cure removed its status!`);
+                }
+                if (oldMon.ability.name === 'ZeroToHero') {
+                    (oldMon as any).zeroToHeroReady = true;
                 }
 
                 // Reset stats and turn-based effects when switching out (unless Baton Pass)
@@ -4971,6 +5127,14 @@ export default function App() {
                 if (p.ability?.name && ABILITY_LABELS[p.ability.name]) {
                     popupAbility(ownSide, ownSlot, ABILITY_LABELS[p.ability.name]);
                 }
+                if (p.ability.name === 'Trace') {
+                    const foes = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                    const traceTarget = foes.find(f => f && !f.isFainted && f.ability?.name && !['Trace', 'Multitype', 'RksSystem', 'StanceChange'].includes(f.ability.name));
+                    if (traceTarget && traceTarget.ability?.name) {
+                        p.ability = { ...traceTarget.ability };
+                        tempLogs.push(`${p.name}'s Trace copied ${traceTarget.name}'s ${traceTarget.ability.name}!`);
+                    }
+                }
                 // Weather abilities also get a weather plate.
                 if (p.ability?.name === 'Drought') popupWeather(ownSide, ownSlot, 'sun');
                 else if (p.ability?.name === 'Drizzle') popupWeather(ownSide, ownSlot, 'rain');
@@ -5129,6 +5293,29 @@ export default function App() {
                     const targets = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
                     targets.forEach(t => {
                         if (!t.isFainted && t.statStages) {
+                            const blocked =
+                                t.ability.name === 'ClearBody' ||
+                                t.ability.name === 'WhiteSmoke' ||
+                                t.ability.name === 'FullMetalBody' ||
+                                t.ability.name === 'HyperCutter' ||
+                                t.ability.name === 'MirrorArmor' ||
+                                t.ability.name === 'OwnTempo' ||
+                                t.ability.name === 'InnerFocus' ||
+                                t.ability.name === 'Oblivious' ||
+                                t.ability.name === 'Scrappy' ||
+                                t.ability.name === 'GuardDog';
+                            if (blocked) {
+                                tempLogs.push(`${t.name}'s ${t.ability.name} blocked Intimidate!`);
+                                if (t.ability.name === 'MirrorArmor') {
+                                    if (p.statStages) p.statStages.attack = Math.max(-6, (p.statStages.attack || 0) - 1);
+                                    tempLogs.push(`${t.name}'s Mirror Armor reflected Intimidate!`);
+                                }
+                                if (t.ability.name === 'GuardDog' && t.statStages) {
+                                    t.statStages.attack = Math.min(6, (t.statStages.attack || 0) + 1);
+                                    tempLogs.push(`${t.name}'s Guard Dog raised its Attack!`);
+                                }
+                                return;
+                            }
                             t.statStages.attack = Math.max(-6, (t.statStages.attack || 0) - 1);
                             tempLogs.push(`${p.name}'s Intimidate lowered ${t.name}'s Attack!`);
                             if (t.heldItem?.id === 'adrenaline-orb') {
@@ -5152,6 +5339,133 @@ export default function App() {
                         p.statStages.speed = Math.min(6, (p.statStages.speed || 0) + 1);
                         tempLogs.push(`${p.name}'s Tide Turner raised its Speed!`);
                     }
+                }
+                if (p.ability.name === 'IntrepidSword' && p.statStages) {
+                    p.statStages.attack = Math.min(6, (p.statStages.attack || 0) + 1);
+                    tempLogs.push(`${p.name}'s Intrepid Sword raised its Attack!`);
+                }
+                if (p.ability.name === 'DauntlessShield' && p.statStages) {
+                    p.statStages.defense = Math.min(6, (p.statStages.defense || 0) + 1);
+                    tempLogs.push(`${p.name}'s Dauntless Shield raised its Defense!`);
+                }
+                if (p.ability.name === 'ElectricSurge') {
+                    setBattleState(prev => ({ ...prev, terrain: 'electric', terrainTurns: 5 }));
+                    tempLogs.push(`${p.name}'s Electric Surge electrified the terrain!`);
+                }
+                if (p.ability.name === 'GrassySurge') {
+                    setBattleState(prev => ({ ...prev, terrain: 'grassy', terrainTurns: 5 }));
+                    tempLogs.push(`${p.name}'s Grassy Surge covered the field in grass!`);
+                }
+                if (p.ability.name === 'MistySurge') {
+                    setBattleState(prev => ({ ...prev, terrain: 'misty', terrainTurns: 5 }));
+                    tempLogs.push(`${p.name}'s Misty Surge shrouded the field in mist!`);
+                }
+                if (p.ability.name === 'PsychicSurge') {
+                    setBattleState(prev => ({ ...prev, terrain: 'psychic', terrainTurns: 5 }));
+                    tempLogs.push(`${p.name}'s Psychic Surge warped the terrain!`);
+                }
+                if (p.ability.name === 'Download' && p.statStages) {
+                    const foes = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                    const foeDef = foes.reduce((sum, f) => sum + (f && !f.isFainted ? f.stats.defense : 0), 0);
+                    const foeSpDef = foes.reduce((sum, f) => sum + (f && !f.isFainted ? f.stats['special-defense'] : 0), 0);
+                    if (foeSpDef <= foeDef) {
+                        p.statStages['special-attack'] = Math.min(6, (p.statStages['special-attack'] || 0) + 1);
+                        tempLogs.push(`${p.name}'s Download raised its Sp. Atk!`);
+                    } else {
+                        p.statStages.attack = Math.min(6, (p.statStages.attack || 0) + 1);
+                        tempLogs.push(`${p.name}'s Download raised its Attack!`);
+                    }
+                }
+                if (p.ability.name === 'Frisk') {
+                    const foes = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                    foes.forEach(f => {
+                        if (f && !f.isFainted && f.heldItem?.name) {
+                            tempLogs.push(`${p.name}'s Frisk identified ${f.name}'s ${f.heldItem.name}!`);
+                        }
+                    });
+                }
+                if (p.ability.name === 'Anticipation') {
+                    const foes = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                    const hasThreat = foes.some(f => f && !f.isFainted && f.moves.some(m => m.power && m.power > 100));
+                    if (hasThreat) tempLogs.push(`${p.name} shuddered with Anticipation!`);
+                }
+                if (p.ability.name === 'Illusion') {
+                    const backline = activeTeam.filter((m, idx) => idx > action.actorIndex && m && !m.isFainted);
+                    if (backline.length > 0) {
+                        (p as any).illusionName = backline[backline.length - 1].name;
+                        tempLogs.push(`${p.name} is cloaked by Illusion!`);
+                    }
+                }
+                if (p.ability.name === 'Costar') {
+                    const allyIdx = 1 - action.actorIndex;
+                    const ally = activeTeam[allyIdx];
+                    if (ally && !ally.isFainted && ally.statStages && p.statStages) {
+                        p.statStages = { ...ally.statStages };
+                        tempLogs.push(`${p.name}'s Costar copied ${ally.name}'s stat changes!`);
+                    }
+                }
+                if (p.ability.name === 'Commander') {
+                    const allyIdx = 1 - action.actorIndex;
+                    const ally = activeTeam[allyIdx];
+                    if (ally && !ally.isFainted && ally.statStages) {
+                        ally.statStages.attack = Math.min(6, (ally.statStages.attack || 0) + 1);
+                        ally.statStages.defense = Math.min(6, (ally.statStages.defense || 0) + 1);
+                        ally.statStages['special-attack'] = Math.min(6, (ally.statStages['special-attack'] || 0) + 1);
+                        ally.statStages['special-defense'] = Math.min(6, (ally.statStages['special-defense'] || 0) + 1);
+                        ally.statStages.speed = Math.min(6, (ally.statStages.speed || 0) + 1);
+                        tempLogs.push(`${p.name}'s Commander empowered ${ally.name}!`);
+                    }
+                }
+                if (p.ability.name === 'Forewarn') {
+                    const foes = isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                    const scary = foes
+                        .flatMap(f => (f && !f.isFainted ? f.moves : []))
+                        .filter(m => m.power)
+                        .sort((a, b) => (b.power || 0) - (a.power || 0))[0];
+                    if (scary) tempLogs.push(`${p.name}'s Forewarn identified ${scary.name}!`);
+                }
+                if (p.ability.name === 'ScreenCleaner') {
+                    setBattleState(prev => ({
+                        ...prev,
+                        reflectTurns: 0,
+                        lightScreenTurns: 0,
+                        auroraVeilTurns: 0,
+                        enemyReflectTurns: 0,
+                        enemyLightScreenTurns: 0,
+                        enemyAuroraVeilTurns: 0,
+                    }));
+                    tempLogs.push(`${p.name}'s Screen Cleaner removed all barriers!`);
+                }
+                if (p.ability.name === 'TeraShift' && !p.teraType && p.types[0]) {
+                    p.teraType = p.types[0];
+                    tempLogs.push(`${p.name}'s Tera Shift aligned its tera type to ${p.teraType}!`);
+                }
+                if (p.ability.name === 'OrichalcumPulse') {
+                    setBattleState(prev => ({ ...prev, weather: 'sun', weatherTurns: 5 }));
+                    tempLogs.push(`${p.name}'s Orichalcum Pulse intensified the sunlight!`);
+                }
+                if (p.ability.name === 'HadronEngine') {
+                    setBattleState(prev => ({ ...prev, terrain: 'electric', terrainTurns: 5 }));
+                    tempLogs.push(`${p.name}'s Hadron Engine electrified the terrain!`);
+                }
+                if (p.ability.name === 'Illuminate') {
+                    tempLogs.push(`${p.name}'s Illuminate sharpened ally accuracy!`);
+                }
+                if (p.ability.name === 'BallFetch') {
+                    tempLogs.push(`${p.name}'s Ball Fetch is ready to recover used balls after battle.`);
+                }
+                if (p.ability.name === 'HoneyGather') {
+                    tempLogs.push(`${p.name}'s Honey Gather may collect resources over time.`);
+                }
+                if (p.ability.name === 'Stalwart') {
+                    tempLogs.push(`${p.name}'s Stalwart keeps it focused on its intended target.`);
+                }
+                if (p.ability.name === 'ZeroToHero' && (p as any).zeroToHeroReady && p.statStages) {
+                    (p as any).zeroToHeroReady = false;
+                    p.statStages.attack = Math.min(6, (p.statStages.attack || 0) + 2);
+                    p.statStages['special-attack'] = Math.min(6, (p.statStages['special-attack'] || 0) + 2);
+                    p.statStages.speed = Math.min(6, (p.statStages.speed || 0) + 2);
+                    tempLogs.push(`${p.name} transformed through Zero to Hero!`);
                 }
                 if (p.ability.name === 'GloomWard') {
                     tempLogs.push(`${p.name}'s Gloom Ward protects it from confusion and sleep!`);
@@ -5233,6 +5547,10 @@ export default function App() {
 
             if (actor.isFlinching) {
                 tempLogs.push(`${actor.name} flinched and couldn't move!`);
+                if (actor.ability.name === 'Steadfast' && actor.statStages) {
+                    actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
+                    tempLogs.push(`${actor.name}'s Steadfast raised its Speed!`);
+                }
                 if (actor.ability.name === 'MeterShield' && !actor.usedMeterShieldThisTurn) {
                     actor.usedMeterShieldThisTurn = true;
                     setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
@@ -5255,7 +5573,10 @@ export default function App() {
                 await syncState(500);
                 actor.animationState = 'idle';
             }
-            if (actor.statusTurns) actor.statusTurns--;
+            if (actor.statusTurns) {
+                actor.statusTurns--;
+                if (actor.status === 'sleep' && actor.ability.name === 'EarlyBird' && actor.statusTurns > 0) actor.statusTurns--;
+            }
             if (actor.confusionTurns) actor.confusionTurns--;
 
             if (!statusCheck.canMove) {
@@ -5557,6 +5878,10 @@ export default function App() {
                         await syncState(500);
                     } else {
                         tempLogs.push(`Argh! ${target.name} broke free!`);
+                        if (actor.ability.name === 'BallFetch' && !actor.heldItem) {
+                            actor.heldItem = { id: 'poke-ball', name: 'Poke Ball', category: 'battle' } as any;
+                            tempLogs.push(`${actor.name}'s Ball Fetch picked up the used Poke Ball!`);
+                        }
                         await syncState(500);
                     }
                     continue;
@@ -5606,6 +5931,10 @@ export default function App() {
             // Flinch check
             if (actor.isFlinching) {
                 tempLogs.push(`${actor.name} flinched and couldn't move!`);
+                if (actor.ability.name === 'Steadfast' && actor.statStages) {
+                    actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
+                    tempLogs.push(`${actor.name}'s Steadfast raised its Speed!`);
+                }
                 if (actor.ability.name === 'MeterShield' && !actor.usedMeterShieldThisTurn) {
                     actor.usedMeterShieldThisTurn = true;
                     setBattleState(prev => ({ ...prev, [action.isPlayer ? 'comboMeter' : 'enemyComboMeter']: Math.min(100, (action.isPlayer ? prev.comboMeter : prev.enemyComboMeter) + 5) }));
@@ -5640,6 +5969,7 @@ export default function App() {
             if (action.move.type !== moveTypeLC) {
                 action.move.type = moveTypeLC;
             }
+            const moveMakesContact = isContactMove(action.move, actor);
 
             // Move Logic
             actor.lastMoveMissed = false;
@@ -5660,6 +5990,8 @@ export default function App() {
                     ally &&
                     !ally.isFainted &&
                     ally.ability.name === 'LivingShield' &&
+                    actor.ability.name !== 'PropellerTail' &&
+                    actor.ability.name !== 'Stalwart' &&
                     !String(action.move.target || '').includes('user')
                 ) {
                     resolvedTargetIndex = allyIdx;
@@ -5930,6 +6262,9 @@ export default function App() {
                 }
 
                 let numHits = (res.hits || 1);
+                if (actor.ability.name === 'SkillLink' && action.move.max_hits && action.move.max_hits > 1) {
+                    numHits = action.move.max_hits;
+                }
                 if (actor.ability.name === 'ThreeHitWonder') {
                     numHits = 3;
                 }
@@ -5977,7 +6312,7 @@ export default function App() {
                 }
 
                 // Contact Abilities
-                const makesContact = action.move.category === 'physical'; // Simplified contact check
+                const makesContact = moveMakesContact;
                 if (makesContact) {
                     // Heavy Stance Ability
                     if (target.ability.name === 'HeavyStance') {
@@ -6072,10 +6407,23 @@ export default function App() {
 
                 /** Who took the damaging hit last (handles Sacrificial Guard); faint logic runs outside the multihit loop. */
                 let lastKoDamageTarget: Pokemon = target;
+                let lastKoTargetHpBeforeHit = 0;
 
                 for (let h = 0; h < finalNumHits; h++) {
                     // Spread damage reduction
                     let finalDamage = res.damage;
+                    const sameSideAsActor =
+                        (action.isPlayer && (target === tempPTeam[0] || target === tempPTeam[1])) ||
+                        (!action.isPlayer && (target === tempETeam[0] || target === tempETeam[1]));
+                    if (finalDamage > 0 && target.ability.name === 'Telepathy' && sameSideAsActor && target.id !== actor.id) {
+                        finalDamage = 0;
+                        tempLogs.push(`${target.name}'s Telepathy avoided allied damage!`);
+                    }
+                    if (target.ability.name === 'WindRider' && action.move?.isWind) {
+                        finalDamage = 0;
+                        if (target.statStages) target.statStages.attack = Math.min(6, (target.statStages.attack || 0) + 1);
+                        tempLogs.push(`${target.name}'s Wind Rider made it immune and raised its Attack!`);
+                    }
                     if (actor.ability.name === 'EchoChamber' && action.move?.isSound && h === 1) {
                         finalDamage = Math.floor(finalDamage * 0.5);
                     }
@@ -6126,6 +6474,16 @@ export default function App() {
                         }
                         finalDamage = 0;
                     }
+                    if (finalDamage > 0 && target.ability.name === 'Disguise' && !(target as any).disguiseBroken) {
+                        (target as any).disguiseBroken = true;
+                        finalDamage = 0;
+                        tempLogs.push(`${target.name}'s Disguise absorbed the hit!`);
+                    }
+                    if (finalDamage > 0 && target.ability.name === 'IceFace' && action.move?.damage_class === 'physical' && !(target as any).iceFaceBroken) {
+                        (target as any).iceFaceBroken = true;
+                        finalDamage = 0;
+                        tempLogs.push(`${target.name}'s Ice Face blocked the physical hit!`);
+                    }
 
                     // Survival Logic (Focus Band, Sturdy, Focus Sash, Withstand)
                     if (finalDamage >= target.currentHp && target.currentHp > 0) {
@@ -6165,10 +6523,125 @@ export default function App() {
                         tempLogs.push(`${targetAlly.name}'s Sacrificial Guard took the hit for ${target.name}!`);
                     }
                     
+                    const hpBeforeHit = damageTarget.currentHp;
                     damageTarget.currentHp = Math.max(0, damageTarget.currentHp - finalDamage);
                     if (finalDamage > 0) damageTarget.tookDamageThisTurn = true;
                     lastKoDamageTarget = damageTarget;
+                    if (damageTarget.currentHp === 0 && hpBeforeHit > 0) {
+                        lastKoTargetHpBeforeHit = hpBeforeHit;
+                    }
                     totalDamage += finalDamage;
+
+                    // Reactive vanilla abilities after taking damage.
+                    if (finalDamage > 0 && !damageTarget.isFainted && damageTarget.statStages) {
+                        if (damageTarget.ability.name === 'GulpMissile' && (damageTarget as any).gulpMissileLoaded) {
+                            (damageTarget as any).gulpMissileLoaded = false;
+                            const spitDamage = Math.floor(actor.maxHp / 4);
+                            actor.currentHp = Math.max(0, actor.currentHp - spitDamage);
+                            if (!actor.status && Math.random() < 0.5) actor.status = 'paralysis';
+                            tempLogs.push(`${damageTarget.name}'s Gulp Missile struck back at ${actor.name}!`);
+                        }
+                        if (damageTarget.ability.name === 'ColorChange' && moveTypeLC) {
+                            damageTarget.types = [moveTypeLC];
+                            tempLogs.push(`${damageTarget.name}'s Color Change turned it into ${moveTypeLC} type!`);
+                        }
+                        if (res.isCritical && damageTarget.ability.name === 'AngerPoint') {
+                            damageTarget.statStages.attack = 6;
+                            tempLogs.push(`${damageTarget.name}'s Anger Point maxed its Attack!`);
+                        }
+                        if (damageTarget.ability.name === 'AngerShell' && damageTarget.currentHp <= Math.floor(damageTarget.maxHp / 2) && !(damageTarget as any).usedAngerShell) {
+                            (damageTarget as any).usedAngerShell = true;
+                            damageTarget.statStages.attack = Math.min(6, (damageTarget.statStages.attack || 0) + 1);
+                            damageTarget.statStages['special-attack'] = Math.min(6, (damageTarget.statStages['special-attack'] || 0) + 1);
+                            damageTarget.statStages.speed = Math.min(6, (damageTarget.statStages.speed || 0) + 1);
+                            damageTarget.statStages.defense = Math.max(-6, (damageTarget.statStages.defense || 0) - 1);
+                            damageTarget.statStages['special-defense'] = Math.max(-6, (damageTarget.statStages['special-defense'] || 0) - 1);
+                            tempLogs.push(`${damageTarget.name}'s Anger Shell sharply shifted its stats!`);
+                        }
+                        if (damageTarget.ability.name === 'Justified' && moveTypeLC === 'dark') {
+                            damageTarget.statStages.attack = Math.min(6, (damageTarget.statStages.attack || 0) + 1);
+                            tempLogs.push(`${damageTarget.name}'s Justified raised its Attack!`);
+                        }
+                        if (damageTarget.ability.name === 'Rattled' && ['dark', 'ghost', 'bug'].includes(moveTypeLC)) {
+                            damageTarget.statStages.speed = Math.min(6, (damageTarget.statStages.speed || 0) + 1);
+                            tempLogs.push(`${damageTarget.name}'s Rattled raised its Speed!`);
+                        }
+                        if (damageTarget.ability.name === 'WeakArmor' && action.move.damage_class === 'physical') {
+                            damageTarget.statStages.defense = Math.max(-6, (damageTarget.statStages.defense || 0) - 1);
+                            damageTarget.statStages.speed = Math.min(6, (damageTarget.statStages.speed || 0) + 2);
+                            tempLogs.push(`${damageTarget.name}'s Weak Armor lowered Defense and sharply raised Speed!`);
+                        }
+                        if (damageTarget.ability.name === 'Stamina') {
+                            damageTarget.statStages.defense = Math.min(6, (damageTarget.statStages.defense || 0) + 1);
+                            tempLogs.push(`${damageTarget.name}'s Stamina raised its Defense!`);
+                        }
+                        if (damageTarget.ability.name === 'CottonDown') {
+                            actor.statStages = actor.statStages || { attack: 0, defense: 0, 'special-attack': 0, 'special-defense': 0, speed: 0, accuracy: 0, evasion: 0 };
+                            actor.statStages.speed = Math.max(-6, (actor.statStages.speed || 0) - 1);
+                            tempLogs.push(`${damageTarget.name}'s Cotton Down lowered ${actor.name}'s Speed!`);
+                        }
+                        if (damageTarget.ability.name === 'WaterCompaction' && moveTypeLC === 'water') {
+                            damageTarget.statStages.defense = Math.min(6, (damageTarget.statStages.defense || 0) + 2);
+                            tempLogs.push(`${damageTarget.name}'s Water Compaction sharply raised its Defense!`);
+                        }
+                        if (damageTarget.ability.name === 'SteamEngine' && (moveTypeLC === 'water' || moveTypeLC === 'fire')) {
+                            damageTarget.statStages.speed = Math.min(6, (damageTarget.statStages.speed || 0) + 6);
+                            tempLogs.push(`${damageTarget.name}'s Steam Engine drastically raised its Speed!`);
+                        }
+                        if (damageTarget.ability.name === 'Electromorphosis' && moveTypeLC !== 'none') {
+                            damageTarget.nextMoveDamageBoost = Math.max(damageTarget.nextMoveDamageBoost || 1, 1.3);
+                            tempLogs.push(`${damageTarget.name}'s Electromorphosis charged it up!`);
+                        }
+                        if (damageTarget.ability.name === 'WindPower' && action.move?.isWind) {
+                            damageTarget.nextMoveDamageBoost = Math.max(damageTarget.nextMoveDamageBoost || 1, 1.3);
+                            tempLogs.push(`${damageTarget.name}'s Wind Power charged it up!`);
+                        }
+                        if (damageTarget.ability.name === 'ThermalExchange' && moveTypeLC === 'fire') {
+                            damageTarget.statStages.attack = Math.min(6, (damageTarget.statStages.attack || 0) + 1);
+                            tempLogs.push(`${damageTarget.name}'s Thermal Exchange raised its Attack!`);
+                        }
+                        if (damageTarget.ability.name === 'SandSpit') {
+                            setBattleState(prev => ({ ...prev, weather: 'sand', weatherTurns: 5 }));
+                            tempLogs.push(`${damageTarget.name}'s Sand Spit whipped up a sandstorm!`);
+                        }
+                        if (damageTarget.ability.name === 'SeedSower') {
+                            setBattleState(prev => ({ ...prev, terrain: 'grassy', terrainTurns: 5 }));
+                            tempLogs.push(`${damageTarget.name}'s Seed Sower spread Grassy Terrain!`);
+                        }
+                    }
+                    if (finalDamage > 0 && !damageTarget.isFainted) {
+                        if (damageTarget.ability.name === 'ToxicDebris' && action.move?.damage_class === 'physical') {
+                            setBattleState(prev => {
+                                const key = action.isPlayer ? 'enemyHazards' : 'playerHazards';
+                                const hazards = [...(prev[key] || [])];
+                                if (hazards.filter(h => h === 'Toxic Spikes').length < 2) hazards.push('Toxic Spikes');
+                                return { ...prev, [key]: hazards };
+                            });
+                            tempLogs.push(`${damageTarget.name}'s Toxic Debris scattered Toxic Spikes!`);
+                        }
+                        if (damageTarget.ability.name === 'PerishBody' && moveMakesContact) {
+                            if (actor.perishTurns === undefined) actor.perishTurns = 3;
+                            if (damageTarget.perishTurns === undefined) damageTarget.perishTurns = 3;
+                            tempLogs.push(`${damageTarget.name}'s Perish Body put both Pokemon on a perish count!`);
+                        }
+                        if (damageTarget.ability.name === 'WimpOut' && damageTarget.currentHp <= Math.floor(damageTarget.maxHp / 2)) {
+                            if (action.isPlayer) {
+                                setBattleState(prev => ({ ...prev, enemySwitching: true, enemySwitchingMonIndex: realTargetIndex }));
+                            } else {
+                                setBattleState(prev => ({ ...prev, mustSwitch: true, switchingActorIdx: realTargetIndex }));
+                            }
+                            tempLogs.push(`${damageTarget.name}'s Wimp Out forced a switch!`);
+                        }
+                        if (damageTarget.ability.name === 'EmergencyExit' && damageTarget.currentHp <= Math.floor(damageTarget.maxHp / 2)) {
+                            if (action.isPlayer) {
+                                setBattleState(prev => ({ ...prev, enemySwitching: true, enemySwitchingMonIndex: realTargetIndex }));
+                            } else {
+                                setBattleState(prev => ({ ...prev, mustSwitch: true, switchingActorIdx: realTargetIndex }));
+                            }
+                            tempLogs.push(`${damageTarget.name}'s Emergency Exit forced a switch!`);
+                        }
+                    }
+
                     if (action.move?.damage_class !== 'status') {
                         const hit = {
                             isPlayer: action.isPlayer,
@@ -6257,7 +6730,7 @@ export default function App() {
                     }
 
                     // Rocky Helmet
-                    if (target.heldItem?.id === 'rocky-helmet' && action.move.contact && finalDamage > 0 && actor.heldItem?.id !== 'protective-pads' && actor.heldItem?.id !== 'punching-glove') {
+                    if (target.heldItem?.id === 'rocky-helmet' && moveMakesContact && finalDamage > 0 && actor.heldItem?.id !== 'protective-pads' && actor.heldItem?.id !== 'punching-glove') {
                         const helmetDmg = Math.floor(actor.maxHp / 6);
                         actor.currentHp = Math.max(0, actor.currentHp - helmetDmg);
                         tempLogs.push(`${actor.name} was hurt by ${target.name}'s Rocky Helmet!`);
@@ -6267,6 +6740,11 @@ export default function App() {
                     if (action.move.meta?.drain && finalDamage > 0) {
                         let drainAmount = Math.floor(finalDamage * action.move.meta.drain / 100);
                         if (drainAmount > 0) {
+                            if (target.ability.name === 'LiquidOoze') {
+                                actor.currentHp = Math.max(0, actor.currentHp - drainAmount);
+                                tempLogs.push(`${target.name}'s Liquid Ooze hurt ${actor.name}!`);
+                                drainAmount = 0;
+                            }
                             if (actor.heldItem?.id === 'big-root') {
                                 drainAmount = Math.floor(drainAmount * 1.3);
                             }
@@ -6333,7 +6811,7 @@ export default function App() {
                     // now that the type comparison actually matches.
 
                     // Heavy Stance Ability
-                    if (target.ability.name === 'HeavyStance' && action.move.contact && finalDamage > 0) {
+                    if (target.ability.name === 'HeavyStance' && moveMakesContact && finalDamage > 0) {
                         if (target.statStages) {
                             target.statStages.speed = Math.max(-6, (target.statStages.speed || 0) - 1);
                             target.statStages.defense = Math.min(6, (target.statStages.defense || 0) + 1);
@@ -6342,7 +6820,7 @@ export default function App() {
                     }
 
                     // Frostbite Skin Ability
-                    if (target.ability.name === 'FrostbiteSkin' && action.move.contact && finalDamage > 0 && !actor.status) {
+                    if (target.ability.name === 'FrostbiteSkin' && moveMakesContact && finalDamage > 0 && !actor.status) {
                         if (Math.random() < 0.2) {
                             actor.status = 'frostbite';
                             tempLogs.push(`${actor.name} was frostbitten by ${target.name}'s Frostbite Skin!`);
@@ -6357,7 +6835,7 @@ export default function App() {
                     }
 
                     // SpikeCloak Ability
-                    if (target.ability.name === 'SpikeCloak' && action.move.contact && finalDamage > 0) {
+                    if (target.ability.name === 'SpikeCloak' && moveMakesContact && finalDamage > 0) {
                         const recoil = Math.floor(finalDamage / 8);
                         actor.currentHp = Math.max(0, actor.currentHp - recoil);
                         tempLogs.push(`${actor.name} was hurt by ${target.name}'s Spike Cloak!`);
@@ -6376,7 +6854,7 @@ export default function App() {
                     }
 
                     // Contact Charge Ability
-                    if (actor.ability.name === 'ItemShatter' && action.move?.contact) {
+                    if (actor.ability.name === 'ItemShatter' && moveMakesContact) {
                         if (target.heldItem) {
                             if (isKnockGuardProtected(target, !action.isPlayer, action.isPlayer)) {
                                 tempLogs.push(`${target.name}'s item was protected by Knock Guard!`);
@@ -6388,7 +6866,7 @@ export default function App() {
                     }
 
                     // Life Steal Ability
-                    if (actor.ability.name === 'LifeSteal' && action.move?.contact) {
+                    if (actor.ability.name === 'LifeSteal' && moveMakesContact) {
                         const heal = Math.floor(actor.maxHp / 16);
                         actor.currentHp = Math.min(actor.maxHp, actor.currentHp + heal);
                         tempLogs.push(`${actor.name}'s Life Steal restored its HP!`);
@@ -6408,11 +6886,35 @@ export default function App() {
                     }
 
                     // Decay Touch Ability
-                    if (target.ability.name === 'DecayTouch' && action.move?.contact) {
+                    if (target.ability.name === 'DecayTouch' && moveMakesContact) {
                         if (actor.statStages) {
                             actor.statStages.attack = Math.max(-6, (actor.statStages.attack || 0) - 1);
                             tempLogs.push(`${target.name}'s Decay Touch lowered ${actor.name}'s Attack!`);
                         }
+                    }
+                    if (target.ability.name === 'LingeringAroma' && moveMakesContact) {
+                        const originalActorAbility = { ...actor.ability };
+                        actor.ability = { ...target.ability };
+                        target.ability = originalActorAbility;
+                        tempLogs.push(`${target.name}'s Lingering Aroma swapped abilities with ${actor.name}!`);
+                    }
+                    if (actor.ability.name === 'PoisonTouch' && moveMakesContact && finalDamage > 0 && !target.status && Math.random() < 0.3) {
+                        target.status = 'poison';
+                        tempLogs.push(`${actor.name}'s Poison Touch poisoned ${target.name}!`);
+                    }
+                    if (target.ability.name === 'CuteCharm' && moveMakesContact && finalDamage > 0 && Math.random() < 0.3) {
+                        actor.confusionTurns = Math.max(actor.confusionTurns || 0, 2);
+                        tempLogs.push(`${actor.name} was charmed by ${target.name}'s Cute Charm!`);
+                    }
+                    if (target.ability.name === 'Pickpocket' && moveMakesContact && finalDamage > 0 && !target.heldItem && actor.heldItem && actor.ability.name !== 'StickyHold') {
+                        target.heldItem = actor.heldItem;
+                        actor.heldItem = undefined;
+                        tempLogs.push(`${target.name}'s Pickpocket stole an item!`);
+                    }
+                    if (actor.ability.name === 'Magician' && finalDamage > 0 && !actor.heldItem && target.heldItem && target.ability.name !== 'StickyHold') {
+                        actor.heldItem = target.heldItem;
+                        target.heldItem = undefined;
+                        tempLogs.push(`${actor.name}'s Magician stole ${target.name}'s held item!`);
                     }
 
                     // Venom Spite Ability
@@ -6424,7 +6926,7 @@ export default function App() {
                 }
 
                 // Wound Leak Ability
-                    if (target.ability.name === 'WoundLeak' && action.move?.contact) {
+                    if (target.ability.name === 'WoundLeak' && moveMakesContact) {
                         const recoil = Math.floor(actor.maxHp / 16);
                         actor.currentHp = Math.max(0, actor.currentHp - recoil);
                         tempLogs.push(`${actor.name} was hurt by ${target.name}'s Wound Leak!`);
@@ -6481,22 +6983,42 @@ export default function App() {
                     }
 
                     // Life Steal Ability
-                    if (actor.ability.name === 'LifeSteal' && action.move?.contact) {
+                    if (actor.ability.name === 'LifeSteal' && moveMakesContact) {
                         const heal = Math.floor(actor.maxHp / 16);
                         actor.currentHp = Math.min(actor.maxHp, actor.currentHp + heal);
                         tempLogs.push(`${actor.name} stole life with Life Steal!`);
                     }
 
                     // Frostbite Skin Ability
-                    if (target.ability.name === 'FrostbiteSkin' && action.move?.contact && Math.random() < 0.2) {
+                    if (target.ability.name === 'FrostbiteSkin' && moveMakesContact && Math.random() < 0.2) {
                         if (!actor.status) {
                             actor.status = 'freeze';
                             tempLogs.push(`${actor.name} was frozen by ${target.name}'s Frostbite Skin!`);
                         }
                     }
+                    // Static
+                    if (target.ability.name === 'Static' && moveMakesContact && Math.random() < 0.3) {
+                        if (!actor.status) {
+                            actor.status = 'paralysis';
+                            tempLogs.push(`${actor.name} was paralyzed by ${target.name}'s Static!`);
+                        }
+                    }
+                    // Poison Point
+                    if (target.ability.name === 'PoisonPoint' && moveMakesContact && Math.random() < 0.3) {
+                        if (!actor.status) {
+                            actor.status = 'poison';
+                            tempLogs.push(`${actor.name} was poisoned by ${target.name}'s Poison Point!`);
+                        }
+                    }
+                    // Effect Spore
+                    if (target.ability.name === 'EffectSpore' && moveMakesContact && Math.random() < 0.3 && !actor.status) {
+                        const roll = Math.random();
+                        actor.status = roll < 0.33 ? 'sleep' : (roll < 0.66 ? 'poison' : 'paralysis');
+                        tempLogs.push(`${actor.name} was afflicted by ${target.name}'s Effect Spore!`);
+                    }
 
                     // Contact Charge Ability
-                    if (target.ability.name === 'ContactCharge' && action.move?.contact) {
+                    if (target.ability.name === 'ContactCharge' && moveMakesContact) {
                         setBattleState(prev => {
                             if (action.isPlayer) {
                                 const newMeter = Math.min(100, prev.enemyComboMeter + 5);
@@ -6549,6 +7071,19 @@ export default function App() {
                     realActor = target;
                     realTarget = actor;
                 }
+                if (action.move.name.toLowerCase().includes('dance')) {
+                    const allActives = [...tempPTeam.slice(0, 2), ...tempETeam.slice(0, 2)];
+                    allActives.forEach(mon => {
+                        if (mon && !mon.isFainted && mon.id !== actor.id && mon.ability.name === 'Dancer' && mon.statStages) {
+                            mon.statStages.speed = Math.min(6, (mon.statStages.speed || 0) + 1);
+                            tempLogs.push(`${mon.name}'s Dancer followed the rhythm and gained Speed!`);
+                        }
+                    });
+                }
+                if (actor.ability.name === 'GulpMissile' && action.move.type?.toLowerCase() === 'water') {
+                    (actor as any).gulpMissileLoaded = true;
+                    tempLogs.push(`${actor.name} readied Gulp Missile!`);
+                }
 
                 const sec = applySecondaryEffect(realActor, realTarget, action.move, battleState.weather, battleState.terrain);
 
@@ -6580,18 +7115,6 @@ export default function App() {
                     }
                 }
                 
-                // Sync Pulse Ability
-                if (actor.ability.name === 'SyncPulse') {
-                    const allyIdx = 1 - action.actorIndex;
-                    const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
-                    if (ally && !ally.isFainted && ally.statStages) {
-                        const stats: (keyof StatStages)[] = ['attack', 'defense', 'special-attack', 'special-defense', 'speed'];
-                        const randomStat = stats[Math.floor(Math.random() * stats.length)];
-                        ally.statStages[randomStat] = Math.min(6, (ally.statStages[randomStat] || 0) + 1);
-                        tempLogs.push(`${actor.name}'s Sync Pulse raised ${ally.name}'s ${randomStat}!`);
-                    }
-                }
-
                 // Synchrony Tax Ability
                 if (actor.ability.name === 'SynchronyTax') {
                     setBattleState(prev => {
@@ -6915,7 +7438,7 @@ export default function App() {
 
                     // Fusion Core (held item): 25% multiplicative boost to
                     // per-hit gauge fill. Applied at the end so it compounds
-                    // with Harmony Engine / SyncPulse etc.
+                    // with Harmony Engine etc.
 
                     // Partner Boost Ability
                     if (action.isFusion) {
@@ -6931,10 +7454,6 @@ export default function App() {
                         }
                     }
                     
-                    let pulseChance = 0.3;
-                    if (actor.ability.name === 'Amplifier') pulseChance = 0.6;
-                    if (actor.ability.name === 'SyncPulse' && Math.random() < pulseChance) boost += 10;
-
                     if (actor.heldItem?.id === 'fusion-core') boost = Math.floor(boost * 1.25);
 
                     if (action.isPlayer) {
@@ -6968,7 +7487,7 @@ export default function App() {
                     }
                 }
 
-                if (target.ability.name === 'HeavyStance' && action.move?.contact) {
+                if (target.ability.name === 'HeavyStance' && moveMakesContact) {
                     if (target.statStages) {
                         target.statStages.speed = Math.max(-6, (target.statStages.speed || 0) - 1);
                         target.statStages.defense = Math.min(6, (target.statStages.defense || 0) + 1);
@@ -7056,16 +7575,6 @@ export default function App() {
                     actor.choiceMove = action.move.name;
                 }
 
-                // Sync Pulse Ability
-                if (actor.ability.name === 'SyncPulse' && action.isFusion) {
-                    const allyIdx = 1 - actorIdx;
-                    const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
-                    if (ally && !ally.isFainted) {
-                        ally.nextMoveDamageBoost = true;
-                        tempLogs.push(`${actor.name}'s Sync Pulse boosted ${ally.name}'s next move!`);
-                    }
-                }
-                
                 // Handle Fainting — KO applies to whoever reached 0 HP (e.g. Sacrificial Guard redirects damage).
                 const faintSubject =
                   lastKoDamageTarget.currentHp <= 0 && !lastKoDamageTarget.isFainted
@@ -7126,6 +7635,20 @@ export default function App() {
                         actor.statStages.attack = Math.min(6, (actor.statStages.attack || 0) + 1);
                         tempLogs.push(`${actor.name}'s Moxie raised its Attack!`);
                     }
+                    if ((actor.ability.name === 'BeastBoost' || actor.ability.name === 'SoulHeart') && actor.statStages) {
+                        const boostStats: (keyof StatStages)[] = ['attack', 'defense', 'special-attack', 'special-defense', 'speed'];
+                        const best = boostStats.reduce((a, b) => (actor.stats[a] >= actor.stats[b] ? a : b));
+                        actor.statStages[best] = Math.min(6, (actor.statStages[best] || 0) + 1);
+                        tempLogs.push(`${actor.name}'s ${actor.ability.name} raised its ${best}!`);
+                    }
+                    if (actor.ability.name === 'ChillingNeigh' && actor.statStages) {
+                        actor.statStages.attack = Math.min(6, (actor.statStages.attack || 0) + 1);
+                        tempLogs.push(`${actor.name}'s Chilling Neigh raised its Attack!`);
+                    }
+                    if (actor.ability.name === 'GrimNeigh' && actor.statStages) {
+                        actor.statStages['special-attack'] = Math.min(6, (actor.statStages['special-attack'] || 0) + 1);
+                        tempLogs.push(`${actor.name}'s Grim Neigh raised its Sp. Atk!`);
+                    }
 
                     // Reckless Tempo Ability
                     if (actor.ability.name === 'RecklessTempo' && !actor.isFainted) {
@@ -7140,6 +7663,10 @@ export default function App() {
                         const heal = Math.floor(targetAlly.maxHp * 0.25);
                         targetAlly.currentHp = Math.min(targetAlly.maxHp, targetAlly.currentHp + heal);
                         tempLogs.push(`${targetAlly.name}'s Soul Link restored its HP!`);
+                    }
+                    if (targetAlly && !targetAlly.isFainted && targetAlly.ability.name === 'Receiver') {
+                        targetAlly.ability = { ...target.ability };
+                        tempLogs.push(`${targetAlly.name}'s Receiver copied ${target.name}'s ${target.ability.name}!`);
                     }
                     if (targetAlly && !targetAlly.isFainted && targetAlly.ability.name === 'LastAnchor') {
                         setBattleState(prev => ({ ...prev, [action.isPlayer ? 'enemyComboMeter' : 'comboMeter']: Math.min(100, (action.isPlayer ? prev.enemyComboMeter : prev.comboMeter) + 10) }));
@@ -7220,8 +7747,7 @@ export default function App() {
 
                     // Innards Out Ability
                     if (target.ability.name === 'InnardsOut' && !actor.isFainted) {
-                        // Simplified: use last damage dealt
-                        const dmg = totalDamage;
+                        const dmg = Math.max(1, lastKoTargetHpBeforeHit || totalDamage);
                         actor.currentHp = Math.max(0, actor.currentHp - dmg);
                         tempLogs.push(`${actor.name} was hurt by ${target.name}'s Innards Out!`);
                     }
@@ -7337,6 +7863,9 @@ export default function App() {
                 }
 
                 if (sec.forceOut) {
+                    if (target.ability.name === 'SuctionCups') {
+                        tempLogs.push(`${target.name} anchors itself with Suction Cups!`);
+                    } else {
                     const isPlayerTarget = !action.isPlayer;
                     const targetTeam = isPlayerTarget ? tempPTeam : tempETeam;
                     const nextIdx = targetTeam.findIndex((p, i) => i > 1 && !p.isFainted); // Find someone in the backline
@@ -7348,6 +7877,7 @@ export default function App() {
                         playCry(targetTeam[realTargetIndex].id, targetTeam[realTargetIndex].name);
                     } else {
                         tempLogs.push(`But there was no one to switch in!`);
+                    }
                     }
                 }
 
@@ -7816,7 +8346,7 @@ export default function App() {
                 if (sec.protect) {
                     target.isProtected = true;
                 }
-                if (sec.forceOut && target.ability.name !== 'AnchorGrip') {
+                if (sec.forceOut && target.ability.name !== 'AnchorGrip' && target.ability.name !== 'SuctionCups') {
                     const team = action.isPlayer ? tempETeam : tempPTeam;
                     const backline = team.slice(2).filter(p => !p.isFainted);
                     if (backline.length > 0) {
@@ -7827,6 +8357,8 @@ export default function App() {
                         team[backIdx] = temp;
                         tempLogs.push(`${target.name} was forced out!`);
                     }
+                } else if (sec.forceOut && target.ability.name === 'SuctionCups') {
+                    tempLogs.push(`${target.name} anchors itself with Suction Cups!`);
                 }
                 if (sec.healing && actor.statStages) {
                     const heal = Math.floor(actor.maxHp * (sec.healing / 100));
@@ -7877,8 +8409,12 @@ export default function App() {
                     await syncState(500);
                 }
                 if (sec.flinch) {
-                    target.isFlinching = true;
-                    tempLogs.push(sec.msg || `${target.name} flinched!`);
+                        if (target.ability.name === 'InnerFocus') {
+                            tempLogs.push(`${target.name}'s Inner Focus prevented flinching!`);
+                        } else {
+                            target.isFlinching = true;
+                            tempLogs.push(sec.msg || `${target.name} flinched!`);
+                        }
                     
                     // Shared Nerves Ability
                     const allyIdx = 1 - realTargetIndex;
@@ -7907,6 +8443,42 @@ export default function App() {
                             continue;
                         }
 
+                        const statusToApply = sec.status as string | undefined;
+                        if (statusToApply && statusToApply !== 'none') {
+                            const targetSideTeam = action.isPlayer ? tempETeam : tempPTeam;
+                            const hasAromaVeil = targetSideTeam.slice(0, 2).some(mon => mon && !mon.isFainted && mon.ability.name === 'AromaVeil');
+                            if (target.ability.name === 'MagicBounce' && sec.statTarget !== 'self' && !actor.status) {
+                                actor.status = statusToApply as any;
+                                tempLogs.push(`${target.name}'s Magic Bounce reflected the status back to ${actor.name}!`);
+                                await syncState(500);
+                                continue;
+                            }
+                            const targetTypesLower = target.types.map(t => t.toLowerCase());
+                            const bypassPoisonTypeImmunity = actor.ability.name === 'Corrosion' && (statusToApply === 'poison' || statusToApply === 'toxic');
+                            const blockedByAbility =
+                                ((statusToApply === 'burn') && (target.ability.name === 'WaterVeil' || target.ability.name === 'WaterBubble')) ||
+                                ((statusToApply === 'poison' || statusToApply === 'toxic') && target.ability.name === 'Immunity') ||
+                                ((statusToApply === 'paralysis') && target.ability.name === 'Limber') ||
+                                ((statusToApply === 'sleep') && (target.ability.name === 'Insomnia' || target.ability.name === 'VitalSpirit' || target.ability.name === 'SweetVeil')) ||
+                                (hasAromaVeil && (statusToApply === 'sleep' || statusToApply === 'confusion')) ||
+                                ((statusToApply === 'freeze') && target.ability.name === 'MagmaArmor') ||
+                                (target.ability.name === 'GoodAsGold') ||
+                                (target.ability.name === 'Comatose');
+                            const blockedByWeather = statusToApply === 'freeze' && battleState.weather === 'sun';
+                            const blockedByLeafGuard = target.ability.name === 'LeafGuard' && battleState.weather === 'sun';
+                            const blockedByType =
+                                ((statusToApply === 'burn') && targetTypesLower.includes('fire')) ||
+                                ((statusToApply === 'paralysis') && targetTypesLower.includes('electric')) ||
+                                ((statusToApply === 'freeze') && targetTypesLower.includes('ice')) ||
+                                ((statusToApply === 'poison' || statusToApply === 'toxic') && !bypassPoisonTypeImmunity && (targetTypesLower.includes('poison') || targetTypesLower.includes('steel')));
+                            if (blockedByAbility || blockedByWeather || blockedByLeafGuard || blockedByType) {
+                                const reason = blockedByAbility || blockedByLeafGuard ? target.ability.name : (blockedByWeather ? 'the weather' : 'its typing');
+                                tempLogs.push(`${target.name} is protected by ${reason}!`);
+                                await syncState(500);
+                                continue;
+                            }
+                        }
+
                         target.status = sec.status;
                         // Trigger Status VFX
                         setBattleState(prev => ({ 
@@ -7919,6 +8491,14 @@ export default function App() {
                         }));
                         if (sec.status === 'sleep') target.statusTurns = Math.floor(Math.random() * 3) + 1;
                         checkBerries(target, tempLogs);
+                        if (target.ability.name === 'Synchronize' && !actor.status && sec.status !== 'sleep' && sec.status !== 'freeze') {
+                            actor.status = sec.status as any;
+                            tempLogs.push(`${target.name}'s Synchronize afflicted ${actor.name} as well!`);
+                        }
+                        if ((sec.status === 'poison' || sec.status === 'toxic') && actor.ability.name === 'PoisonPuppeteer' && !target.confusionTurns) {
+                            target.confusionTurns = Math.floor(Math.random() * 3) + 2;
+                            tempLogs.push(`${actor.name}'s Poison Puppeteer confused ${target.name}!`);
+                        }
                         
                         // Lag Shock & Crossfire Burn (Attacker has the ability)
                         if (sec.status === 'paralysis' && actor.ability.name === 'LagShock') {
@@ -7974,6 +8554,37 @@ export default function App() {
                                     return;
                                 }
 
+                                const targetAbility = targetMon.ability.name;
+                                const adjustedChange =
+                                    targetAbility === 'Contrary'
+                                        ? -sc.change
+                                        : targetAbility === 'Simple'
+                                            ? sc.change * 2
+                                            : sc.change;
+                                const dropBlockedByAbility =
+                                    adjustedChange < 0 &&
+                                    sec.statTarget !== 'self' &&
+                                    (
+                                        targetAbility === 'ClearBody' ||
+                                        targetAbility === 'WhiteSmoke' ||
+                                        targetAbility === 'FullMetalBody' ||
+                                        (targetAbility === 'HyperCutter' && stat === 'attack') ||
+                                        (targetAbility === 'BigPecks' && stat === 'defense') ||
+                                        (targetAbility === 'KeenEye' && stat === 'accuracy') ||
+                                        targetAbility === 'MirrorArmor'
+                                    );
+                                if (dropBlockedByAbility) {
+                                    tempLogs.push(`${targetMon.name}'s ${targetAbility} blocked the stat drop!`);
+                                    if (targetAbility === 'MirrorArmor') {
+                                        const sourceMon = actor;
+                                        if (sourceMon && !sourceMon.isFainted && sourceMon.statStages) {
+                                            sourceMon.statStages[stat] = Math.max(-6, (sourceMon.statStages[stat] || 0) + adjustedChange);
+                                            tempLogs.push(`${targetMon.name}'s Mirror Armor reflected the stat drop!`);
+                                        }
+                                    }
+                                    return;
+                                }
+
                                 // Clear Amulet
                                 if (sc.change < 0 && targetMon.heldItem?.id === 'clear-amulet' && sec.statTarget !== 'self') {
                                     tempLogs.push(`${targetMon.name}'s Clear Amulet prevented stat loss!`);
@@ -8008,7 +8619,7 @@ export default function App() {
                                 }
 
                                 const oldVal = targetMon.statStages[stat] || 0;
-                                const newVal = Math.min(6, Math.max(-6, oldVal + sc.change));
+                                const newVal = Math.min(6, Math.max(-6, oldVal + adjustedChange));
                                 const realDelta = newVal - oldVal;
                                 targetMon.statStages[stat] = newVal;
                                 // Pretty log line: at +/-6 cap, swap to "won't go any
@@ -8016,7 +8627,7 @@ export default function App() {
                                 // why the stat didn't budge.
                                 if (realDelta === 0) {
                                     tempLogs.push(
-                                        sc.change > 0
+                                        adjustedChange > 0
                                             ? `${targetMon.name}'s ${stat} won't go any higher!`
                                             : `${targetMon.name}'s ${stat} won't go any lower!`
                                     );
@@ -8031,9 +8642,30 @@ export default function App() {
                                     const adv = Math.abs(realDelta) >= 2 ? (realDelta > 0 ? 'sharply rose' : 'harshly fell') : (realDelta > 0 ? 'rose' : 'fell');
                                     tempLogs.push(`${targetMon.name}'s ${stat} ${adv}!`);
                                 }
+                                if (realDelta > 0 && targetMon === actor) {
+                                    const opposingTeam = action.isPlayer ? tempETeam.slice(0, 2) : tempPTeam.slice(0, 2);
+                                    opposingTeam.forEach(opp => {
+                                        if (opp && !opp.isFainted && opp.ability.name === 'Opportunist' && opp.statStages) {
+                                            opp.statStages[stat] = Math.min(6, (opp.statStages[stat] || 0) + realDelta);
+                                            tempLogs.push(`${opp.name}'s Opportunist copied the stat boost!`);
+                                        }
+                                    });
+                                }
+
+                                // Official reactive stat-drop abilities.
+                                if (realDelta < 0 && sec.statTarget !== 'self' && targetMon.statStages) {
+                                    if (targetMon.ability.name === 'Defiant') {
+                                        targetMon.statStages.attack = Math.min(6, (targetMon.statStages.attack || 0) + 2);
+                                        tempLogs.push(`${targetMon.name}'s Defiant sharply raised its Attack!`);
+                                    }
+                                    if (targetMon.ability.name === 'Competitive') {
+                                        targetMon.statStages['special-attack'] = Math.min(6, (targetMon.statStages['special-attack'] || 0) + 2);
+                                        tempLogs.push(`${targetMon.name}'s Competitive sharply raised its Sp. Atk!`);
+                                    }
+                                }
 
                                 // Eject Pack
-                                if (sc.change < 0 && targetMon.heldItem?.id === 'eject-pack') {
+                                if (adjustedChange < 0 && targetMon.heldItem?.id === 'eject-pack') {
                                     tempLogs.push(`${targetMon.name}'s Eject Pack activated!`);
                                     targetMon.heldItem = undefined;
                                     targetMon.mustSwitch = true;
@@ -8045,7 +8677,7 @@ export default function App() {
                                 setBattleState(prev => ({ 
                                     ...prev, 
                                     vfx: { 
-                                        type: sc.change > 0 ? 'stat-up' : 'stat-down', 
+                                        type: adjustedChange > 0 ? 'stat-up' : 'stat-down', 
                                         target: isPlayerTarget ? 'player' : 'enemy', 
                                         index: targetIdx 
                                     } 
@@ -8153,6 +8785,56 @@ export default function App() {
         for (let i = 0; i < tempPTeam.length; i++) {
             const mon = tempPTeam[i];
             if (mon.isFainted) continue;
+            const isActiveSlot = i < 2;
+
+            if (mon.ability.name === 'ShedSkin' && mon.status && Math.random() < 1 / 3) {
+                mon.status = undefined;
+                mon.statusTurns = undefined;
+                mon.toxicTurns = 0;
+                tempLogs.push(`${mon.name}'s Shed Skin cured its status!`);
+            }
+            if (mon.ability.name === 'Hydration' && mon.status && battleState.weather === 'rain') {
+                mon.status = undefined;
+                mon.statusTurns = undefined;
+                mon.toxicTurns = 0;
+                tempLogs.push(`${mon.name}'s Hydration cured its status in the rain!`);
+            }
+            if (mon.ability.name === 'RainDish' && battleState.weather === 'rain') {
+                const heal = Math.floor(mon.maxHp / 16);
+                mon.currentHp = Math.min(mon.maxHp, mon.currentHp + heal);
+                tempLogs.push(`${mon.name}'s Rain Dish restored HP!`);
+            }
+            if (mon.ability.name === 'IceBody' && (battleState.weather === 'snow' || battleState.weather === 'hail')) {
+                const heal = Math.floor(mon.maxHp / 16);
+                mon.currentHp = Math.min(mon.maxHp, mon.currentHp + heal);
+                tempLogs.push(`${mon.name}'s Ice Body restored HP!`);
+            }
+            if (mon.ability.name === 'PoisonHeal' && (mon.status === 'poison' || mon.status === 'toxic')) {
+                const heal = Math.floor(mon.maxHp / 8);
+                mon.currentHp = Math.min(mon.maxHp, mon.currentHp + heal);
+                tempLogs.push(`${mon.name}'s Poison Heal restored HP!`);
+            }
+
+            // Moody (canonical behavior): at end of turn, raise one random
+            // stat by 2 and lower a different random stat by 1.
+            if (mon.ability.name === 'Moody' && mon.statStages && isActiveSlot) {
+                const moodyStats: (keyof StatStages)[] = ['attack', 'defense', 'special-attack', 'special-defense', 'speed', 'accuracy', 'evasion'];
+                const upChoices = moodyStats.filter(s => (mon.statStages?.[s] || 0) < 6);
+                if (upChoices.length > 0) {
+                    const upStat = upChoices[Math.floor(Math.random() * upChoices.length)];
+                    mon.statStages[upStat] = Math.min(6, (mon.statStages[upStat] || 0) + 2);
+                    const downChoices = moodyStats.filter(s => s !== upStat && (mon.statStages?.[s] || 0) > -6);
+                    if (downChoices.length > 0) {
+                        const downStat = downChoices[Math.floor(Math.random() * downChoices.length)];
+                        mon.statStages[downStat] = Math.max(-6, (mon.statStages[downStat] || 0) - 1);
+                        tempLogs.push(`${mon.name}'s Moody sharply raised its ${upStat}!`);
+                        tempLogs.push(`${mon.name}'s Moody lowered its ${downStat}!`);
+                        popupAbility('player', i as 0 | 1, 'Moody');
+                        popupStat('player', i as 0 | 1, upStat, 2);
+                        popupStat('player', i as 0 | 1, downStat, -1);
+                    }
+                }
+            }
             
             // Slip Cover Ability
             const allyIdx = 1 - i;
@@ -8192,6 +8874,10 @@ export default function App() {
                 const heal = Math.floor(mon.maxHp / 16);
                 tempPTeam[i] = { ...mon, currentHp: Math.min(mon.maxHp, mon.currentHp + heal) };
                 tempLogs.push(`${mon.name}'s Salt Veins restored its HP!`);
+            }
+            if (mon.ability.name === 'SpeedBoost' && mon.statStages) {
+                mon.statStages.speed = Math.min(6, (mon.statStages.speed || 0) + 1);
+                tempLogs.push(`${mon.name}'s Speed Boost raised its Speed!`);
             }
 
             // Moonlight Call Ability
@@ -8351,7 +9037,7 @@ export default function App() {
                 tempLogs.push(`${mon.name}'s Withstand protected ${allyW.name}!`);
             }
 
-            const endResP = handleEndOfTurnStatus(mon, battleState.weather, battleState.terrain);
+            const endResP = handleEndOfTurnStatus(mon, effectiveBattleWeather, battleState.terrain);
             if (endResP.damage > 0) {
                 tempPTeam[i] = { ...mon, currentHp: Math.max(0, mon.currentHp - endResP.damage), animationState: 'damage' };
                 tempLogs.push(endResP.msg!);
@@ -8368,6 +9054,7 @@ export default function App() {
                 tempLogs.push(endResP.msg!);
                 await syncState(500);
             }
+            mon.turnCount = (mon.turnCount || 0) + 1;
 
             // Lifebloom Ability (Aura)
             if (mon.ability.name === 'Lifebloom') {
@@ -8555,10 +9242,122 @@ export default function App() {
                     tempLogs.push(`${mon.name}'s Shared Nerves cured ${ally.name}'s status!`);
                 }
             }
+            if (mon.ability.name === 'Healer') {
+                const allyIdx = 1 - i;
+                const ally = tempPTeam[allyIdx];
+                if (ally && !ally.isFainted && ally.status && Math.random() < 0.3) {
+                    ally.status = undefined;
+                    ally.statusTurns = undefined;
+                    ally.toxicTurns = 0;
+                    tempLogs.push(`${mon.name}'s Healer cured ${ally.name}'s status!`);
+                }
+            }
+            if (mon.ability.name === 'BadDreams') {
+                tempETeam.slice(0, 2).forEach(f => {
+                    if (f && !f.isFainted && f.status === 'sleep') {
+                        const dmg = Math.floor(f.maxHp / 8);
+                        f.currentHp = Math.max(0, f.currentHp - dmg);
+                        tempLogs.push(`${f.name} is tormented by ${mon.name}'s Bad Dreams!`);
+                    }
+                });
+            }
+            if (mon.ability.name === 'Forecast') {
+                const weatherType = effectiveBattleWeather;
+                const nextType = weatherType === 'sun' ? 'fire' : weatherType === 'rain' ? 'water' : (weatherType === 'snow' || weatherType === 'hail') ? 'ice' : 'normal';
+                if (mon.types[0] !== nextType) {
+                    mon.types = [nextType];
+                    tempLogs.push(`${mon.name}'s Forecast changed its type to ${nextType}!`);
+                }
+            }
+            if (mon.ability.name === 'HungerSwitch') {
+                const hungry = !(mon as any).hungerMode;
+                (mon as any).hungerMode = hungry;
+                if (mon.statStages) {
+                    if (hungry) {
+                        mon.statStages.attack = Math.min(6, (mon.statStages.attack || 0) + 1);
+                        mon.statStages['special-attack'] = Math.max(-6, (mon.statStages['special-attack'] || 0) - 1);
+                    } else {
+                        mon.statStages['special-attack'] = Math.min(6, (mon.statStages['special-attack'] || 0) + 1);
+                        mon.statStages.attack = Math.max(-6, (mon.statStages.attack || 0) - 1);
+                    }
+                }
+                tempLogs.push(`${mon.name}'s Hunger Switch toggled its stance!`);
+            }
+            if (mon.ability.name === 'Schooling') {
+                const shouldSchool = mon.currentHp > Math.floor(mon.maxHp * 0.25);
+                if ((mon as any).schooled !== shouldSchool) {
+                    (mon as any).schooled = shouldSchool;
+                    tempLogs.push(`${mon.name} ${shouldSchool ? 'formed a School!' : 'broke out of Schooling!'}`);
+                }
+            }
+            if (mon.ability.name === 'ShieldsDown') {
+                const shieldsDown = mon.currentHp <= Math.floor(mon.maxHp / 2);
+                if ((mon as any).shieldsDown !== shieldsDown) {
+                    (mon as any).shieldsDown = shieldsDown;
+                    tempLogs.push(`${mon.name}'s Shields Down ${shieldsDown ? 'activated' : 'recovered'}!`);
+                }
+            }
+            if (mon.ability.name === 'ZenMode' && mon.currentHp <= Math.floor(mon.maxHp / 2) && !(mon as any).zenModeActive) {
+                (mon as any).zenModeActive = true;
+                if (mon.statStages) {
+                    mon.statStages['special-attack'] = Math.min(6, (mon.statStages['special-attack'] || 0) + 1);
+                    mon.statStages.speed = Math.min(6, (mon.statStages.speed || 0) + 1);
+                }
+                tempLogs.push(`${mon.name} entered Zen Mode!`);
+            }
         }
         for (let i = 0; i < tempETeam.length; i++) {
             const mon = tempETeam[i];
             if (mon.isFainted) continue;
+            const isActiveSlot = i < 2;
+
+            if (mon.ability.name === 'ShedSkin' && mon.status && Math.random() < 1 / 3) {
+                mon.status = undefined;
+                mon.statusTurns = undefined;
+                mon.toxicTurns = 0;
+                tempLogs.push(`Enemy ${mon.name}'s Shed Skin cured its status!`);
+            }
+            if (mon.ability.name === 'Hydration' && mon.status && battleState.weather === 'rain') {
+                mon.status = undefined;
+                mon.statusTurns = undefined;
+                mon.toxicTurns = 0;
+                tempLogs.push(`Enemy ${mon.name}'s Hydration cured its status in the rain!`);
+            }
+            if (mon.ability.name === 'RainDish' && battleState.weather === 'rain') {
+                const heal = Math.floor(mon.maxHp / 16);
+                mon.currentHp = Math.min(mon.maxHp, mon.currentHp + heal);
+                tempLogs.push(`Enemy ${mon.name}'s Rain Dish restored HP!`);
+            }
+            if (mon.ability.name === 'IceBody' && (battleState.weather === 'snow' || battleState.weather === 'hail')) {
+                const heal = Math.floor(mon.maxHp / 16);
+                mon.currentHp = Math.min(mon.maxHp, mon.currentHp + heal);
+                tempLogs.push(`Enemy ${mon.name}'s Ice Body restored HP!`);
+            }
+            if (mon.ability.name === 'PoisonHeal' && (mon.status === 'poison' || mon.status === 'toxic')) {
+                const heal = Math.floor(mon.maxHp / 8);
+                mon.currentHp = Math.min(mon.maxHp, mon.currentHp + heal);
+                tempLogs.push(`Enemy ${mon.name}'s Poison Heal restored HP!`);
+            }
+
+            // Moody (enemy side): end-of-turn random +2 and random different -1.
+            if (mon.ability.name === 'Moody' && mon.statStages && isActiveSlot) {
+                const moodyStats: (keyof StatStages)[] = ['attack', 'defense', 'special-attack', 'special-defense', 'speed', 'accuracy', 'evasion'];
+                const upChoices = moodyStats.filter(s => (mon.statStages?.[s] || 0) < 6);
+                if (upChoices.length > 0) {
+                    const upStat = upChoices[Math.floor(Math.random() * upChoices.length)];
+                    mon.statStages[upStat] = Math.min(6, (mon.statStages[upStat] || 0) + 2);
+                    const downChoices = moodyStats.filter(s => s !== upStat && (mon.statStages?.[s] || 0) > -6);
+                    if (downChoices.length > 0) {
+                        const downStat = downChoices[Math.floor(Math.random() * downChoices.length)];
+                        mon.statStages[downStat] = Math.max(-6, (mon.statStages[downStat] || 0) - 1);
+                        tempLogs.push(`Enemy ${mon.name}'s Moody sharply raised its ${upStat}!`);
+                        tempLogs.push(`Enemy ${mon.name}'s Moody lowered its ${downStat}!`);
+                        popupAbility('enemy', i as 0 | 1, 'Moody');
+                        popupStat('enemy', i as 0 | 1, upStat, 2);
+                        popupStat('enemy', i as 0 | 1, downStat, -1);
+                    }
+                }
+            }
 
             // Rain Dish+ & Chlorophyll+ (Enemy)
             if (mon.ability.name === 'RainDishPlus' && battleState.weather === 'rain') {
@@ -8588,6 +9387,10 @@ export default function App() {
                 const heal = Math.floor(mon.maxHp / 16);
                 tempETeam[i] = { ...mon, currentHp: Math.min(mon.maxHp, mon.currentHp + heal) };
                 tempLogs.push(`Enemy ${mon.name}'s Salt Veins restored its HP!`);
+            }
+            if (mon.ability.name === 'SpeedBoost' && mon.statStages) {
+                mon.statStages.speed = Math.min(6, (mon.statStages.speed || 0) + 1);
+                tempLogs.push(`Enemy ${mon.name}'s Speed Boost raised its Speed!`);
             }
 
             // Moonlight Call Ability
@@ -8708,6 +9511,69 @@ export default function App() {
                     tempLogs.push(`Enemy ${mon.name}'s Shared Nerves cured ${ally.name}'s status!`);
                 }
             }
+            if (mon.ability.name === 'Healer') {
+                const allyIdx = 1 - i;
+                const ally = tempETeam[allyIdx];
+                if (ally && !ally.isFainted && ally.status && Math.random() < 0.3) {
+                    ally.status = undefined;
+                    ally.statusTurns = undefined;
+                    ally.toxicTurns = 0;
+                    tempLogs.push(`Enemy ${mon.name}'s Healer cured ${ally.name}'s status!`);
+                }
+            }
+            if (mon.ability.name === 'BadDreams') {
+                tempPTeam.slice(0, 2).forEach(f => {
+                    if (f && !f.isFainted && f.status === 'sleep') {
+                        const dmg = Math.floor(f.maxHp / 8);
+                        f.currentHp = Math.max(0, f.currentHp - dmg);
+                        tempLogs.push(`${f.name} is tormented by enemy ${mon.name}'s Bad Dreams!`);
+                    }
+                });
+            }
+            if (mon.ability.name === 'Forecast') {
+                const weatherType = effectiveBattleWeather;
+                const nextType = weatherType === 'sun' ? 'fire' : weatherType === 'rain' ? 'water' : (weatherType === 'snow' || weatherType === 'hail') ? 'ice' : 'normal';
+                if (mon.types[0] !== nextType) {
+                    mon.types = [nextType];
+                    tempLogs.push(`Enemy ${mon.name}'s Forecast changed its type to ${nextType}!`);
+                }
+            }
+            if (mon.ability.name === 'HungerSwitch') {
+                const hungry = !(mon as any).hungerMode;
+                (mon as any).hungerMode = hungry;
+                if (mon.statStages) {
+                    if (hungry) {
+                        mon.statStages.attack = Math.min(6, (mon.statStages.attack || 0) + 1);
+                        mon.statStages['special-attack'] = Math.max(-6, (mon.statStages['special-attack'] || 0) - 1);
+                    } else {
+                        mon.statStages['special-attack'] = Math.min(6, (mon.statStages['special-attack'] || 0) + 1);
+                        mon.statStages.attack = Math.max(-6, (mon.statStages.attack || 0) - 1);
+                    }
+                }
+                tempLogs.push(`Enemy ${mon.name}'s Hunger Switch toggled its stance!`);
+            }
+            if (mon.ability.name === 'Schooling') {
+                const shouldSchool = mon.currentHp > Math.floor(mon.maxHp * 0.25);
+                if ((mon as any).schooled !== shouldSchool) {
+                    (mon as any).schooled = shouldSchool;
+                    tempLogs.push(`Enemy ${mon.name} ${shouldSchool ? 'formed a School!' : 'broke out of Schooling!'}`);
+                }
+            }
+            if (mon.ability.name === 'ShieldsDown') {
+                const shieldsDown = mon.currentHp <= Math.floor(mon.maxHp / 2);
+                if ((mon as any).shieldsDown !== shieldsDown) {
+                    (mon as any).shieldsDown = shieldsDown;
+                    tempLogs.push(`Enemy ${mon.name}'s Shields Down ${shieldsDown ? 'activated' : 'recovered'}!`);
+                }
+            }
+            if (mon.ability.name === 'ZenMode' && mon.currentHp <= Math.floor(mon.maxHp / 2) && !(mon as any).zenModeActive) {
+                (mon as any).zenModeActive = true;
+                if (mon.statStages) {
+                    mon.statStages['special-attack'] = Math.min(6, (mon.statStages['special-attack'] || 0) + 1);
+                    mon.statStages.speed = Math.min(6, (mon.statStages.speed || 0) + 1);
+                }
+                tempLogs.push(`Enemy ${mon.name} entered Zen Mode!`);
+            }
 
             // Stone Harvest Ability
             if (mon.ability.name === 'StoneHarvest' && battleState.weather === 'sand') {
@@ -8806,7 +9672,7 @@ export default function App() {
                 }
             }
 
-            const endRes = handleEndOfTurnStatus(mon, battleState.weather, battleState.terrain);
+            const endRes = handleEndOfTurnStatus(mon, effectiveBattleWeather, battleState.terrain);
             if (endRes.damage > 0) {
                 tempETeam[i] = { ...mon, currentHp: Math.max(0, mon.currentHp - endRes.damage), animationState: 'damage' };
                 tempLogs.push(`Enemy ${endRes.msg!}`);
@@ -8823,6 +9689,7 @@ export default function App() {
                 tempLogs.push(`Enemy ${endRes.msg!}`);
                 await syncState(500);
             }
+            mon.turnCount = (mon.turnCount || 0) + 1;
 
             // Lifebloom Ability (Aura)
             if (mon.ability.name === 'Lifebloom') {
@@ -9021,7 +9888,7 @@ export default function App() {
                 }
             }
 
-            const endResE = handleEndOfTurnStatus(mon, battleState.weather, battleState.terrain);
+            const endResE = handleEndOfTurnStatus(mon, effectiveBattleWeather, battleState.terrain);
             if (endResE.damage > 0) {
                 tempETeam[i] = { ...mon, currentHp: Math.max(0, mon.currentHp - endResE.damage), animationState: 'damage' };
                 tempLogs.push(`Enemy ${endResE.msg!}`);
@@ -9038,6 +9905,7 @@ export default function App() {
                 tempLogs.push(`Enemy ${endResE.msg!}`);
                 await syncState(500);
             }
+            mon.turnCount = (mon.turnCount || 0) + 1;
         }
         // 5. Weather Turns
         if (battleState.weather !== 'none') {
@@ -11599,7 +12467,7 @@ export default function App() {
                    <div className="absolute top-6 right-6 z-40 flex flex-col gap-3 items-end">
                         <div className="bg-gradient-to-br from-amber-500/90 to-amber-700/90 px-4 py-2 border-2 border-amber-300/80 text-white text-sm font-bold rounded-lg shadow-lg flex items-center gap-2">
                             <span className="text-amber-200">$</span>
-                            <span className="font-mono tabular-nums">{playerState.money.toLocaleString()}</span>
+                            <span className="font-mono tabular-nums">{toFiniteInt(playerState.money, 0).toLocaleString()}</span>
                         </div>
                         <div className="bg-black/80 px-3 py-2 border border-emerald-400/50 rounded-md backdrop-blur-sm flex items-center gap-3 text-[10px] uppercase tracking-widest">
                             <div>
