@@ -253,7 +253,10 @@ const getTargetingModeForSelection = (move?: PokemonMove, selectedItem?: string)
     const normalizedName = (move.name || '').toLowerCase().replace(/[\s_-]+/g, '');
     if (ALLY_OR_ENEMY_MOVE_NAMES.has(normalizedName)) return 'ally-or-enemy';
     const t = normalizeTargetToken(move.target);
-    if (t === 'selectedpokemon' || t === 'adjacentpokemon') return 'ally-or-enemy';
+    // PokeAPI "selected-pokemon"/"adjacent-pokemon" is the standard
+    // single-target token for normal attacks. Treating it as ally-or-enemy
+    // lets players self-target damaging moves and can wedge turn flow.
+    if (t === 'selectedpokemon' || t === 'adjacentpokemon') return 'enemy';
     if (t === 'user' || t === 'self') return 'self';
     if (t === 'bothfoes' || t === 'allopponents') return 'all-opponents';
     if (
@@ -1669,6 +1672,51 @@ export default function App() {
       (networkRole === 'host' && myPokemonIndex === 0) || 
       (networkRole === 'client' && myPokemonIndex === 1)
   );
+  // Turn-lock recovery:
+  // If stale/invalid pending actions survive a targeting error, the action
+  // grid can stay disabled forever ("already selected"). Keep player_input
+  // resilient by pruning dead-slot actions and re-pointing active index.
+  useEffect(() => {
+      if (battleState.phase !== 'player_input') return;
+      const activeSlots = battleState.playerTeam
+          .slice(0, 2)
+          .map((mon, idx) => ({ mon, idx }))
+          .filter(({ mon }) => !!mon && !mon.isFainted)
+          .map(({ idx }) => idx);
+      if (activeSlots.length === 0) return;
+      const aliveSet = new Set(activeSlots);
+      const filtered = battleState.pendingMoves.filter(a => aliveSet.has(a.actorIndex));
+      const seen = new Set<number>();
+      const deduped = filtered.filter((a) => {
+          if (seen.has(a.actorIndex)) return false;
+          seen.add(a.actorIndex);
+          return true;
+      });
+      const selectedActors = new Set(deduped.map(a => a.actorIndex));
+      const nextActor = activeSlots.find(i => !selectedActors.has(i)) ?? activeSlots[0];
+      const pendingChanged =
+          deduped.length !== battleState.pendingMoves.length ||
+          deduped.some((a, i) => battleState.pendingMoves[i]?.actorIndex !== a.actorIndex);
+      if (deduped.length >= activeSlots.length) {
+          if (pendingChanged) {
+              setBattleState(prev => ({
+                  ...prev,
+                  pendingMoves: deduped,
+                  phase: 'execution',
+                  activePlayerIndex: 0,
+                  ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: undefined },
+              }));
+          }
+          return;
+      }
+      if (pendingChanged || battleState.activePlayerIndex !== nextActor) {
+          setBattleState(prev => ({
+              ...prev,
+              pendingMoves: deduped,
+              activePlayerIndex: nextActor,
+          }));
+      }
+  }, [battleState.phase, battleState.playerTeam, battleState.pendingMoves, battleState.activePlayerIndex]);
   const selectedTargetingMode = getTargetingModeForSelection(
       battleState.ui.selectedMove as PokemonMove | undefined,
       battleState.ui.selectedItem,
@@ -1813,7 +1861,7 @@ export default function App() {
                   };
               } else {
                   let nextIndex = prev.activePlayerIndex + 1;
-                  while (nextIndex < prev.playerTeam.length && prev.playerTeam[nextIndex].isFainted) nextIndex++;
+                  while (nextIndex < prev.playerTeam.length && (!prev.playerTeam[nextIndex] || prev.playerTeam[nextIndex].isFainted)) nextIndex++;
                   if (nextIndex >= 2) {
                       multiplayer.send({
                           type: 'BATTLE_ACTION',
@@ -1977,7 +2025,7 @@ export default function App() {
           
           if (newPending.length >= activePlayerCount) return { ...prev, pendingMoves: newPending, phase: 'execution', activePlayerIndex: 0, ui: { selectionMode: 'MOVE', selectedMove: null, isFusionNext: false } };
           let nextIndex = prev.activePlayerIndex + 1;
-          while (nextIndex < prev.playerTeam.length && prev.playerTeam[nextIndex].isFainted) nextIndex++;
+          while (nextIndex < prev.playerTeam.length && (!prev.playerTeam[nextIndex] || prev.playerTeam[nextIndex].isFainted)) nextIndex++;
           
           if (nextIndex >= 2) return { ...prev, pendingMoves: newPending, phase: 'execution', activePlayerIndex: 0, ui: { selectionMode: 'MOVE', selectedMove: null, isFusionNext: false } };
           
@@ -4160,7 +4208,7 @@ export default function App() {
       }
 
       let firstActive = 0;
-      while (firstActive < playerTeam.length && playerTeam[firstActive].isFainted) firstActive++;
+      while (firstActive < playerTeam.length && (!playerTeam[firstActive] || playerTeam[firstActive].isFainted)) firstActive++;
 
       // Dev-only guardrail: if anything leaks battle-only state into a fresh
       // encounter, log it immediately so regressions are obvious.
