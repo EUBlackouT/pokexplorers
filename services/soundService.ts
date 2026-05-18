@@ -471,6 +471,16 @@ const isSameOriginUrl = (url: string): boolean => {
     }
 };
 
+const fetchAudioArrayBuffer = async (target: string): Promise<ArrayBuffer> => {
+    const response = await fetch(target);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('text/html')) {
+        throw new Error('Received HTML instead of audio');
+    }
+    return response.arrayBuffer();
+};
+
 const loadBuffer = async (url: string): Promise<AudioBuffer | null> => {
     const ctx = initAudio();
     if (!ctx) return null;
@@ -478,16 +488,25 @@ const loadBuffer = async (url: string): Promise<AudioBuffer | null> => {
     if (failedUrls.has(url)) return null;
 
     try {
-        const fetchUrl = isSameOriginUrl(url)
-            ? url
-            : `/api/media-proxy?url=${encodeURIComponent(url)}`;
-        const response = await fetch(fetchUrl);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('text/html')) {
-            throw new Error("Received HTML instead of audio");
+        let arrayBuffer: ArrayBuffer;
+        if (isSameOriginUrl(url)) {
+            arrayBuffer = await fetchAudioArrayBuffer(url);
+        } else {
+            // Prefer direct CDN fetch so move SFX still work on static deploys
+            // where /api/media-proxy may not be available.
+            try {
+                arrayBuffer = await fetchAudioArrayBuffer(url);
+            } catch (directError) {
+                const proxyUrl = `/api/media-proxy?url=${encodeURIComponent(url)}`;
+                try {
+                    arrayBuffer = await fetchAudioArrayBuffer(proxyUrl);
+                } catch (proxyError) {
+                    const directMsg = (directError as Error)?.message || 'direct fetch failed';
+                    const proxyMsg = (proxyError as Error)?.message || 'proxy fetch failed';
+                    throw new Error(`${directMsg}; ${proxyMsg}`);
+                }
+            }
         }
-        const arrayBuffer = await response.arrayBuffer();
         const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
         bufferCache.set(url, audioBuffer);
         return audioBuffer;
