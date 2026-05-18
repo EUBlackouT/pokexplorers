@@ -28,9 +28,9 @@ dist-ssr
 *.sln
 *.sw?
 
-# Local move SFX pack (~280 MB curated + ~1.1 GB raw). Generate locally via
-# scripts/build-local-move-sfx.ps1 after dropping the source pack in root.
-/public/sfx/moves/
+# Local source pack (~1.1 GB raw) stays outside git. The generated curated
+# output under public/sfx/moves is intentionally versioned so deploys serve
+# the exact same move sounds as local development.
 /Pokemon SFX Attack Moves & Sound Effects Collection/
 /Pokemon SFX Attack Moves & Sound Effects Collection.zip
 
