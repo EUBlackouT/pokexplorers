@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName, DialoguePayload, DialogueChoice, IncidentOutcome } from './types';
+import { Pokemon, PokemonMove, GamePhase, BattleState, PlayerGlobalState, Coordinate, TrainerData, WeatherType, TerrainType, StatBlock, StatStages, MetaState, StatName, DialoguePayload, DialogueChoice, IncidentOutcome, RouteArc } from './types';
 import { NEW_ABILITIES } from './data/abilities';
 import { NEW_MOVES } from './data/moves';
 import { getFusionMove } from './data/fusionChart';
@@ -140,7 +140,7 @@ const resetBattleTransientState = (mon: Pokemon): Pokemon => ({
     isInvulnerable: false,
     isTrapped: 0,
     trappedTurns: 0,
-    confusionTurns: 0,
+    confusionTurns: undefined,
     toxicTurns: 0,
     isFlinching: false,
     isLeechSeeded: false,
@@ -360,6 +360,40 @@ const compactRouteMood = (mood: string | undefined): string => {
     const [biome, role] = mood.split('|').map((s) => s.trim());
     if (!biome || !role) return mood;
     return `${biome[0]}${biome.slice(1).toLowerCase()} • ${role[0]}${role.slice(1).toLowerCase()}`;
+};
+
+const narratedTensionLine = (tier: string): string => {
+    switch (tier) {
+        case 'Calm': return 'The route feels safe, and your steps come easy.';
+        case 'Watchful': return 'Something feels active nearby, like the trail is listening back.';
+        case 'Risky': return 'You feel watched. One bad read could escalate this stretch quickly.';
+        case 'Dangerous': return 'The route feels hostile. Every decision now carries weight.';
+        case 'Critical': return 'Trouble is closing in. Push carefully or risk a collapse.';
+        default: return 'The route mood shifts, but the signs are hard to read.';
+    }
+};
+
+const narratedCuriosityLine = (tier: string): string => {
+    switch (tier) {
+        case 'Quiet': return 'No unusual signs ahead, just a steady road.';
+        case 'Hints Nearby': return 'Small details stand out if you slow down and look.';
+        case 'Strange Signs': return 'The area feels unusual, with clues pulling off the main path.';
+        case 'Mystery Building': return 'Several signs connect into a pattern worth following.';
+        case 'Discovery Imminent': return 'Something rare is close. The next few chunks could decide it.';
+        default: return 'There are hints around you, but no clear thread yet.';
+    }
+};
+
+const routeArcStageNarration = (stage: RouteArc['currentStage']): string => {
+    switch (stage) {
+        case 'rumor': return 'A rumor is spreading. Follow it before the trail goes cold.';
+        case 'trail': return 'You are on the trail now; recent signs still point forward.';
+        case 'complication': return 'The route is fighting back, and this chain is getting messy.';
+        case 'choice': return 'A decision point is coming. Your next call will shape the outcome.';
+        case 'payoff': return 'The payoff is close. Press on before it slips away.';
+        case 'aftermath': return 'The aftermath is unfolding; watch for consequences and echoes.';
+        default: return 'A route thread is still active nearby.';
+    }
 };
 
 const DIALOGUE_MIN_READ_MS = 900;
@@ -1157,6 +1191,8 @@ export default function App() {
   // toast for, so chunk re-entry isn't spammy. String key = "cx,cy".
   const seenOutbreakChunksRef = useRef<Set<string>>(new Set());
   const lastRoutePreviewChunkRef = useRef<string>('');
+  const lastRoutePreviewToastDistanceRef = useRef<number>(-999);
+  const lastRoutePreviewTierRef = useRef<{ tension: string; curiosity: string }>({ tension: '', curiosity: '' });
   const lastIncidentPromptChunkRef = useRef<string>('');
   const lastLanePromptDistanceRef = useRef<number>(-999);
   const dialogueOpenedAtRef = useRef<number>(0);
@@ -4340,21 +4376,21 @@ export default function App() {
           p.heldItem = undefined;
       }
       if (p.heldItem?.id === 'persim-berry' && p.confusionTurns && p.confusionTurns > 0 && !berrySuppressed) {
-          p.confusionTurns = 0;
+          p.confusionTurns = undefined;
           logs.push(`${p.name} consumed its Persim Berry and cured its confusion!`);
           p.heldItem = undefined;
       }
       if (p.heldItem?.id === 'lum-berry' && (p.status || (p.confusionTurns && p.confusionTurns > 0)) && !berrySuppressed) {
           const oldStatus = p.status || 'confusion';
           p.status = undefined;
-          p.confusionTurns = 0;
+          p.confusionTurns = undefined;
           logs.push(`${p.name} consumed its Lum Berry and cured its ${oldStatus}!`);
           popupItem(side, slot, 'Lum Berry');
 
           // Symmetry Ability: Share berry effect with ally
           if (p.ability.name === 'Symmetry' && ally) {
               ally.status = undefined;
-              ally.confusionTurns = 0;
+              ally.confusionTurns = undefined;
               logs.push(`${ally.name} was also cured due to Symmetry!`);
               popupAbility(side, slot, 'Symmetry');
               popupStatus(side, allySlot, 'cured');
@@ -4998,7 +5034,7 @@ export default function App() {
                     oldMon.isProtected = false;
                     oldMon.isInvulnerable = false;
                     oldMon.isTrapped = 0;
-                    oldMon.confusionTurns = 0;
+                    oldMon.confusionTurns = undefined;
                     oldMon.isLeechSeeded = false;
                     oldMon.isCursed = false;
                     oldMon.isNightmareActive = false;
@@ -5029,7 +5065,7 @@ export default function App() {
                     oldMon.isProtected = false;
                     oldMon.isInvulnerable = false;
                     oldMon.isTrapped = 0;
-                    oldMon.confusionTurns = 0;
+                    oldMon.confusionTurns = undefined;
                     oldMon.isLeechSeeded = false;
                     oldMon.isCursed = false;
                     oldMon.isNightmareActive = false;
@@ -8900,7 +8936,7 @@ export default function App() {
                 const ally = tempPTeam[allyIdx];
                 if (ally && !ally.isFainted && (ally.status || (ally.confusionTurns && ally.confusionTurns > 0))) {
                     ally.status = undefined;
-                    ally.confusionTurns = 0;
+                    ally.confusionTurns = undefined;
                     tempLogs.push(`${mon.name}'s Tag Cleanse cured its ally!`);
                 }
             }
@@ -9425,7 +9461,7 @@ export default function App() {
                 const ally = tempETeam[allyIdx];
                 if (ally && !ally.isFainted && (ally.status || (ally.confusionTurns && ally.confusionTurns > 0))) {
                     ally.status = undefined;
-                    ally.confusionTurns = 0;
+                    ally.confusionTurns = undefined;
                     tempLogs.push(`Enemy ${mon.name}'s Tag Cleanse cured its ally!`);
                 }
             }
@@ -11086,24 +11122,55 @@ export default function App() {
           const memoryLines = formatRouteMemory(playerState.routeState).slice(-2);
           const memoryRecap = memoryLines.join(' | ');
           const rs = normalizeRouteState(playerState.routeState);
+          const chunkDistance = Math.floor(Math.sqrt((playerState.chunkPos.x * playerState.chunkPos.x) + (playerState.chunkPos.y * playerState.chunkPos.y)));
           const stackedRisk = (rs.routeFlags || []).filter((f: string) => ['angeredPoachers', 'factionAlerted', 'ignoredDistressCall'].includes(f)).length >= 2;
           const readableMood = compactRouteMood(chunk.routePreview.mood);
+          const tensionLabel = chunk.routePreview.tensionLabel || tensionTierLabel(rs.routeTension);
+          const curiosityLabel = chunk.routePreview.curiosityLabel || curiosityTierLabel(rs.routeCuriosity);
+          const activeArc = (rs.activeRouteArcs || [])[0];
+          const hasQuestThread = !!activeArc || (rs.queuedEchoes || []).length > 0;
+          const tierChanged =
+              lastRoutePreviewTierRef.current.tension !== tensionLabel
+              || lastRoutePreviewTierRef.current.curiosity !== curiosityLabel;
+          const chunksSincePreviewToast = chunkDistance - lastRoutePreviewToastDistanceRef.current;
+          const cadenceWindowReached = chunksSincePreviewToast >= 4;
+          const highPressureBeat = chunk.chunkRole === 'setpiece' || chunk.chunkRole === 'consequence';
+          const shouldShowPreviewToast = hasQuestThread || highPressureBeat || tierChanged || cadenceWindowReached;
           const areaLabel = playerState.mapId.replace('chunk_', '').replace('_', ',');
-          showToast(
-              `Area: ${areaLabel}\nMood: ${readableMood}\nState: ${chunk.routePreview.tensionLabel || 'Watchful'} / ${chunk.routePreview.curiosityLabel || 'Hints Nearby'}\nDanger: ${chunk.routePreview.dangerHint}\nOpportunity: ${chunk.routePreview.rewardHint}${stackedRisk ? '\nRisk Stack: Consequences may chain.' : ''}${memoryRecap ? `\nMemory: ${memoryRecap}` : ''}`,
-              'story',
-              { kicker: 'Route Preview', ttl: 5200 },
-          );
+          if (shouldShowPreviewToast) {
+              const storyLines = [
+                  `You enter ${areaLabel} (${readableMood}).`,
+                  narratedTensionLine(tensionLabel),
+                  narratedCuriosityLine(curiosityLabel),
+                  `Ahead: ${chunk.routePreview.dangerHint}.`,
+                  `Potential reward: ${chunk.routePreview.rewardHint}.`,
+              ];
+              if (activeArc) {
+                  storyLines.push(`Quest thread: ${activeArc.title}. ${routeArcStageNarration(activeArc.currentStage)}`);
+              } else if ((rs.queuedEchoes || []).length > 0) {
+                  storyLines.push('A previous choice is still unresolved. Watch for a follow-up soon.');
+              }
+              if (stackedRisk) storyLines.push('Risk stack is active: consequences may chain if you overpush.');
+              if (memoryRecap) storyLines.push(`Recent thread: ${memoryRecap}`);
+              showToast(
+                  storyLines.join('\n'),
+                  'story',
+                  { kicker: hasQuestThread ? 'Route Story' : 'Route Glimpse', ttl: hasQuestThread ? 6200 : 5200 },
+              );
+              lastRoutePreviewToastDistanceRef.current = chunkDistance;
+              lastRoutePreviewTierRef.current = { tension: tensionLabel, curiosity: curiosityLabel };
+          }
           logRoutePlaytest('route_preview', {
               lane: (rs.routeFlags || []).find((f: string) => /^lane_/.test(f)) || 'lane_main',
               chunkId: playerState.mapId,
               chunkRole: chunk.chunkRole || 'breather',
               incidentFamily: chunk.routeIncident?.family || null,
               incidentId: chunk.routeIncident?.id || null,
-              tension: chunk.routePreview.tensionLabel || tensionTierLabel(rs.routeTension),
-              curiosity: chunk.routePreview.curiosityLabel || curiosityTierLabel(rs.routeCuriosity),
+              tension: tensionLabel,
+              curiosity: curiosityLabel,
               memoryShown: memoryLines,
               stackedRisk,
+              previewToastShown: shouldShowPreviewToast,
           });
       }
 
