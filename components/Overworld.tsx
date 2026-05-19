@@ -329,20 +329,6 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
     const [cameraOffset, setCameraOffset] = useState({ x: 0, y: 0 });
 
     useEffect(() => {
-        const updateCamera = () => {
-             const myPos = myPlayerId === 1 ? p1Pos : p2Pos;
-             const viewportW = window.innerWidth;
-             const viewportH = window.innerHeight;
-             const targetX = myPos.x * TILE_SIZE + TILE_SIZE / 2;
-             const targetY = myPos.y * TILE_SIZE + TILE_SIZE / 2;
-             setCameraOffset({ x: Math.floor(viewportW / 2 - targetX), y: Math.floor(viewportH / 2 - targetY) });
-        };
-        window.addEventListener('resize', updateCamera);
-        updateCamera();
-        return () => window.removeEventListener('resize', updateCamera);
-    }, [p1Pos, p2Pos, myPlayerId]);
-
-    useEffect(() => {
         const tick = () => {
             if (mapId.includes('interior') || mapId.includes('center') || mapId.includes('mart') || mapId.includes('cave')) {
                 setTimeOfDay('day');
@@ -415,6 +401,24 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
     }
 
     const layout = currentMap ? (customLayout || currentMap.layout) : null;
+    const mapPixelWidth = (layout && layout[0] ? layout[0].length : 0) * TILE_SIZE;
+    const mapPixelHeight = (layout ? layout.length : 0) * TILE_SIZE;
+
+    useEffect(() => {
+        const updateCamera = () => {
+            const viewportW = window.innerWidth;
+            const viewportH = window.innerHeight;
+            // Keep the map static relative to camera: center the active zone
+            // in the viewport and let the player sprite move inside it.
+            setCameraOffset({
+                x: Math.floor((viewportW - mapPixelWidth) / 2),
+                y: Math.floor((viewportH - mapPixelHeight) / 2),
+            });
+        };
+        window.addEventListener('resize', updateCamera);
+        updateCamera();
+        return () => window.removeEventListener('resize', updateCamera);
+    }, [mapId, mapPixelWidth, mapPixelHeight]);
 
     useEffect(() => {
         if (!currentMap) return;

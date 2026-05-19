@@ -1250,6 +1250,7 @@ export default function App() {
   const prevPhaseForMusicRef = useRef<GamePhase>(phase);
   const lastOverworldMusicZoneRef = useRef<'interior' | 'town' | 'water' | 'route' | null>(null);
   const stickyRouteTrackRef = useRef<string>(BGM_TRACKS.ROUTE_A);
+  const lastOverworldBgmUrlRef = useRef<string | null>(null);
   // Rival intercept queue -- see RIVAL_MILESTONES below. The rival
   // ambushes the player when they FIRST cross a distance milestone.
   // We record which milestones have already fired via the
@@ -12196,6 +12197,7 @@ export default function App() {
       };
 
       if (phase === GamePhase.MENU || phase === GamePhase.STARTER_SELECT) {
+          lastOverworldBgmUrlRef.current = null;
           if (skipNextMenuTitleBgmRef.current) {
               skipNextMenuTitleBgmRef.current = false;
               return;
@@ -12204,6 +12206,7 @@ export default function App() {
           return;
       }
       if (phase === GamePhase.BATTLE) {
+          lastOverworldBgmUrlRef.current = null;
           playBGM(BGM_TRACKS.BATTLE, 0.3, 600);
           return;
       }
@@ -12217,11 +12220,20 @@ export default function App() {
       if (prev === GamePhase.BATTLE && !pendingGauntletNextRef.current) {
           const outcome = postBattleMusicOutcomeRef.current ?? 'victory';
           postBattleMusicOutcomeRef.current = null;
+          lastOverworldBgmUrlRef.current = owUrl;
           transitionFromBattleMusic(outcome, owUrl, 0.3);
           return;
       }
 
+      // Keep overworld music truly sticky across chunk transitions: if we are
+      // already in overworld and the resolved track is unchanged, do not
+      // reissue playBGM at all.
+      if (prev === GamePhase.OVERWORLD && lastOverworldBgmUrlRef.current === owUrl) {
+          return;
+      }
+
       postBattleMusicOutcomeRef.current = null;
+      lastOverworldBgmUrlRef.current = owUrl;
       playBGM(owUrl);
   }, [phase, musicStarted, playerState.mapId, loadedChunks]);
 
