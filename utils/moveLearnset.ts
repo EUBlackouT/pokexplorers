@@ -18,6 +18,15 @@ const PROXY = (url: string) => `/api/media-proxy?url=${encodeURIComponent(url)}`
 // re-fetch the same URL dozens of times.
 const moveDetailCache = new Map<string, PokemonMove>();
 
+const findCustomMoveDef = (name: string): (typeof NEW_MOVES)[string] | null => {
+    if (NEW_MOVES[name]) return NEW_MOVES[name];
+    const wanted = name.toLowerCase().replace(/[\s_]+/g, '-');
+    const matchKey = Object.keys(NEW_MOVES).find(
+        (k) => k.toLowerCase().replace(/[\s_]+/g, '-') === wanted,
+    );
+    return matchKey ? NEW_MOVES[matchKey] : null;
+};
+
 export interface LearnableEntry {
     /** Slug / display key, e.g. "thunder-shock". */
     name: string;
@@ -56,8 +65,9 @@ export const hydrateMove = async (entry: Pick<MovePoolItem, 'name' | 'url'>): Pr
     if (cached) return cached;
 
     // Custom / competitive move bank.
-    if (!entry.url && NEW_MOVES[entry.name]) {
-        const md = NEW_MOVES[entry.name];
+    const customDef = findCustomMoveDef(entry.name);
+    if (!entry.url && customDef) {
+        const md = customDef;
         const newMove: PokemonMove = {
             name: entry.name,
             url: '',
@@ -77,9 +87,18 @@ export const hydrateMove = async (entry: Pick<MovePoolItem, 'name' | 'url'>): Pr
     if (!entry.url) return null;
 
     try {
-        const r = await fetch(PROXY(entry.url));
-        if (!r.ok) return null;
-        const data = await r.json();
+        let data: any = null;
+        try {
+            const direct = await fetch(entry.url);
+            if (direct.ok) data = await direct.json();
+        } catch {
+            // Fall through to proxy request.
+        }
+        if (!data) {
+            const proxied = await fetch(PROXY(entry.url));
+            if (!proxied.ok) return null;
+            data = await proxied.json();
+        }
         const mv: PokemonMove = {
             name: data.name,
             url: entry.url,

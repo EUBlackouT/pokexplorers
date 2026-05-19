@@ -14,7 +14,7 @@ import {
 import { db, auth } from '../firebase';
 
 export interface NetworkPayload {
-    type: 'SYNC_STATE' | 'GAME_SYNC' | 'MAP_DATA_SYNC' | 'INPUT_MOVE' | 'INPUT_BATTLE_ACTION' | 'INPUT_MENU' | 'INPUT_EMOTE' | 'BATTLE_REQUEST' | 'BATTLE_ACCEPT' | 'BATTLE_ACTION' | 'BATTLE_START' | 'TRADE_EVENT' | 'BOX_SYNC';
+    type: 'SYNC_STATE' | 'GAME_SYNC' | 'MAP_DATA_SYNC' | 'INPUT_MOVE' | 'INPUT_BATTLE_ACTION' | 'INPUT_BATTLE_CANCEL' | 'INPUT_MENU' | 'INPUT_EMOTE' | 'BATTLE_REQUEST' | 'BATTLE_ACCEPT' | 'BATTLE_ACTION' | 'BATTLE_START' | 'TRADE_EVENT' | 'BOX_SYNC';
     payload: any;
 }
 
@@ -359,7 +359,7 @@ export class MultiplayerService {
                         timestamp: serverTimestamp()
                     }
                 });
-            } else if (data.type === 'INPUT_BATTLE_ACTION' || data.type === 'INPUT_MENU' || data.type === 'INPUT_MOVE') {
+            } else if (data.type === 'INPUT_BATTLE_ACTION' || data.type === 'INPUT_BATTLE_CANCEL' || data.type === 'INPUT_MENU' || data.type === 'INPUT_MOVE') {
                 const playerRef = doc(db, 'rooms', this.roomId, 'players', uid);
                 await updateDoc(playerRef, {
                     lastInput: {

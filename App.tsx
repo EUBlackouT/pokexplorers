@@ -415,6 +415,13 @@ const seededUnitFloat = (seed: string): number => {
     return (h % 10000) / 10000;
 };
 
+const mergePostBattleTeam = (prevTeam: Pokemon[], survivingTeam: Pokemon[]): Pokemon[] => {
+    if (prevTeam.length <= survivingTeam.length) return survivingTeam;
+    // Captures are appended during battle resolution; preserve that tail when
+    // reward/state writes happen after victory.
+    return [...survivingTeam, ...prevTeam.slice(survivingTeam.length)];
+};
+
 /**
  * RIVAL MILESTONES ------------------------------------------------------
  *
@@ -1340,12 +1347,12 @@ export default function App() {
       
       // Check for level-up evolution if rare candy was used
           if (itemId === 'rare-candy' && rareCandyLeveled) {
-              const canEvolve = await checkEvolution(pokemon);
+              const postLevelMon = { ...pokemon, level: Math.min(levelCap, pokemon.level + 1) };
+              const canEvolve = await checkEvolution(postLevelMon);
               if (canEvolve) {
                   // Build the evolved form now (off the post-level-up snapshot
                   // so stat recomputation uses the new level) and queue the
                   // cinematic. The `onDone` callback writes back to state.
-                  const postLevelMon = { ...pokemon, level: Math.min(levelCap, pokemon.level + 1) };
                   const evo = await evolvePokemon(postLevelMon);
                   queueEvolution(postLevelMon, evo, (final) => {
                       setPlayerState(prev => ({
@@ -1708,6 +1715,38 @@ export default function App() {
       (networkRole === 'host' && myPokemonIndex === 0) || 
       (networkRole === 'client' && myPokemonIndex === 1)
   );
+  const cancelQueuedAction = useCallback(() => {
+      if (battleState.phase !== 'player_input') return;
+      if (networkRole === 'client') {
+          multiplayer.send({ type: 'INPUT_BATTLE_CANCEL', payload: { activePlayerIndex: 1 } });
+      }
+      setBattleState(prev => {
+          if (prev.phase !== 'player_input') return prev;
+          const actorToCancel =
+              networkRole === 'client'
+                  ? 1
+                  : (prev.pendingMoves.some(a => a.actorIndex === myPokemonIndex)
+                      ? myPokemonIndex
+                      : prev.pendingMoves[prev.pendingMoves.length - 1]?.actorIndex);
+          if (actorToCancel === undefined) return prev;
+          const remaining = prev.pendingMoves.filter(a => a.actorIndex !== actorToCancel);
+          if (remaining.length === prev.pendingMoves.length) return prev;
+          const activeSlots = prev.playerTeam
+              .slice(0, 2)
+              .map((mon, idx) => ({ mon, idx }))
+              .filter(({ mon }) => !!mon && !mon.isFainted)
+              .map(({ idx }) => idx);
+          const selectedActors = new Set(remaining.map(a => a.actorIndex));
+          const nextActor = activeSlots.find(i => !selectedActors.has(i)) ?? activeSlots[0] ?? 0;
+          return {
+              ...prev,
+              pendingMoves: remaining,
+              phase: 'player_input',
+              activePlayerIndex: nextActor,
+              ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: undefined, isFusionNext: false },
+          };
+      });
+  }, [battleState.phase, myPokemonIndex, networkRole]);
   // Turn-lock recovery:
   // If stale/invalid pending actions survive a targeting error, the action
   // grid can stay disabled forever ("already selected"). Keep player_input
@@ -4238,6 +4277,7 @@ export default function App() {
                   bgUrl,
                   initialWeather: startWeather,
                   initialCombo,
+                  initialEnemyCombo: enemySyncBoost,
                   isPvP: false
               }
           });
@@ -5156,16 +5196,8 @@ export default function App() {
                     tempLogs.push(`${newMon.name}'s Jetstream set a one-turn Tailwind!`);
                 }
 
-                // Venomous Aura Ability
-                if (newMon.ability.name === 'VenomousAura') {
-                    const foes = isPlayer ? tempETeam : tempPTeam;
-                    foes.forEach(f => {
-                        if (f && !f.isFainted && !f.status && Math.random() < 0.3) {
-                            f.status = 'poison';
-                            tempLogs.push(`${newMon.name}'s Venomous Aura poisoned ${f.name}!`);
-                        }
-                    });
-                }
+                // Venomous Aura applies in the consolidated switch-in ability
+                // block below to avoid duplicate roll/application paths.
                 
                 // Antibody Relay: When switching in, if ally is poisoned, cure it and boost own stats
                 if (newMon.ability.name === 'AntibodyRelay') {
@@ -5366,11 +5398,15 @@ export default function App() {
                     tempLogs.push(`${p.name}'s Sync Boost charged the gauge!`);
                 }
                 if (p.ability.name === 'VenomousAura') {
-                    tempETeam.slice(0, 2).forEach(t => {
-                        if (!t.status && !t.isFainted && !t.types.includes('poison') && !t.types.includes('steel')) {
-                            t.status = 'poison';
-                            tempLogs.push(`${t.name} was poisoned by ${p.name}'s Venomous Aura!`);
-                        }
+                    const targets = (isPlayer ? tempETeam : tempPTeam).slice(0, 2);
+                    targets.forEach((t, targetIdx) => {
+                        if (!t || t.isFainted || t.status) return;
+                        const tTypes = t.types.map(tt => tt.toLowerCase());
+                        if (tTypes.includes('poison') || tTypes.includes('steel')) return;
+                        if (Math.random() >= 0.3) return;
+                        t.status = 'poison';
+                        tempLogs.push(`${t.name} was poisoned by ${p.name}'s Venomous Aura!`);
+                        popupStatus(isPlayer ? 'enemy' : 'player', (targetIdx === 1 ? 1 : 0) as 0 | 1, 'poison');
                     });
                 }
                 if (p.ability.name === 'Intimidate') {
@@ -6357,23 +6393,8 @@ export default function App() {
                 }
                 let totalDamage = 0;
 
-                // Harmony Engine: Link Gauge gains +20 on hit if allies share primary type
-                if (actor.ability.name === 'HarmonyEngine') {
-                    const allyIdx = 1 - actorIdx;
-                    const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
-                    if (ally && !ally.isFainted && ally.types[0] === actor.types[0]) {
-                        setBattleState(prev => {
-                            if (action.isPlayer) {
-                                const newMeter = Math.min(100, prev.comboMeter + 20);
-                                return { ...prev, comboMeter: newMeter, fusionChargeActive: newMeter === 100 };
-                            } else {
-                                const newMeter = Math.min(100, prev.enemyComboMeter + 20);
-                                return { ...prev, enemyComboMeter: newMeter, enemyFusionChargeActive: newMeter === 100 };
-                            }
-                        });
-                        tempLogs.push(`${actor.name}'s Harmony Engine boosted the Sync Gauge!`);
-                    }
-                }
+                // Harmony Engine bonus is applied in the central gauge update
+                // block below so gauge math stays deterministic per hit.
 
                 // Sour Sap Ability: Grass moves may lower Sp. Def
                 if (actor.ability.name === 'SourSap' && moveTypeLC === 'grass' && Math.random() < 0.2) {
@@ -7212,14 +7233,14 @@ export default function App() {
                 }
 
                 // Aftershock Ability
-                if (actor.ability.name === 'Aftershock' && action.move?.type.toLowerCase() === 'electric') {
+                if (actor.ability.name === 'Aftershock' && ((action.move?.type) || '').toLowerCase() === 'electric') {
                     const extraDamage = Math.floor(target.maxHp / 16);
                     target.currentHp = Math.max(0, target.currentHp - extraDamage);
                     tempLogs.push(`${target.name} was hurt by the Aftershock!`);
                 }
 
                 // Slipstream Ability
-                if (actor.ability.name === 'Slipstream' && action.move?.type.toLowerCase() === 'flying' && actor.statStages) {
+                if (actor.ability.name === 'Slipstream' && ((action.move?.type) || '').toLowerCase() === 'flying' && actor.statStages) {
                     actor.statStages.speed = Math.min(6, (actor.statStages.speed || 0) + 1);
                     tempLogs.push(`${actor.name}'s Slipstream boosted its Speed!`);
                 }
@@ -7469,7 +7490,7 @@ export default function App() {
                 }
 
                 // Whirlpool Heart Ability
-                if (actor.ability.name === 'WhirlpoolHeart' && action.move?.type.toLowerCase() === 'water') {
+                if (actor.ability.name === 'WhirlpoolHeart' && ((action.move?.type) || '').toLowerCase() === 'water') {
                     const allyIdx = 1 - action.actorIndex;
                     const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
                     if (ally && !ally.isFainted) {
@@ -7480,7 +7501,7 @@ export default function App() {
                 }
 
                 // Amber Core Ability
-                if (actor.ability.name === 'AmberCore' && action.move?.type.toLowerCase() === 'bug') {
+                if (actor.ability.name === 'AmberCore' && ((action.move?.type) || '').toLowerCase() === 'bug') {
                     const heal = Math.floor(actor.maxHp / 16);
                     actor.currentHp = Math.min(actor.maxHp, actor.currentHp + heal);
                     tempLogs.push(`${actor.name}'s Amber Core restored its HP!`);
@@ -7515,8 +7536,8 @@ export default function App() {
                         const ally = action.isPlayer ? tempPTeam[allyIdx] : tempETeam[allyIdx];
                         if (ally && !ally.isFainted && ally.types[0] === actor.types[0]) {
                             boost += 20;
-                        } else {
-                            boost += 5;
+                            tempLogs.push(`${actor.name}'s Harmony Engine boosted the Sync Gauge (+20)!`);
+                            popupAbility(action.isPlayer ? 'player' : 'enemy', actorIdx as 0 | 1, 'Harmony Engine');
                         }
                     }
 
@@ -10198,11 +10219,10 @@ export default function App() {
         setBattleState(prev => ({ ...prev, battleStreak: newStreak, playerTeam: tempPTeam, enemyTeam: tempETeam, logs: tempLogs.slice(-BATTLE_LOG_TAIL) }));
         await delay(900);
 
-        // Permanent Death: Remove fainted monsters from team. Also strip
-        // in-battle Rift transform flags (Tera/Mega/Z) so they don't
-        // bleed into the overworld / next encounter.
+        // Keep the full roster after battle (fainted mons stay in party
+        // until healed/revived) and strip battle-only transform flags so
+        // they don't bleed into overworld/next encounter.
         const survivingTeam = tempPTeam
-            .filter(p => !p.isFainted)
             .map(p => ({
                 ...resetBattleTransientState(p),
                 teraType: undefined,
@@ -10598,7 +10618,7 @@ export default function App() {
                 if (!_trainerRewardOk) {
                     setPlayerState(prev => ({
                         ...prev,
-                        team: survivingTeam,
+                        team: mergePostBattleTeam(prev.team, survivingTeam),
                         money: prev.money + 250,
                     }));
                     setDialogue([
@@ -10632,7 +10652,7 @@ export default function App() {
                 const lt = prev.lifetime ?? { shiniesCaught: 0, trainersDefeated: 0, biggestStreak: 0, currentStreak: 0, totalMoneyEarned: 0, graveyardsVisited: 0, visitedBiomes: [] };
                 return {
                     ...prev,
-                    team: survivingTeam,
+                    team: mergePostBattleTeam(prev.team, survivingTeam),
                     money: prev.money + wildMoney,
                     inventory: { ...prev.inventory, items: newItems },
                     run: {
@@ -10657,7 +10677,7 @@ export default function App() {
             setDialogue(wildMsgs);
             } catch (wildErr) {
                 console.error('[Battle] Wild reward chain failed:', wildErr);
-                setPlayerState(prev => ({ ...prev, team: survivingTeam, money: prev.money + 100 }));
+                setPlayerState(prev => ({ ...prev, team: mergePostBattleTeam(prev.team, survivingTeam), money: prev.money + 100 }));
                 setDialogue(['Wild Pokémon defeated!', '(Reward chain hit a snag, awarded $100 baseline.)']);
                 showToast('Reward chain recovered', 'info', { kicker: 'BATTLE' });
             }
@@ -11507,7 +11527,7 @@ export default function App() {
         const { battleId, opponentId, opponentInfo, isLead } = data.payload;
         startMultiplayerBattle(battleId, opponentId, opponentInfo, isLead);
     } else if (data.type === 'BATTLE_START') {
-        const { playerTeam: netPlayerTeam, enemies, isBoss, isTrainer, trainerData, biome, tileType, bgUrl, initialWeather, initialCombo, isPvP, battleId: netBattleId } = data.payload;
+        const { playerTeam: netPlayerTeam, enemies, isBoss, isTrainer, trainerData, biome, tileType, bgUrl, initialWeather, initialCombo, initialEnemyCombo, isPvP, battleId: netBattleId } = data.payload;
         if (netBattleId) setBattleId(netBattleId);
         setIsMultiplayerBattle(true);
         setPhase(GamePhase.BATTLE);
@@ -11532,7 +11552,7 @@ export default function App() {
             isTrainerBattle: isTrainer,
             isPvP: !!isPvP,
             comboMeter: initialCombo,
-            enemyComboMeter: 0,
+            enemyComboMeter: Math.min(100, Number.isFinite(initialEnemyCombo) ? initialEnemyCombo : 0),
             currentTrainerId: trainerData?.id,
             weather: initialWeather,
             terrain: 'none',
@@ -11646,6 +11666,21 @@ export default function App() {
                     const hasNoTeams = !battleStateRef.current || (battleStateRef.current.playerTeam.length === 0 && battleStateRef.current.enemyTeam.length === 0);
                     if (hasNoTeams || battleStateRef.current?.phase !== 'player_input' || netBS.phase === 'execution') {
                         setBattleState(mergedBs);
+                    } else {
+                        // Even while keeping local input state during player_input,
+                        // continuously sync gauge values and field timers so client
+                        // HUD numbers do not drift from host truth.
+                        setBattleState(prev => ({
+                            ...prev,
+                            comboMeter: netBS.comboMeter,
+                            enemyComboMeter: netBS.enemyComboMeter,
+                            fusionChargeActive: netBS.fusionChargeActive,
+                            enemyFusionChargeActive: netBS.enemyFusionChargeActive,
+                            weather: netBS.weather,
+                            terrain: netBS.terrain,
+                            weatherTurns: netBS.weatherTurns,
+                            terrainTurns: netBS.terrainTurns,
+                        }));
                     }
                 }
             } else {
@@ -11656,6 +11691,29 @@ export default function App() {
         if (isHostRef.current) handleMapMove(data.payload, 2);
     } else if (data.type === 'INPUT_BATTLE_ACTION') { 
         if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex, data.payload.targetSide || 'enemy');
+    } else if (data.type === 'INPUT_BATTLE_CANCEL') {
+        if (isHostRef.current) {
+            const actorIndex = Number.isFinite(data.payload?.activePlayerIndex) ? data.payload.activePlayerIndex : 1;
+            setBattleState(prev => {
+                if (prev.phase !== 'player_input') return prev;
+                const remaining = prev.pendingMoves.filter(a => a.actorIndex !== actorIndex);
+                if (remaining.length === prev.pendingMoves.length) return prev;
+                const activeSlots = prev.playerTeam
+                    .slice(0, 2)
+                    .map((mon, idx) => ({ mon, idx }))
+                    .filter(({ mon }) => !!mon && !mon.isFainted)
+                    .map(({ idx }) => idx);
+                const selectedActors = new Set(remaining.map(a => a.actorIndex));
+                const nextActor = activeSlots.find(i => !selectedActors.has(i)) ?? activeSlots[0] ?? 0;
+                return {
+                    ...prev,
+                    pendingMoves: remaining,
+                    phase: 'player_input',
+                    activePlayerIndex: nextActor,
+                    ui: { ...prev.ui, selectionMode: 'MOVE', selectedMove: null, selectedItem: undefined, isFusionNext: false },
+                };
+            });
+        }
     } else if (data.type === 'INPUT_MENU') {
         if (isHostRef.current) {
             // Defensive: payload may be a bare string (legacy clients) or
@@ -12578,7 +12636,7 @@ export default function App() {
                        onAdvance={() => closeDialogue(null)}
                        onChoice={(id) => closeDialogue(id)}
                    />
-                   <div className="absolute top-6 left-6 z-40 flex gap-3">{playerState.team.slice(0,3).map((p,i)=><div key={i} className="scale-90 origin-top-left"><HealthBar current={p.currentHp} max={p.maxHp} label={p.name} level={p.level} status={p.status} /></div>)}</div>
+                   <div className="absolute top-6 left-6 z-40 flex flex-wrap gap-2 max-w-[50vw]">{playerState.team.slice(0,6).map((p,i)=><div key={i} className="scale-90 origin-top-left"><HealthBar current={p.currentHp} max={p.maxHp} label={p.name} level={p.level} status={p.status} /></div>)}</div>
                    <div className="absolute top-6 right-6 z-40 flex flex-col gap-3 items-end">
                         <div className="bg-gradient-to-br from-amber-500/90 to-amber-700/90 px-4 py-2 border-2 border-amber-300/80 text-white text-sm font-bold rounded-lg shadow-lg flex items-center gap-2">
                             <span className="text-amber-200">$</span>
@@ -13170,11 +13228,17 @@ export default function App() {
                                       <ActionButton label="RUN" color="bg-red-600" onClick={() => { unlockAudio(); if (isMyTurn) handleRun() }} disabled={!isMyTurn} />
                                   </div>
                                   {/* Multiplayer Turn Indicator */}
-                                  {(networkRole !== 'none' || !isMyTurn) && (
+                                  {(networkRole !== 'none' || !isMyTurn || hasSelected) && (
                                       <div className="col-span-full text-center text-xs text-yellow-400 mt-2 animate-pulse">
-                                          {hasSelected ? 'Waiting for other player...' : 
+                                          {hasSelected && networkRole === 'none' ? 'Action locked in...' :
+                                           hasSelected ? 'Waiting for other player...' : 
                                            (networkRole === 'host' && battleState.activePlayerIndex === 1) ? 'Waiting for Client...' : 
                                            (networkRole === 'client' && battleState.activePlayerIndex === 0) ? 'Waiting for Host...' : ''}
+                                      </div>
+                                  )}
+                                  {battleState.pendingMoves.length > 0 && battleState.phase === 'player_input' && (
+                                      <div className="col-span-full flex justify-center mt-1">
+                                          <ActionButton label="CANCEL LAST ACTION" color="bg-slate-600" onClick={cancelQueuedAction} />
                                       </div>
                                   )}
 

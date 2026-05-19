@@ -43,6 +43,18 @@ const dedupeMoveSet = (moves: PokemonMove[], max: number = 4): PokemonMove[] => 
     return out;
 };
 
+const isDamagingMove = (move?: PokemonMove): boolean =>
+    !!move && !!move.power && move.power > 0 && move.damage_class !== 'status';
+
+const chooseMoveReplacementSlot = (moves: PokemonMove[]): number => {
+    // Prefer replacing a non-damaging move first so we never brick a mon
+    // into all-status by auto-learn logic.
+    const nonDamageIdx = moves.findIndex((m) => !isDamagingMove(m));
+    if (nonDamageIdx >= 0) return nonDamageIdx;
+    // If all four are damaging, replace the oldest slot.
+    return 0;
+};
+
 /**
  * Type-based fallback pool for custom abilities.
  *
@@ -3086,7 +3098,8 @@ export const fetchCompetitivePokemon = async (id: number, level: number = 50): P
                 // Add to moveset if not already there
                 if (!mon.moves.find(m => m.name.toLowerCase() === moveName.toLowerCase())) {
                     if (mon.moves.length >= 4) {
-                        mon.moves[Math.floor(Math.random() * 4)] = newMove;
+                        const replaceIdx = chooseMoveReplacementSlot(mon.moves);
+                        mon.moves[replaceIdx] = newMove;
                     } else {
                         mon.moves.push(newMove);
                     }
@@ -3116,6 +3129,28 @@ export const getEvolutionTarget = async (pokemon: Pokemon, itemId?: string): Pro
         };
 
         const currentNode = findNode(chain, pokemon.name);
+
+        const hasSpecialLevelConstraint = (detail: any): boolean => {
+            if (!detail) return true;
+            return !!(
+                detail.item ||
+                detail.held_item ||
+                detail.known_move ||
+                detail.known_move_type ||
+                detail.location ||
+                detail.min_happiness !== null && detail.min_happiness !== undefined ||
+                detail.min_beauty !== null && detail.min_beauty !== undefined ||
+                detail.min_affection !== null && detail.min_affection !== undefined ||
+                detail.needs_overworld_rain ||
+                detail.party_species ||
+                detail.party_type ||
+                detail.trade_species ||
+                detail.time_of_day ||
+                detail.turn_upside_down ||
+                detail.gender !== null && detail.gender !== undefined ||
+                detail.relative_physical_stats !== null && detail.relative_physical_stats !== undefined
+            );
+        };
         
         if (currentNode && currentNode.evolves_to.length > 0) {
             for (const evo of currentNode.evolves_to) {
@@ -3123,25 +3158,24 @@ export const getEvolutionTarget = async (pokemon: Pokemon, itemId?: string): Pro
                  for (const detail of details) {
                      // Level-up evolution
                      if (!itemId && detail.trigger.name === 'level-up') {
-                         const minLevel = detail.min_level || 0;
+                         // Auto-evolve only straightforward level-up branches.
+                         // Branches with extra requirements (friendship/time/item/etc)
+                         // are handled by their dedicated flows and should NOT
+                         // silently evolve by level fallback.
+                         if (hasSpecialLevelConstraint(detail)) continue;
+                         const minLevel = detail.min_level;
+                         if (!Number.isFinite(minLevel)) continue;
                          if (pokemon.level >= minLevel) {
                              const urlParts = evo.species.url.split('/');
                              return parseInt(urlParts[urlParts.length - 2]);
                          }
                      }
                      // Item-based evolution
-                     if (itemId && detail.trigger.name === 'use-item' && detail.item?.name.replace('-', '') === itemId.replace('-', '')) {
-                         const urlParts = evo.species.url.split('/');
-                         return parseInt(urlParts[urlParts.length - 2]);
-                     }
-                 }
-                 
-                 // Fallback for level-up if no specific item provided
-                 if (!itemId) {
-                     const detail = details[0];
-                     const isLevelUp = detail && detail.trigger.name === 'level-up';
-                     const minLevel = detail?.min_level || (isLevelUp ? 0 : 36);
-                     if (pokemon.level >= minLevel) {
+                     if (
+                        itemId &&
+                        detail.trigger.name === 'use-item' &&
+                        detail.item?.name?.replace(/-/g, '') === itemId.replace(/-/g, '')
+                     ) {
                          const urlParts = evo.species.url.split('/');
                          return parseInt(urlParts[urlParts.length - 2]);
                      }
@@ -3245,8 +3279,8 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
                 if (p.moves.length < 4) {
                     p.moves.push(newMove);
                 } else {
-                    p.moves.shift(); 
-                    p.moves.push(newMove);
+                    const replaceIdx = chooseMoveReplacementSlot(p.moves);
+                    p.moves[replaceIdx] = newMove;
                 }
                 p.moves = dedupeMoveSet(p.moves, 4);
                 learnedMoves.push(newMove.name);

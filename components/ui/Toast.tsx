@@ -78,6 +78,8 @@ const ToastItem: React.FC<{ toast: ToastEntry; onExpire: (id: number) => void }>
     const safeTier: ToastTier = (TIER_STYLES as any)[tier] ? tier : 'info';
     const ttl = toast.ttl ?? TIER_DEFAULT_TTL[safeTier];
     const style = TIER_STYLES[safeTier];
+    const isStory = safeTier === 'story';
+    const isDanger = safeTier === 'danger' || safeTier === 'warning';
     useEffect(() => {
         const t = setTimeout(() => onExpire(toast.id), ttl);
         return () => clearTimeout(t);
@@ -89,16 +91,34 @@ const ToastItem: React.FC<{ toast: ToastEntry; onExpire: (id: number) => void }>
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, x: -30, scale: 0.9, transition: { duration: 0.2 } }}
             transition={{ type: 'spring', stiffness: 280, damping: 22 }}
-            className={`${style.bg} ${style.border} border-2 backdrop-blur-md pl-3 pr-4 py-2 rounded-lg shadow-xl shadow-black/40 flex items-start gap-2 max-w-sm pointer-events-auto`}
+            className={[
+                style.bg,
+                style.border,
+                'border-2 backdrop-blur-md rounded-xl shadow-xl shadow-black/40',
+                'pl-3 pr-4 py-2.5 flex items-start gap-2 pointer-events-auto',
+                // Improve readability and avoid oversized blocks on low-res screens.
+                'w-[min(92vw,28rem)] sm:w-[min(72vw,30rem)]',
+                isStory ? 'ring-1 ring-purple-200/25' : '',
+                isDanger ? 'ring-1 ring-amber-200/20' : '',
+            ].join(' ')}
         >
-            <div className={`${style.accent} text-base leading-none mt-0.5`}>{style.icon}</div>
+            <div className={`${style.accent} text-base leading-none mt-0.5 shrink-0`}>{style.icon}</div>
             <div className="flex-1 min-w-0">
                 {toast.kicker && (
-                    <div className={`${style.accent} text-[8px] font-bold tracking-[0.2em] uppercase leading-none mb-1`}>
+                    <div className={`${style.accent} text-[9px] font-bold tracking-[0.16em] uppercase leading-none mb-1`}>
                         {toast.kicker}
                     </div>
                 )}
-                <div className="text-white text-[12px] leading-snug break-words whitespace-pre-line">{toast.message}</div>
+                <div
+                    className={[
+                        'text-white break-words whitespace-pre-line font-medium',
+                        isStory ? 'text-[13px] leading-[1.45]' : 'text-[12px] leading-[1.35]',
+                        // Prevent giant story toasts from swallowing the viewport.
+                        'max-h-44 overflow-y-auto pr-1',
+                    ].join(' ')}
+                >
+                    {toast.message}
+                </div>
             </div>
         </motion.div>
     );
@@ -110,7 +130,7 @@ export const ToastStack: React.FC<{ toasts: ToastEntry[]; onExpire: (id: number)
 }) => {
     const visibleToasts = toasts.slice(-3);
     return (
-        <div className="fixed top-4 right-4 z-[200] flex flex-col gap-2 pointer-events-none items-end">
+        <div className="fixed top-3 right-2 left-2 sm:top-4 sm:right-4 sm:left-auto z-[200] flex flex-col gap-2 pointer-events-none items-stretch sm:items-end">
             <AnimatePresence initial={false}>
                 {visibleToasts.map((t) => (
                     <ToastItem key={t.id} toast={t} onExpire={onExpire} />
