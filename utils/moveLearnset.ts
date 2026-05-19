@@ -137,6 +137,11 @@ export const replaceMove = (mon: Pokemon, slotIndex: number, newMove: PokemonMov
  */
 export const wouldSoftLock = (mon: Pokemon, slotIndex: number): boolean => {
     if (mon.moves.length <= 1) return true;
+    const isDamaging = (m?: PokemonMove) => !!m && !!m.power && m.power > 0 && m.damage_class !== 'status';
+    const currentDamagingCount = mon.moves.filter(isDamaging).length;
+    // If the current set already has zero damaging moves, allow replacement
+    // freely so the player can recover from a bad/legacy moveset.
+    if (currentDamagingCount === 0) return false;
     const remaining = mon.moves.filter((_, i) => i !== slotIndex);
-    return remaining.every((m) => !m.power || m.power === 0);
+    return remaining.filter(isDamaging).length === 0;
 };

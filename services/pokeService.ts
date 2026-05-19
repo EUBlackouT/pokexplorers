@@ -3279,11 +3279,14 @@ export const gainExperience = async (pokemon: Pokemon, amount: number, levelCap:
                 if (p.moves.length < 4) {
                     p.moves.push(newMove);
                 } else {
-                    const replaceIdx = chooseMoveReplacementSlot(p.moves);
-                    p.moves[replaceIdx] = newMove;
+                    // Do not auto-replace on level-up when the moveset is full.
+                    // The move remains available in movePool and can be swapped
+                    // intentionally through the Move Relearner flow.
                 }
                 p.moves = dedupeMoveSet(p.moves, 4);
-                learnedMoves.push(newMove.name);
+                if (p.moves.some(existing => normalizeMoveNameKey(existing.name) === normalizeMoveNameKey(newMove.name))) {
+                    learnedMoves.push(newMove.name);
+                }
             } catch (e) {
                 console.error("Failed to learn move", m.name, e);
             }
