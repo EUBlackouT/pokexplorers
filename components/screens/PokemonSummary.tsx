@@ -17,9 +17,11 @@ export const PokemonSummary: React.FC<{
     inventory: any;
     upgrades: MetaState['upgrades'];
     onGiveItem: (itemId: string) => void;
+    onEvolveNow?: () => Promise<boolean> | boolean;
     onClose: () => void;
-}> = ({ pokemon, inventory, upgrades, onGiveItem, onClose }) => {
+}> = ({ pokemon, inventory, upgrades, onGiveItem, onEvolveNow, onClose }) => {
     const [showItemPicker, setShowItemPicker] = useState(false);
+    const [evolveBusy, setEvolveBusy] = useState(false);
     useEscapeKey(() => { if (showItemPicker) setShowItemPicker(false); else onClose(); });
     const safeUpgrades = upgrades ?? ({ attackBoost: 0, defenseBoost: 0, speedBoost: 0 } as MetaState['upgrades']);
     const safeItems = Array.isArray(inventory?.items) ? (inventory.items as string[]) : [];
@@ -378,7 +380,28 @@ export const PokemonSummary: React.FC<{
 
                 {/* Footer */}
                 <div className="px-6 pb-6">
-                    <PushButton onClick={onClose} color="amber">Close Summary</PushButton>
+                    {onEvolveNow ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <PushButton
+                                onClick={async () => {
+                                    if (evolveBusy) return;
+                                    setEvolveBusy(true);
+                                    try {
+                                        await onEvolveNow();
+                                    } finally {
+                                        setEvolveBusy(false);
+                                    }
+                                }}
+                                color="emerald"
+                                disabled={evolveBusy}
+                            >
+                                {evolveBusy ? 'Checking Evolution...' : 'Evolve Now'}
+                            </PushButton>
+                            <PushButton onClick={onClose} color="amber">Close Summary</PushButton>
+                        </div>
+                    ) : (
+                        <PushButton onClick={onClose} color="amber">Close Summary</PushButton>
+                    )}
                 </div>
             </MenuCard>
         </div>

@@ -27,6 +27,14 @@ export const normalizePokeName = (raw: string): string => {
         .replace(/^-|-$/g, '');    // trim leading/trailing
 };
 
+const parseResourceId = (url?: string): number | null => {
+    if (!url) return null;
+    const m = url.match(/\/(\d+)\/?$/);
+    if (!m) return null;
+    const id = parseInt(m[1], 10);
+    return Number.isFinite(id) ? id : null;
+};
+
 const normalizeMoveNameKey = (name?: string): string =>
     (name || '').toLowerCase().trim();
 
@@ -1870,6 +1878,13 @@ export const calculateDamage = (
 
   // --- FUSION MOVE POWER MODIFIERS ---
   if (move.isFusion) {
+      // Baseline payoff for spending a full gauge: fusion strikes should feel
+      // materially stronger than regular moves even without niche setup.
+      power *= 1.35;
+      // Full gauge overcharge gets an additional nudge so "bar to 100 then
+      // fire" has a visible combat payoff.
+      if (attackerMeter >= 100) power *= 1.15;
+
       // Chrono Prism: flat +25% power multiplier on any fusion move used by
       // the holder. Stacks multiplicatively with the per-move conditional
       // modifiers below.
@@ -2808,8 +2823,11 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
       seenFinalNames.add(normalizedName);
 
       try {
-          if (NEW_MOVES[m.name]) {
-              const moveData = NEW_MOVES[m.name];
+          const customKey = NEW_MOVES[m.name]
+              ? m.name
+              : Object.keys(NEW_MOVES).find((k) => k.toLowerCase() === m.name.toLowerCase());
+          if (customKey) {
+              const moveData = NEW_MOVES[customKey];
               const newMove: PokemonMove = {
                   name: m.name,
                   url: '',
@@ -2832,6 +2850,13 @@ export const fetchPokemon = async (id: number, level: number = 5, isTrainer: boo
               populateMoveFlags(newMove);
               moves.push(newMove);
           } else {
+              if (!m.url) {
+                  // Some authored/custom learnset additions intentionally carry
+                  // an empty URL. If we don't have a custom move definition for
+                  // them yet, skip gracefully instead of fetch('') errors.
+                  console.warn('Skipping move with no URL/custom definition:', m.name);
+                  continue;
+              }
               const mData = await fetchJson(m.url);
               const newMove: PokemonMove = {
                   name: mData.name,
@@ -3119,16 +3144,20 @@ export const getEvolutionTarget = async (pokemon: Pokemon, itemId?: string): Pro
         const evoData = await fetchJson(evolutionChainUrl);
         let chain = evoData.chain;
 
-        const findNode = (node: any, targetName: string): any => {
-            if (node.species.name === targetName) return node;
+        const targetName = normalizePokeName(pokemon.name || '');
+        const targetId = pokemon.id;
+        const findNode = (node: any): any => {
+            const nodeId = parseResourceId(node?.species?.url);
+            const nodeName = normalizePokeName(node?.species?.name || '');
+            if ((nodeId !== null && nodeId === targetId) || (targetName && nodeName === targetName)) return node;
             for (const child of node.evolves_to) {
-                const found = findNode(child, targetName);
+                const found = findNode(child);
                 if (found) return found;
             }
             return null;
         };
 
-        const currentNode = findNode(chain, pokemon.name);
+        const currentNode = findNode(chain);
 
         const hasSpecialLevelConstraint = (detail: any): boolean => {
             if (!detail) return true;
@@ -3166,8 +3195,8 @@ export const getEvolutionTarget = async (pokemon: Pokemon, itemId?: string): Pro
                          const minLevel = detail.min_level;
                          if (!Number.isFinite(minLevel)) continue;
                          if (pokemon.level >= minLevel) {
-                             const urlParts = evo.species.url.split('/');
-                             return parseInt(urlParts[urlParts.length - 2]);
+                            const evoId = parseResourceId(evo.species.url);
+                            if (evoId !== null) return evoId;
                          }
                      }
                      // Item-based evolution
@@ -3176,8 +3205,8 @@ export const getEvolutionTarget = async (pokemon: Pokemon, itemId?: string): Pro
                         detail.trigger.name === 'use-item' &&
                         detail.item?.name?.replace(/-/g, '') === itemId.replace(/-/g, '')
                      ) {
-                         const urlParts = evo.species.url.split('/');
-                         return parseInt(urlParts[urlParts.length - 2]);
+                        const evoId = parseResourceId(evo.species.url);
+                        if (evoId !== null) return evoId;
                      }
                  }
             }
@@ -3469,36 +3498,35 @@ export const getWildPokemon = async (
       const roll = Math.random();
       const dist = (levelRange[0] - 5) / 2.5; 
 
-      let pool: number[] = [];
+      const earlyBand = EARLY_IDS;
+      const midBand = [...EARLY_IDS, ...MID_IDS];
+      const fullBand = [...EARLY_IDS, ...MID_IDS, ...LATE_IDS];
+      const allowedBand = level < 18 ? earlyBand : (level < 35 ? midBand : fullBand);
+      const allowedSet = new Set<number>(allowedBand);
+      const filterAllowed = (ids: number[]) => ids.filter(id => allowedSet.has(id));
 
-      // Progression Filtering
-      if (level < 18) {
-          pool = basePool.filter(id => EARLY_IDS.includes(id));
-          if (pool.length === 0) pool = EARLY_IDS; // Fallback
-      } else if (level < 35) {
-          pool = basePool.filter(id => EARLY_IDS.includes(id) || MID_IDS.includes(id));
-          if (pool.length === 0) pool = [...EARLY_IDS, ...MID_IDS];
+      const baseAllowed = filterAllowed(basePool);
+      const earlyAllowed = filterAllowed(EARLY_IDS);
+      const midAllowed = filterAllowed(MID_IDS);
+      const lateAllowed = filterAllowed(LATE_IDS);
+
+      let pool: number[] = baseAllowed.length > 0 ? baseAllowed : allowedBand;
+
+      // Rarity roll constrained by progression bands so early routes can never
+      // leak late-evo species like Nidoking/Medicham.
+      if (level >= 35 && (dist > 40 || (biome === 'canyon' && dist > 30))) {
+          if (roll > 0.997) pool = LEGENDARY_IDS;
+          else if (roll > 0.93 && lateAllowed.length) pool = lateAllowed;
+          else if (roll > 0.72 && midAllowed.length) pool = midAllowed;
+      } else if (level >= 18) {
+          if (roll > 0.92 && midAllowed.length) pool = midAllowed;
+          else if (roll < 0.42 && earlyAllowed.length) pool = earlyAllowed;
       } else {
-          pool = basePool;
+          // Early game is intentionally strict: only early band species.
+          if (earlyAllowed.length) pool = earlyAllowed;
       }
 
-      // Rarity Roll
-      if (dist > 40 || biome === 'canyon' && dist > 30) {
-          if (roll > 0.995) pool = LEGENDARY_IDS;
-          else if (roll > 0.95) pool = LATE_IDS;
-          else if (roll > 0.80) pool = MID_IDS;
-      } else {
-          if (roll > 0.999) {
-              const randomId = Math.floor(Math.random() * 1025) + 1;
-              return fetchPokemon(randomId, level, false, shinyBoost, difficulty);
-          }
-          
-          if (roll > 0.98) pool = LATE_IDS; 
-          else if (roll > 0.85) pool = MID_IDS;
-          else if (roll > 0.50) pool = pool; // Biome pool (already filtered)
-          else pool = EARLY_IDS; 
-      }
-      
+      if (pool.length === 0) pool = allowedBand;
       const id = pool[Math.floor(Math.random() * pool.length)];
       return fetchPokemon(id, level, false, shinyBoost, difficulty);
   });

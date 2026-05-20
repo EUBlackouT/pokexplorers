@@ -75,6 +75,7 @@ export const PauseMenu: React.FC<{
     state: any;
     onSwap: (a: number, b: number) => void;
     onGiveItem: (mon: Pokemon, itemId: string) => void;
+    onEvolveNow: (mon: Pokemon) => Promise<boolean>;
     onSyncToCap: () => void;
     onApplyRelearn: (monIndex: number, updated: Pokemon) => void;
     onOpenLeaderboard?: () => void;
@@ -93,7 +94,7 @@ export const PauseMenu: React.FC<{
      *  embed the entire guide; when this is wired we render a "Help"
      *  shortcut tile on the home tab. */
     onOpenGuide?: () => void;
-}> = ({ onClose, state, onSwap, onGiveItem, onSyncToCap, onApplyRelearn, onOpenLeaderboard, onSave, onExportSave, onImportSave, onDeleteSave, lastSavedAt, onOpenStorage, onOpenGuide }) => {
+}> = ({ onClose, state, onSwap, onGiveItem, onEvolveNow, onSyncToCap, onApplyRelearn, onOpenLeaderboard, onSave, onExportSave, onImportSave, onDeleteSave, lastSavedAt, onOpenStorage, onOpenGuide }) => {
     const [selectedMon, setSelectedMon] = useState<Pokemon | null>(null);
     const [activeTab, setActiveTab] = useState<TabId>('party');
     const [showRelearner, setShowRelearner] = useState(false);
@@ -132,6 +133,11 @@ export const PauseMenu: React.FC<{
                         inventory={state.inventory}
                         upgrades={state.meta.upgrades}
                         onGiveItem={(itemId) => onGiveItem(selectedMon, itemId)}
+                        onEvolveNow={async () => {
+                            const started = await onEvolveNow(selectedMon);
+                            if (started) setSelectedMon(null);
+                            return started;
+                        }}
                         onClose={() => setSelectedMon(null)}
                     />
                 </SilentErrorBoundary>

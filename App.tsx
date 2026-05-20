@@ -2140,6 +2140,32 @@ export default function App() {
       }
   }
 
+  const handleEvolveNow = useCallback(async (pokemon: Pokemon): Promise<boolean> => {
+      try {
+          const canEvolve = await checkEvolution(pokemon);
+          if (!canEvolve) {
+              showToast(`${pokemon.name} is not ready to evolve yet.`, 'info', { kicker: 'EVOLUTION' });
+              return false;
+          }
+          const evo = await evolvePokemon(pokemon);
+          if (!evo || evo.id === pokemon.id) {
+              showToast(`${pokemon.name} can't evolve under current conditions.`, 'warning', { kicker: 'EVOLUTION' });
+              return false;
+          }
+          queueEvolution(pokemon, evo, (final) => {
+              setPlayerState(prev => ({
+                  ...prev,
+                  team: prev.team.map(p => p.id === pokemon.id && p.name === pokemon.name ? final : p),
+              }));
+          });
+          return true;
+      } catch (e) {
+          console.error('[Evolution] Manual evolution failed:', e);
+          showToast('Evolution check failed. Please try again.', 'warning', { kicker: 'EVOLUTION' });
+          return false;
+      }
+  }, [queueEvolution, showToast]);
+
   function handleTargetSelect(targetIndex: number, targetSide: ActionTargetSide = 'enemy') {
       unlockAudio();
       if (battleState.ui.selectionMode === 'TARGET') {
@@ -3992,6 +4018,12 @@ export default function App() {
     // (e.g., fishing prompt lingering under a newly started encounter).
     setDialogueRaw(null);
     if (isTrainer) trackTrainerEngagement();
+    const initialMapSnapshot = lookupMap(playerState.mapId, loadedChunks);
+    if (!initialMapSnapshot) {
+      showToast('Battle failed to initialize for this area. Please try moving one tile and re-engage.', 'warning', { kicker: 'BATTLE RECOVERY' });
+      setPhase(GamePhase.OVERWORLD);
+      return;
+    }
     const isMultiplayer = !!multiplayer.roomId;
     const bId = isMultiplayer ? `wild_${multiplayer.roomId}_${Date.now()}` : null;
     if (bId) setBattleId(bId);
@@ -4032,8 +4064,7 @@ export default function App() {
           "Wild Encounter!";
       setBattleState(prev => ({ ...prev, phase: 'player_input', logs: [openingLog], isTrainerBattle: isTrainer, currentTrainerId: trainerData?.id, backgroundUrl: '', comboMeter: initialCombo }));
     try {
-      const currentMap = lookupMap(playerState.mapId, loadedChunks);
-      if (!currentMap) return;
+      const currentMap = lookupMap(playerState.mapId, loadedChunks) || initialMapSnapshot;
 
       const isMultiplayer = !!multiplayer.roomId;
       const isGym = !!(trainerData && trainerData.isGymLeader && (trainerData.badgeId ?? 0) >= 1 && (trainerData.badgeId ?? 0) <= 8);
@@ -4051,7 +4082,9 @@ export default function App() {
           if (m) legendarySpeciesId = parseInt(m[1], 10);
       }
       const isLegendary = legendarySpeciesId !== undefined;
-      const bgUrl = await generateBattleBackground(
+      const fallbackBg = getStaticBackground(biome || currentMap.biome || 'forest');
+      const bgUrl = (await Promise.race([
+          generateBattleBackground(
           biome || currentMap.biome || 'forest',
           tileType,
           isMultiplayer,
@@ -4062,7 +4095,9 @@ export default function App() {
               legendary: isLegendary,
               legendarySpeciesId,
           },
-      );
+          ),
+          delay(2500).then(() => fallbackBg),
+      ])) || fallbackBg;
       // Calculate Rift Pressure (difficulty scaling).
       //
       // Coefficients used to be 0.15 (distance) + 0.10 (badges). Combined with
@@ -12613,6 +12648,7 @@ export default function App() {
                         state={playerState}
                         onSwap={handleSwapTeam}
                         onGiveItem={handleGiveItem}
+                        onEvolveNow={handleEvolveNow}
                         onSyncToCap={handleSyncPartyToCap}
                         onApplyRelearn={handleApplyRelearn}
                         onOpenLeaderboard={() => { setIsPaused(false); setShowLeaderboard(true); }}
