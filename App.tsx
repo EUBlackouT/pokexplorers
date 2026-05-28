@@ -39,8 +39,6 @@ import { HealthBar } from './components/HealthBar';
 import { PokemonSprite } from './components/PokemonSprite';
 import { StarterSelect } from './components/StarterSelect';
 import { Overworld } from './components/Overworld';
-import { CatchComboBadge } from './components/ui/CatchComboBadge';
-import { TrainerBondBadge } from './components/ui/TrainerBondBadge';
 import { BountyBoard } from './components/screens/BountyBoard';
 import { ActionButton } from './components/ui/ActionButton';
 import { MoveButton } from './components/ui/MoveButton';
@@ -113,6 +111,18 @@ import { TERA_TYPES, MEGA_ELIGIBLE, MEGA_ATK_MULT, MEGA_DEF_MULT, Z_DAMAGE_MULT 
 const toPascalCase = (str: string) => str.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 const toFiniteInt = (value: unknown, fallback = 0): number =>
     Number.isFinite(value as number) ? Math.floor(value as number) : fallback;
+const caveSeedFromMapId = (id: string): number => {
+    const parts = id.split('_').slice(1);
+    const nums = parts.map((p) => parseInt(p, 10)).filter((n) => Number.isFinite(n));
+    if (nums.length >= 2) return (nums[0] * 73856093) ^ (nums[1] * 19349663);
+    if (nums.length === 1) return nums[0] * 2654435761;
+    let h = 2166136261;
+    for (let i = 0; i < id.length; i++) {
+        h ^= id.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return h | 0;
+};
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const BATTLE_LOG_TAIL = 60;
@@ -229,13 +239,13 @@ const auditFreshBattleMon = (mon: Pokemon, side: 'player' | 'enemy', slot: numbe
 };
 
 // True if `mapId` refers to a dynamically loaded map (chunk, interior,
-// puzzle) stored in `loadedChunks` rather than the static MAPS table.
+// puzzle, cave) stored in `loadedChunks` rather than the static MAPS table.
 // Interiors and puzzles are placed into loadedChunks on entry by
 // handleMapMove's portal resolver; if we forget any prefix here, the
 // player gets stuck the moment they step onto that map type because
 // every `MAPS[mapId]` lookup returns undefined.
 const isDynamicMap = (mapId: string): boolean =>
-    mapId.startsWith('chunk_') || mapId.startsWith('interior:') || mapId.startsWith('puzzle_');
+    mapId.startsWith('chunk_') || mapId.startsWith('interior:') || mapId.startsWith('puzzle_') || mapId.startsWith('cave_');
 
 const lookupMap = (mapId: string, loadedChunks: Record<string, any>): any =>
     isDynamicMap(mapId) ? loadedChunks[mapId] : MAPS[mapId];
@@ -579,6 +589,7 @@ export default function App() {
   const [riftLayout, setRiftLayout] = useState<number[][] | null>(null);
   const [loadedChunks, setLoadedChunks] = useState<Record<string, any>>({});
   const [isPaused, setIsPaused] = useState(false);
+  const [showWorldMap, setShowWorldMap] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   // Trainer's Handbook overlay -- modal-style so players can read it
   // mid-run from the pause menu without resetting position or losing
@@ -3062,7 +3073,22 @@ export default function App() {
           // hooks will rebuild on the next portal step.
           currentMap = loadedChunks[playerState.mapId];
       } else {
-          currentMap = MAPS[playerState.mapId];
+          currentMap = MAPS[playerState.mapId] || loadedChunks[playerState.mapId];
+          if (!currentMap && playerState.mapId.startsWith('cave_')) {
+              const caveLayout = caveLayouts[playerState.mapId] || generateCaveMap(caveSeedFromMapId(playerState.mapId));
+              currentMap = {
+                  id: playerState.mapId,
+                  name: 'Deep Cave',
+                  biome: 'cave',
+                  layout: caveLayout,
+                  trainers: {},
+                  npcs: {},
+                  interactables: {},
+                  portals: { '10,19': `chunk_${playerState.chunkPos.x}_${playerState.chunkPos.y},10,18` },
+                  wildLevelRange: [10, 18],
+              };
+              setLoadedChunks(prev => ({ ...prev, [playerState.mapId]: currentMap }));
+          }
       }
       if (!currentMap) return;
 
@@ -3071,10 +3097,9 @@ export default function App() {
                      currentMap.layout;
       
       if (playerState.mapId.startsWith('cave_') && !caveLayouts[playerState.mapId]) {
-          const seed = parseInt(playerState.mapId.split('_').slice(1).join(''));
+          const seed = caveSeedFromMapId(playerState.mapId);
           const newCave = generateCaveMap(seed);
           setCaveLayouts(prev => ({ ...prev, [playerState.mapId]: newCave }));
-          return;
       }
       if (playerState.mapId.startsWith('chunk_')) {
           let ncx = playerState.chunkPos.x;
@@ -3160,9 +3185,9 @@ export default function App() {
                   || provisionalChunk?.chunkRole === 'consequence';
               const allowLaneChoice = playerNum === 1
                   && distFloor > 1
-                  && chunksSinceLanePrompt >= 3
+                  && chunksSinceLanePrompt >= 8
                   && chunkFeelsMeaningful
-                  && (laneRoll > 0.55 || baseRouteState.routeCuriosity >= 5);
+                  && (laneRoll > 0.72 || baseRouteState.routeCuriosity >= 7);
               if (allowLaneChoice && !dialogue) {
                   lastLanePromptDistanceRef.current = distFloor;
                   const preview = provisionalChunk?.routePreview;
@@ -11189,9 +11214,13 @@ export default function App() {
               lastRoutePreviewTierRef.current.tension !== tensionLabel
               || lastRoutePreviewTierRef.current.curiosity !== curiosityLabel;
           const chunksSincePreviewToast = chunkDistance - lastRoutePreviewToastDistanceRef.current;
-          const cadenceWindowReached = chunksSincePreviewToast >= 4;
+          const cadenceWindowReached = chunksSincePreviewToast >= 8;
           const highPressureBeat = chunk.chunkRole === 'setpiece' || chunk.chunkRole === 'consequence';
-          const shouldShowPreviewToast = hasQuestThread || highPressureBeat || tierChanged || cadenceWindowReached;
+          const shouldShowPreviewToast =
+              hasQuestThread
+              || highPressureBeat
+              || (tierChanged && chunksSincePreviewToast >= 3)
+              || (cadenceWindowReached && stackedRisk);
           const areaLabel = playerState.mapId.replace('chunk_', '').replace('_', ',');
           if (shouldShowPreviewToast) {
               const storyLines = [
@@ -11211,7 +11240,7 @@ export default function App() {
               showToast(
                   storyLines.join('\n'),
                   'story',
-                  { kicker: hasQuestThread ? 'Route Story' : 'Route Glimpse', ttl: hasQuestThread ? 6200 : 5200 },
+                  { kicker: hasQuestThread ? 'Route Story' : 'Route Glimpse', ttl: hasQuestThread ? 6200 : 4200 },
               );
               lastRoutePreviewToastDistanceRef.current = chunkDistance;
               lastRoutePreviewTierRef.current = { tension: tensionLabel, curiosity: curiosityLabel };
@@ -11943,6 +11972,10 @@ export default function App() {
     }
   }, [phase, playerState.position, playerState.mapId, playerState.name, networkRole]);
 
+  useEffect(() => {
+      if (phase !== GamePhase.OVERWORLD && showWorldMap) setShowWorldMap(false);
+  }, [phase, showWorldMap]);
+
   // Main Quest Progression
   useEffect(() => {
     const distance = Math.floor(Math.sqrt(playerState.chunkPos.x ** 2 + playerState.chunkPos.y ** 2));
@@ -12102,6 +12135,12 @@ export default function App() {
           if (e.repeat) return;
           if (Date.now() - dialogueOpenedAtRef.current < DIALOGUE_MIN_READ_MS) return;
           closeDialogue(null);
+          return;
+      }
+
+      if ((e.key === 'm' || e.key === 'M') && !dialogue) {
+          e.preventDefault();
+          setShowWorldMap(prev => !prev);
           return;
       }
 
@@ -12637,6 +12676,10 @@ export default function App() {
             // (distance coeff 0.10, badge coeff 0.07). Times 100 so the HUD
             // shows an intuitive percentage above the baseline 1.0x.
             const riftIntensity = Math.min(100, Math.floor((Math.pow(distance / 20, 1.2) * 10 + Math.pow(playerState.badges, 1.1) * 7) * stabilityMult));
+            const mapWindowRadius = 9;
+            const discoveredChunkKeys = new Set(playerState.discoveredChunks);
+            const catchChain = playerState.catchCombo?.count ?? 0;
+            const bondStacks = playerState.run.trainerBond?.stacks ?? 0;
             
             return (
                 <div className="relative overflow-hidden w-screen h-screen bg-black">
@@ -12684,11 +12727,61 @@ export default function App() {
                        onAdvance={() => closeDialogue(null)}
                        onChoice={(id) => closeDialogue(id)}
                    />
+                   {showWorldMap && (
+                       <div className="absolute inset-0 z-[95] bg-black/75 backdrop-blur-[2px] flex items-center justify-center p-4">
+                           <div className="w-full max-w-xl rounded-xl border-2 border-cyan-300/50 bg-slate-950/95 p-4 shadow-2xl">
+                               <div className="flex items-center justify-between mb-3">
+                                   <div className="text-cyan-200 text-[11px] uppercase tracking-[0.22em] font-black">World Map</div>
+                                   <button
+                                       onClick={() => setShowWorldMap(false)}
+                                       className="text-[9px] px-2 py-1 rounded border border-white/20 bg-white/10 hover:bg-white/20 text-white uppercase tracking-widest"
+                                   >
+                                       Close
+                                   </button>
+                               </div>
+                               <div className="text-[8px] text-slate-400 uppercase tracking-widest mb-2">
+                                   Center {playerState.chunkPos.x},{playerState.chunkPos.y} • explored {playerState.discoveredChunks.length}
+                               </div>
+                               <div
+                                   className="grid gap-[2px] bg-slate-900/80 p-2 rounded border border-slate-700"
+                                   style={{ gridTemplateColumns: `repeat(${mapWindowRadius * 2 + 1}, minmax(0, 1fr))` }}
+                               >
+                                   {Array.from({ length: mapWindowRadius * 2 + 1 }).flatMap((_, row) =>
+                                       Array.from({ length: mapWindowRadius * 2 + 1 }).map((__, col) => {
+                                           const cx = playerState.chunkPos.x + (col - mapWindowRadius);
+                                           const cy = playerState.chunkPos.y + (row - mapWindowRadius);
+                                           const key = `chunk_${cx}_${cy}`;
+                                           const isHere = cx === playerState.chunkPos.x && cy === playerState.chunkPos.y;
+                                           const seen = discoveredChunkKeys.has(key);
+                                           return (
+                                               <div
+                                                   key={`${cx},${cy}`}
+                                                   title={`${cx},${cy}${isHere ? ' (you)' : ''}${seen ? ' explored' : ''}`}
+                                                   className={`w-4 h-4 rounded-[3px] border ${isHere ? 'bg-cyan-300 border-cyan-100' : seen ? 'bg-emerald-500/80 border-emerald-300/60' : 'bg-slate-800 border-slate-700'}`}
+                                               />
+                                           );
+                                       }),
+                                   )}
+                               </div>
+                           </div>
+                       </div>
+                   )}
                    <div className="absolute top-6 left-6 z-40 flex flex-wrap gap-2 max-w-[50vw]">{playerState.team.slice(0,6).map((p,i)=><div key={i} className="scale-90 origin-top-left"><HealthBar current={p.currentHp} max={p.maxHp} label={p.name} level={p.level} status={p.status} /></div>)}</div>
                    <div className="absolute top-6 right-6 z-40 flex flex-col gap-3 items-end">
                         <div className="bg-gradient-to-br from-amber-500/90 to-amber-700/90 px-4 py-2 border-2 border-amber-300/80 text-white text-sm font-bold rounded-lg shadow-lg flex items-center gap-2">
                             <span className="text-amber-200">$</span>
                             <span className="font-mono tabular-nums">{toFiniteInt(playerState.money, 0).toLocaleString()}</span>
+                        </div>
+                        <button
+                            onClick={() => setShowWorldMap(true)}
+                            className="px-3 py-1.5 rounded-md border border-cyan-300/60 bg-cyan-700/35 hover:bg-cyan-600/45 text-cyan-100 text-[9px] uppercase tracking-[0.18em] font-black shadow"
+                        >
+                            World Map (M)
+                        </button>
+                        <div className="bg-slate-900/75 px-3 py-1.5 border border-slate-500/40 rounded-md text-[9px] uppercase tracking-widest text-slate-100 flex items-center gap-3">
+                            <span>Chain <span className="text-cyan-300 font-black">x{catchChain}</span></span>
+                            <span className="text-slate-500">•</span>
+                            <span>Bond <span className="text-amber-300 font-black">x{bondStacks}</span></span>
                         </div>
                         <div className="bg-black/80 px-3 py-2 border border-emerald-400/50 rounded-md backdrop-blur-sm flex items-center gap-3 text-[10px] uppercase tracking-widest">
                             <div>
@@ -12763,11 +12856,9 @@ export default function App() {
                 />
                 <div className="absolute bottom-3 left-3 z-30 pointer-events-none">
                     <div className="rounded-lg border border-cyan-300/40 bg-slate-900/75 px-3 py-2 text-[9px] uppercase tracking-wider text-cyan-100 shadow-lg">
-                        <span className="font-black text-cyan-300">Enter</span> Pause · Party · Bag · Save
+                        <span className="font-black text-cyan-300">Enter</span> Pause · Party · Bag · Save · <span className="font-black text-cyan-300">M</span> Map
                     </div>
                 </div>
-                <CatchComboBadge combo={playerState.catchCombo} />
-                <TrainerBondBadge bond={playerState.run.trainerBond} currentDistance={playerState.run.maxDistanceReached} />
                 {battleChallenge && (
                     <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[100] p-4">
                         <div className="bg-blue-900 border-4 border-blue-400 p-8 rounded-2xl text-center max-w-sm shadow-2xl animate-in zoom-in duration-300">

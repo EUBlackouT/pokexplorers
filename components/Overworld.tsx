@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { Coordinate, Chunk } from '../types';
-import { MAPS, generateChunk, CHUNK_SIZE, getGrassAura, type GrassAura } from '../services/mapData';
+import { MAPS, generateChunk, generateCaveMap, CHUNK_SIZE, getGrassAura, type GrassAura } from '../services/mapData';
 import { resolveInterior, type InteriorKind } from '../services/interiors';
 import { BiomeAmbient } from './ui/BiomeAmbient';
 
@@ -356,6 +356,18 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
     }, [mapId, loadedChunks]);
     
     let currentMap: any;
+    const caveSeedFromMapId = (id: string): number => {
+        const parts = id.split('_').slice(1);
+        const nums = parts.map((p) => parseInt(p, 10)).filter((n) => Number.isFinite(n));
+        if (nums.length >= 2) return (nums[0] * 73856093) ^ (nums[1] * 19349663);
+        if (nums.length === 1) return nums[0] * 2654435761;
+        let h = 2166136261;
+        for (let i = 0; i < id.length; i++) {
+            h ^= id.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return h | 0;
+    };
     if (mapId.startsWith('chunk_')) {
         currentMap = loadedChunks[mapId];
         if (!currentMap) {
@@ -398,6 +410,20 @@ export const Overworld: React.FC<Props> = ({ p1Pos, p2Pos, mapId, loadedChunks, 
         }
     } else {
         currentMap = MAPS[mapId] || loadedChunks[mapId];
+        if (!currentMap && mapId.startsWith('cave_')) {
+            const caveLayout = generateCaveMap(caveSeedFromMapId(mapId));
+            currentMap = {
+                id: mapId,
+                name: 'Deep Cave',
+                biome: 'cave',
+                layout: caveLayout,
+                trainers: {},
+                npcs: {},
+                interactables: {},
+                portals: { '10,19': `chunk_0_0,10,18` },
+                wildLevelRange: [10, 18],
+            };
+        }
     }
 
     const layout = currentMap ? (customLayout || currentMap.layout) : null;
