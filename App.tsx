@@ -590,6 +590,11 @@ export default function App() {
   const [loadedChunks, setLoadedChunks] = useState<Record<string, any>>({});
   const [isPaused, setIsPaused] = useState(false);
   const [showWorldMap, setShowWorldMap] = useState(false);
+  const [worldMapCenter, setWorldMapCenter] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const mapDragRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
+  const mapDragAccumRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const mapDidDragRef = useRef(false);
+  const [worldWaypoint, setWorldWaypoint] = useState<{ x: number; y: number } | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   // Trainer's Handbook overlay -- modal-style so players can read it
   // mid-run from the pause menu without resetting position or losing
@@ -932,6 +937,7 @@ export default function App() {
   // for the currently active player mon.
   const [transformPicker, setTransformPicker] = useState<null | 'root' | 'tera'>(null);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const [recentRouteEvents, setRecentRouteEvents] = useState<Array<{ id: number; text: string }>>([]);
   const toastLastShownRef = useRef<Record<string, number>>({});
   const showToast = useCallback((message: string, tier: ToastTier = 'info', opts: { kicker?: string; ttl?: number } = {}) => {
     const key = `${opts.kicker || ''}|${message}`;
@@ -943,6 +949,13 @@ export default function App() {
       const deduped = prev.filter((t) => !(t.message === message && t.kicker === opts.kicker));
       return [...deduped, makeToast(message, tier, opts)].slice(-MAX_VISIBLE_TOASTS);
     });
+    if (tier === 'story' || tier === 'reward' || tier === 'warning') {
+      const line = `${opts.kicker ? `${opts.kicker}: ` : ''}${message}`;
+      setRecentRouteEvents((prev) => {
+        const next = [...prev, { id: now, text: line.length > 100 ? `${line.slice(0, 97)}...` : line }];
+        return next.slice(-8);
+      });
+    }
   }, []);
   const expireToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -1447,6 +1460,7 @@ export default function App() {
     setOpponentId(oppId);
     setIsBattleLead(isLead);
     setIsMultiplayerBattle(true);
+    setRemoteBattleActions([]);
     
     // Initialize battle state with opponent's team
     setBattleState(prev => ({
@@ -1850,9 +1864,11 @@ export default function App() {
   }, [battleState.ui.selectionMode, battleState.enemyTeam, battleState.playerTeam, myPokemonIndex, selectedTargetingMode]);
 
   function queueAction(targetIndex: number, item?: string, move?: PokemonMove, isFusion?: boolean, switchIndex?: number, forcedActorIndex?: number, targetSide: ActionTargetSide = 'enemy') {
+      if (battleState.phase !== 'player_input') return;
       if (battleState.mustSwitch) {
           if (switchIndex !== undefined) {
               setBattleState(prev => {
+                  if (prev.phase !== 'player_input') return prev;
                   const newTeam = [...prev.playerTeam];
                   const actorIdx = prev.switchingActorIdx;
                   const temp = newTeam[actorIdx];
@@ -1920,7 +1936,8 @@ export default function App() {
           const action = { actorIndex: currentActorIndex, targetIndex, targetSide, move, item, isPlayer: true, isFusion, speed, priority, switchIndex };
           
           setBattleState(prev => {
-              const newPending = [...prev.pendingMoves, action];
+              if (prev.phase !== 'player_input') return prev;
+              const newPending = [...prev.pendingMoves.filter(a => a.actorIndex !== currentActorIndex), action];
               // Only ACTIVE field slots (0/1) can act this turn. Counting
               // bench mons here causes a softlock after one active faints:
               // queue waits for a second action from a dead slot.
@@ -2101,7 +2118,8 @@ export default function App() {
 
       const action = { actorIndex: currentActorIndex, targetIndex, targetSide, move, item, isPlayer: true, isFusion: isFusionMove, speed, priority, switchIndex };
       setBattleState(prev => {
-          const newPending = [...prev.pendingMoves, action];
+          if (prev.phase !== 'player_input') return prev;
+          const newPending = [...prev.pendingMoves.filter(a => a.actorIndex !== currentActorIndex), action];
           // Only ACTIVE field slots (0/1) can act this turn. Counting
           // bench mons here causes a softlock after one active faints:
           // queue waits for a second action from a dead slot.
@@ -2811,6 +2829,24 @@ export default function App() {
                   return;
               }
 
+              if (npc.name === 'Guard') {
+                  const hasStealthHost = !!Object.values(currentMap.npcs || {}).find((entry: any) => entry?.challenge?.type === 'stealth');
+                  const activeStealth = challengeState.isActive && challengeState.type === 'stealth';
+                  if (activeStealth) {
+                      setDialogue(["Intruder spotted!", "You blew your cover. Return to the scout and try again."]);
+                      setChallengeState({ type: 'none', isActive: false });
+                      trackChallengeFailed('stealth');
+                      return;
+                  }
+                  if (hasStealthHost) {
+                      setDialogue([
+                          "Guard patrol: restricted area.",
+                          "Talk to the scout first to officially start this stealth challenge."
+                      ]);
+                      return;
+                  }
+              }
+
               if (npc.challenge) {
                   const challengeKey = `challenge_${npc.id}`;
                   if (playerState.storyFlags.includes(challengeKey)) {
@@ -2995,19 +3031,12 @@ export default function App() {
                           "(All 8 gyms cleared. Travel to distance 50 in any direction.)"
                       ]);
                   } else {
-                      // currentMap.id is 'chunk_CX_CY' for overworld chunks.
-                      // Extract the player's current chunk to compute a
-                      // compass direction from here to the next gym.
-                      let pcx = 0, pcy = 0;
-                      const m = currentMap.id.match(/^chunk_(-?\d+)_(-?\d+)$/);
-                      if (m) {
-                          pcx = parseInt(m[1], 10);
-                          pcy = parseInt(m[2], 10);
-                      }
-                      const dx = target.cx - pcx;
-                      const dy = target.cy - pcy;
+                      const dx = target.cx - playerState.chunkPos.x;
+                      const dy = target.cy - playerState.chunkPos.y;
                       const chunkDist = Math.round(Math.sqrt(dx * dx + dy * dy));
                       const dirName = compassDirectionName(dx, dy).toUpperCase();
+                      const xHint = dx === 0 ? 'same east-west line' : `${Math.abs(dx)} ${dx > 0 ? 'chunks east' : 'chunks west'}`;
+                      const yHint = dy === 0 ? 'same north-south line' : `${Math.abs(dy)} ${dy > 0 ? 'chunks south' : 'chunks north'}`;
                       if (chunkDist === 0) {
                           setDialogue([
                               `"The next challenger's hall stands right here."`,
@@ -3017,7 +3046,8 @@ export default function App() {
                           setDialogue([
                               `A weathered wooden signpost, freshly carved.`,
                               `"Gym ${target.badge} lies to the ${dirName}."`,
-                              `"Roughly ${chunkDist} chunks further. Press on, challenger."`
+                              `"About ${chunkDist} chunks out (${xHint}, ${yHint})."`,
+                              `"Target chunk: ${target.cx}, ${target.cy}. Press on, challenger."`
                           ]);
                       }
                   }
@@ -4052,6 +4082,11 @@ export default function App() {
     const isMultiplayer = !!multiplayer.roomId;
     const bId = isMultiplayer ? `wild_${multiplayer.roomId}_${Date.now()}` : null;
     if (bId) setBattleId(bId);
+    // Host-driven co-op battles share one authoritative turn engine.
+    // Keep multiplayer battle mode reserved for direct PvP only so we
+    // never enter waiting-for-opponent flow in wild/gym encounters.
+    setIsMultiplayerBattle(false);
+    setRemoteBattleActions([]);
     setPhase(GamePhase.BATTLE);
       // --- SYNC BOOST ABILITY ---
       // Talent: Rift Catalyst seeds the Sync gauge so fusion comes online
@@ -11594,7 +11629,7 @@ export default function App() {
     } else if (data.type === 'BATTLE_START') {
         const { playerTeam: netPlayerTeam, enemies, isBoss, isTrainer, trainerData, biome, tileType, bgUrl, initialWeather, initialCombo, initialEnemyCombo, isPvP, battleId: netBattleId } = data.payload;
         if (netBattleId) setBattleId(netBattleId);
-        setIsMultiplayerBattle(true);
+        setIsMultiplayerBattle(!!isPvP);
         setPhase(GamePhase.BATTLE);
         
         // Play initial cries
@@ -11755,7 +11790,9 @@ export default function App() {
     } else if (data.type === 'INPUT_MOVE') { 
         if (isHostRef.current) handleMapMove(data.payload, 2);
     } else if (data.type === 'INPUT_BATTLE_ACTION') { 
-        if (isHostRef.current) queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex, data.payload.targetSide || 'enemy');
+        if (isHostRef.current && phaseRef.current === GamePhase.BATTLE && battleStateRef.current?.phase === 'player_input') {
+            queueAction(data.payload.targetIndex, data.payload.item, data.payload.move, data.payload.isFusion, data.payload.switchIndex, data.payload.activePlayerIndex, data.payload.targetSide || 'enemy');
+        }
     } else if (data.type === 'INPUT_BATTLE_CANCEL') {
         if (isHostRef.current) {
             const actorIndex = Number.isFinite(data.payload?.activePlayerIndex) ? data.payload.activePlayerIndex : 1;
@@ -11975,6 +12012,68 @@ export default function App() {
   useEffect(() => {
       if (phase !== GamePhase.OVERWORLD && showWorldMap) setShowWorldMap(false);
   }, [phase, showWorldMap]);
+  useEffect(() => {
+      if (showWorldMap) {
+          setWorldMapCenter({ x: playerState.chunkPos.x, y: playerState.chunkPos.y });
+          mapDragAccumRef.current = { x: 0, y: 0 };
+      }
+  }, [showWorldMap, playerState.chunkPos.x, playerState.chunkPos.y]);
+
+  const openWorldMap = useCallback(() => {
+      setWorldMapCenter({ x: playerState.chunkPos.x, y: playerState.chunkPos.y });
+      mapDragAccumRef.current = { x: 0, y: 0 };
+      setShowWorldMap(true);
+  }, [playerState.chunkPos.x, playerState.chunkPos.y]);
+
+  const toggleWorldMap = useCallback(() => {
+      setShowWorldMap((prev) => {
+          if (prev) return false;
+          setWorldMapCenter({ x: playerState.chunkPos.x, y: playerState.chunkPos.y });
+          mapDragAccumRef.current = { x: 0, y: 0 };
+          return true;
+      });
+  }, [playerState.chunkPos.x, playerState.chunkPos.y]);
+
+  const handleWorldMapPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+      mapDragRef.current = { active: true, x: e.clientX, y: e.clientY };
+      mapDragAccumRef.current = { x: 0, y: 0 };
+      mapDidDragRef.current = false;
+  }, []);
+
+  const handleWorldMapPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+      if (!mapDragRef.current.active) return;
+      const dx = e.clientX - mapDragRef.current.x;
+      const dy = e.clientY - mapDragRef.current.y;
+      mapDragRef.current.x = e.clientX;
+      mapDragRef.current.y = e.clientY;
+      mapDragAccumRef.current.x += dx;
+      mapDragAccumRef.current.y += dy;
+      const stepPx = 24;
+      const stepX = Math.trunc(mapDragAccumRef.current.x / stepPx);
+      const stepY = Math.trunc(mapDragAccumRef.current.y / stepPx);
+      if (stepX === 0 && stepY === 0) return;
+      mapDidDragRef.current = true;
+      mapDragAccumRef.current.x -= stepX * stepPx;
+      mapDragAccumRef.current.y -= stepY * stepPx;
+      setWorldMapCenter((prev) => ({
+          x: prev.x - stepX,
+          y: prev.y - stepY,
+      }));
+  }, []);
+
+  const endWorldMapDrag = useCallback(() => {
+      mapDragRef.current.active = false;
+      mapDragAccumRef.current = { x: 0, y: 0 };
+  }, []);
+
+  const handleWorldMapTileClick = useCallback((cx: number, cy: number) => {
+      if (mapDidDragRef.current) {
+          mapDidDragRef.current = false;
+          return;
+      }
+      setWorldWaypoint({ x: cx, y: cy });
+      showToast(`Waypoint set: ${cx},${cy}`, 'info', { kicker: 'MAP', ttl: 1400 });
+  }, [showToast]);
 
   // Main Quest Progression
   useEffect(() => {
@@ -12140,7 +12239,7 @@ export default function App() {
 
       if ((e.key === 'm' || e.key === 'M') && !dialogue) {
           e.preventDefault();
-          setShowWorldMap(prev => !prev);
+          toggleWorldMap();
           return;
       }
 
@@ -12204,7 +12303,7 @@ export default function App() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [phase, playerState, networkRole, isPaused, dialogue, showFieldGuide]);
+  }, [phase, playerState, networkRole, isPaused, dialogue, showFieldGuide, toggleWorldMap]);
 
   useEffect(() => { if (battleState.phase === 'execution' && (networkRole === 'none' || networkRole === 'host')) executeTurn(); }, [battleState.phase]);
 
@@ -12680,6 +12779,19 @@ export default function App() {
             const discoveredChunkKeys = new Set(playerState.discoveredChunks);
             const catchChain = playerState.catchCombo?.count ?? 0;
             const bondStacks = playerState.run.trainerBond?.stacks ?? 0;
+            const nextGym = getNextGymTarget(playerState.badges);
+            const nextGymDist = nextGym
+                ? Math.round(Math.sqrt((nextGym.cx - playerState.chunkPos.x) ** 2 + (nextGym.cy - playerState.chunkPos.y) ** 2))
+                : 0;
+            const nextGymDir = nextGym
+                ? compassDirectionName(nextGym.cx - playerState.chunkPos.x, nextGym.cy - playerState.chunkPos.y).toUpperCase()
+                : 'HERE';
+            const waypointDist = worldWaypoint
+                ? Math.round(Math.sqrt((worldWaypoint.x - playerState.chunkPos.x) ** 2 + (worldWaypoint.y - playerState.chunkPos.y) ** 2))
+                : 0;
+            const waypointDir = worldWaypoint
+                ? compassDirectionName(worldWaypoint.x - playerState.chunkPos.x, worldWaypoint.y - playerState.chunkPos.y).toUpperCase()
+                : 'HERE';
             
             return (
                 <div className="relative overflow-hidden w-screen h-screen bg-black">
@@ -12740,29 +12852,81 @@ export default function App() {
                                    </button>
                                </div>
                                <div className="text-[8px] text-slate-400 uppercase tracking-widest mb-2">
-                                   Center {playerState.chunkPos.x},{playerState.chunkPos.y} • explored {playerState.discoveredChunks.length}
+                                   Center {worldMapCenter.x},{worldMapCenter.y} • You {playerState.chunkPos.x},{playerState.chunkPos.y} • explored {playerState.discoveredChunks.length}
                                </div>
+                               <div className="mb-2 rounded border border-cyan-400/30 bg-cyan-950/30 px-2 py-1 text-[9px] text-cyan-100 uppercase tracking-[0.14em] flex items-center justify-between gap-2">
+                                   {nextGym ? (
+                                       <>
+                                           <span>Gym {nextGym.badge}: {nextGymDir} • ~{nextGymDist} chunks</span>
+                                           <span className="text-cyan-300">Target {nextGym.cx},{nextGym.cy}</span>
+                                       </>
+                                   ) : (
+                                       <span>All gyms cleared — seek the rift ring.</span>
+                                   )}
+                               </div>
+                               {worldWaypoint && (
+                                   <div className="mb-2 rounded border border-fuchsia-400/30 bg-fuchsia-950/25 px-2 py-1 text-[9px] text-fuchsia-100 uppercase tracking-[0.14em] flex items-center justify-between gap-2">
+                                       <span>Waypoint: {waypointDir} • ~{waypointDist} chunks</span>
+                                       <span className="text-fuchsia-300">{worldWaypoint.x},{worldWaypoint.y}</span>
+                                   </div>
+                               )}
                                <div
-                                   className="grid gap-[2px] bg-slate-900/80 p-2 rounded border border-slate-700"
+                                   className="grid gap-[2px] bg-slate-900/80 p-2 rounded border border-slate-700 cursor-grab active:cursor-grabbing select-none touch-none"
                                    style={{ gridTemplateColumns: `repeat(${mapWindowRadius * 2 + 1}, minmax(0, 1fr))` }}
+                                   onPointerDown={handleWorldMapPointerDown}
+                                   onPointerMove={handleWorldMapPointerMove}
+                                   onPointerUp={endWorldMapDrag}
+                                   onPointerLeave={endWorldMapDrag}
                                >
                                    {Array.from({ length: mapWindowRadius * 2 + 1 }).flatMap((_, row) =>
                                        Array.from({ length: mapWindowRadius * 2 + 1 }).map((__, col) => {
-                                           const cx = playerState.chunkPos.x + (col - mapWindowRadius);
-                                           const cy = playerState.chunkPos.y + (row - mapWindowRadius);
+                                           const cx = worldMapCenter.x + (col - mapWindowRadius);
+                                           const cy = worldMapCenter.y + (row - mapWindowRadius);
                                            const key = `chunk_${cx}_${cy}`;
                                            const isHere = cx === playerState.chunkPos.x && cy === playerState.chunkPos.y;
+                                           const isGym = !!nextGym && cx === nextGym.cx && cy === nextGym.cy;
+                                           const isWaypoint = !!worldWaypoint && cx === worldWaypoint.x && cy === worldWaypoint.y;
                                            const seen = discoveredChunkKeys.has(key);
                                            return (
                                                <div
                                                    key={`${cx},${cy}`}
-                                                   title={`${cx},${cy}${isHere ? ' (you)' : ''}${seen ? ' explored' : ''}`}
-                                                   className={`w-4 h-4 rounded-[3px] border ${isHere ? 'bg-cyan-300 border-cyan-100' : seen ? 'bg-emerald-500/80 border-emerald-300/60' : 'bg-slate-800 border-slate-700'}`}
+                                                   title={`${cx},${cy}${isHere ? ' (you)' : ''}${isGym ? ' (next gym)' : ''}${isWaypoint ? ' (waypoint)' : ''}${seen ? ' explored' : ''}`}
+                                                   onClick={() => handleWorldMapTileClick(cx, cy)}
+                                                   className={`w-4 h-4 rounded-[3px] border cursor-pointer ${isHere ? 'bg-cyan-300 border-cyan-100' : isWaypoint ? 'bg-fuchsia-300 border-fuchsia-100' : isGym ? 'bg-amber-300 border-amber-100' : seen ? 'bg-emerald-500/80 border-emerald-300/60' : 'bg-slate-800 border-slate-700'}`}
                                                />
                                            );
                                        }),
                                    )}
                                </div>
+                               <div className="mt-2 text-[8px] text-slate-400 uppercase tracking-widest flex items-center justify-between">
+                                   <span>Drag to pan • Click tile to set waypoint</span>
+                                   <div className="flex items-center gap-1">
+                                       <button
+                                           onClick={() => setWorldMapCenter({ x: playerState.chunkPos.x, y: playerState.chunkPos.y })}
+                                           className="px-2 py-1 rounded border border-white/20 bg-white/10 hover:bg-white/20 text-white"
+                                       >
+                                           Recenter
+                                       </button>
+                                       <button
+                                           onClick={() => setWorldWaypoint(null)}
+                                           className="px-2 py-1 rounded border border-fuchsia-300/40 bg-fuchsia-700/20 hover:bg-fuchsia-700/35 text-fuchsia-100"
+                                       >
+                                           Clear Pin
+                                       </button>
+                                   </div>
+                               </div>
+                               {recentRouteEvents.length > 0 && (
+                                   <div className="mt-2 rounded border border-violet-400/25 bg-violet-950/25 p-2">
+                                       <div className="text-[8px] text-violet-200 uppercase tracking-[0.2em] font-black mb-1">Recent route events</div>
+                                       <div className="space-y-1">
+                                           {[...recentRouteEvents].reverse().slice(0, 4).map((entry) => (
+                                               <div key={entry.id} className="text-[9px] text-violet-100 leading-tight">
+                                                   {entry.text}
+                                               </div>
+                                           ))}
+                                       </div>
+                                   </div>
+                               )}
                            </div>
                        </div>
                    )}
@@ -12773,11 +12937,17 @@ export default function App() {
                             <span className="font-mono tabular-nums">{toFiniteInt(playerState.money, 0).toLocaleString()}</span>
                         </div>
                         <button
-                            onClick={() => setShowWorldMap(true)}
+                            onClick={openWorldMap}
                             className="px-3 py-1.5 rounded-md border border-cyan-300/60 bg-cyan-700/35 hover:bg-cyan-600/45 text-cyan-100 text-[9px] uppercase tracking-[0.18em] font-black shadow"
                         >
                             World Map (M)
                         </button>
+                        {worldWaypoint && (
+                            <div className="px-3 py-1.5 rounded-md border border-fuchsia-300/40 bg-fuchsia-900/35 text-fuchsia-100 text-[9px] uppercase tracking-[0.14em] font-black shadow flex items-center gap-2">
+                                <span>WP {waypointDir} • ~{waypointDist}</span>
+                                <span className="text-fuchsia-300">{worldWaypoint.x},{worldWaypoint.y}</span>
+                            </div>
+                        )}
                         <div className="bg-slate-900/75 px-3 py-1.5 border border-slate-500/40 rounded-md text-[9px] uppercase tracking-widest text-slate-100 flex items-center gap-3">
                             <span>Chain <span className="text-cyan-300 font-black">x{catchChain}</span></span>
                             <span className="text-slate-500">•</span>

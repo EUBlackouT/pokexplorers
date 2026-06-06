@@ -925,6 +925,108 @@ export const GYM_LOCATIONS: ReadonlyArray<{ cx: number; cy: number; badge: numbe
     { cx: -27, cy: -27, badge: 8 }, // NW  dist 38.2
 ];
 
+type GymExteriorStyle = {
+    roofTile: number;
+    wallLeft: number;
+    wallRight: number;
+    forecourtTile: number;
+    accentTile: number;
+    plaque: string;
+    puzzleHint: string;
+};
+
+const GYM_EXTERIOR_STYLES: Record<number, GymExteriorStyle> = {
+    1: { roofTile: 30, wallLeft: 33, wallRight: 35, forecourtTile: 17, accentTile: 75, plaque: 'Pallet Gym - Symmetry Trials', puzzleHint: 'Start simple: beat the gate trainer, then climb the center lane.' },
+    2: { roofTile: 40, wallLeft: 43, wallRight: 45, forecourtTile: 20, accentTile: 95, plaque: 'Pewter Gym - Stone Ward', puzzleHint: 'Boulders are part of the route. Push first, then challenge mooks.' },
+    3: { roofTile: 80, wallLeft: 83, wallRight: 85, forecourtTile: 15, accentTile: 76, plaque: 'Cerulean Gym - Tide Oracle', puzzleHint: 'Ice lanes are intentional. Use slides to line up trainer access.' },
+    4: { roofTile: 40, wallLeft: 43, wallRight: 45, forecourtTile: 17, accentTile: 87, plaque: 'Vermilion Gym - Live Wire', puzzleHint: 'Switch tiles control electric barriers. Work both sides of the hall.' },
+    5: { roofTile: 30, wallLeft: 33, wallRight: 35, forecourtTile: 20, accentTile: 78, plaque: 'Fuchsia Gym - Venom Harlequin', puzzleHint: 'The maze funnels around poison lanes. Keep pressure and clear corners.' },
+    6: { roofTile: 80, wallLeft: 83, wallRight: 85, forecourtTile: 15, accentTile: 96, plaque: 'Saffron Gym - Dream Conduit', puzzleHint: 'Teleport pads bypass sealed walls. Color-pair routes unlock the leader lane.' },
+    7: { roofTile: 40, wallLeft: 43, wallRight: 45, forecourtTile: 26, accentTile: 86, plaque: 'Glacier Gym - Frost Bastion', puzzleHint: 'Slides can overshoot. Enter each ice region from controlled angles.' },
+    8: { roofTile: 30, wallLeft: 33, wallRight: 35, forecourtTile: 17, accentTile: 94, plaque: 'Indigo Gym - Dragon Throne', puzzleHint: 'This is a final gauntlet. Expect chained trainers before the ace battle.' },
+};
+
+const applyGymApproachSetpiece = (
+    badge: number,
+    layout: number[][],
+    interactables: Record<string, InteractableData>,
+    npcs: Record<string, NPCData>,
+    hx: number,
+    hy: number,
+): void => {
+    const setTile = (x: number, y: number, t: number) => {
+        if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_SIZE) return;
+        layout[y][x] = t;
+    };
+    const bandY = hy + 3;
+    // Core walkway to the gym door must always stay readable.
+    for (let y = bandY; y < CHUNK_SIZE; y++) setTile(hx + 1, y, 4);
+
+    if (badge === 1) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 17);
+        setTile(hx - 2, bandY + 1, 98); setTile(hx + 4, bandY + 1, 98);
+        setTile(hx - 3, bandY, 58); setTile(hx + 5, bandY, 58);
+    } else if (badge === 2) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 20);
+        setTile(hx - 2, bandY + 1, 71); setTile(hx + 4, bandY + 1, 71);
+        setTile(hx - 1, bandY + 2, 57); setTile(hx + 3, bandY + 2, 57);
+    } else if (badge === 3) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 15);
+        setTile(hx - 2, bandY + 1, 3); setTile(hx + 4, bandY + 1, 3);
+        setTile(hx - 2, bandY + 2, 29); setTile(hx + 4, bandY + 2, 29);
+        setTile(hx - 3, bandY + 1, 88); setTile(hx + 5, bandY + 1, 88);
+    } else if (badge === 4) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 17);
+        setTile(hx - 2, bandY + 1, 97); setTile(hx + 4, bandY + 1, 97);
+        setTile(hx - 1, bandY + 1, 87); setTile(hx + 3, bandY + 1, 87);
+        setTile(hx - 2, bandY + 2, 8); setTile(hx + 4, bandY + 2, 8);
+    } else if (badge === 5) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 20);
+        setTile(hx - 3, bandY, 78); setTile(hx + 5, bandY, 78);
+        setTile(hx - 2, bandY + 1, 58); setTile(hx + 4, bandY + 1, 58);
+        setTile(hx - 1, bandY + 1, 75); setTile(hx + 3, bandY + 1, 76);
+    } else if (badge === 6) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 15);
+        setTile(hx - 2, bandY + 1, 216); setTile(hx + 4, bandY + 1, 217);
+        setTile(hx - 2, bandY + 2, 96); setTile(hx + 4, bandY + 2, 96);
+        setTile(hx - 1, bandY + 1, 95); setTile(hx + 3, bandY + 1, 95);
+    } else if (badge === 7) {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 26);
+        setTile(hx - 2, bandY + 1, 70); setTile(hx + 4, bandY + 1, 70);
+        setTile(hx - 1, bandY + 2, 86); setTile(hx + 3, bandY + 2, 86);
+        setTile(hx - 3, bandY + 1, 87); setTile(hx + 5, bandY + 1, 87);
+    } else {
+        for (let x = hx - 2; x <= hx + 4; x++) setTile(x, bandY, 17);
+        setTile(hx - 2, bandY + 1, 22); setTile(hx + 4, bandY + 1, 22);
+        setTile(hx - 1, bandY + 1, 94); setTile(hx + 3, bandY + 1, 94);
+        setTile(hx - 3, bandY + 2, 96); setTile(hx + 5, bandY + 2, 96);
+    }
+
+    const heraldKey = `${hx + 4},${bandY + 1}`;
+    setTile(hx + 4, bandY + 1, 4);
+    npcs[heraldKey] = {
+        id: `gym_herald_${badge}`,
+        name: 'Gym Herald',
+        sprite: TRAINER_SPRITES.gentleman,
+        facing: 'left',
+        dialogue: [
+            `Badge ${badge} hall ahead.`,
+            'Expect a custom puzzle route, then a 2v2 leader fight.',
+            'Fusion and Sync pressure are part of this gym test.',
+        ],
+    };
+
+    // Keep side plaques interactive for route context.
+    interactables[`${hx + 3},${bandY}`] = {
+        type: 'object',
+        text: [
+            `Gym ${badge} approach marker.`,
+            'This forecourt layout is unique to this badge route.',
+            'Use the world map and chunk hints to keep orientation.',
+        ],
+    };
+};
+
 const GUARANTEED_GYMS: Record<string, number> = (() => {
     const out: Record<string, number> = {};
     for (const g of GYM_LOCATIONS) out[`${g.cx},${g.cy}`] = g.badge;
@@ -2029,22 +2131,43 @@ export const generateChunk = (cx: number, cy: number, riftStability: number = 0,
         const gymBadge = guaranteedGymBadge;
         const hx = 8;
         const hy = 8;
-        // Gym exteriors should be visually distinct from Centers/Marts so
-        // players can scan towns quickly for healing/shop buildings.
-        const roofTile = 80;
-        const wTile   = 83;
-        const sTile   = 85;
+        const style = GYM_EXTERIOR_STYLES[gymBadge] ?? GYM_EXTERIOR_STYLES[1];
 
-        layout[hy][hx] = roofTile; layout[hy][hx + 1] = roofTile + 1; layout[hy][hx + 2] = roofTile + 2;
-        layout[hy + 1][hx] = wTile; layout[hy + 1][hx + 1] = 50; layout[hy + 1][hx + 2] = sTile;
+        layout[hy][hx] = style.roofTile;
+        layout[hy][hx + 1] = style.roofTile + 1;
+        layout[hy][hx + 2] = style.roofTile + 2;
+        layout[hy + 1][hx] = style.wallLeft;
+        layout[hy + 1][hx + 1] = 50;
+        layout[hy + 1][hx + 2] = style.wallRight;
+        // Small facade accents so gym exteriors read as badge-specific
+        // landmarks at a glance instead of "just another house".
+        layout[hy + 1][hx - 1] = style.accentTile;
+        layout[hy + 1][hx + 3] = style.accentTile;
 
         // Clear the tile in front of the door so the player can always walk
         // up to it (approach from south).
         if (layout[hy + 2]) {
             for (let dx = 0; dx < 3; dx++) {
-                if (layout[hy + 2][hx + dx] !== 3) layout[hy + 2][hx + dx] = 4; // path
+                if (layout[hy + 2][hx + dx] !== 3) layout[hy + 2][hx + dx] = style.forecourtTile;
             }
         }
+        if (layout[hy + 3]) {
+            layout[hy + 3][hx + 1] = 4; // center approach path remains explicit
+            layout[hy + 3][hx] = style.forecourtTile;
+            layout[hy + 3][hx + 2] = style.forecourtTile;
+            // Side signpost with gameplay hint. Keeps the center lane clear.
+            layout[hy + 3][hx - 1] = 53;
+            interactables[`${hx - 1},${hy + 3}`] = {
+                type: 'object',
+                text: [
+                    style.plaque,
+                    `Badge ${gymBadge} challenge is inside.`,
+                    style.puzzleHint,
+                    'Gym battles are 2v2 and sync/fusion pressure is expected.',
+                ],
+            };
+        }
+        applyGymApproachSetpiece(gymBadge, layout, interactables, npcs, hx, hy);
 
         // ---- New: route the gym door to a unique INTERIOR. ----
         // The leader and themed mooks now live inside `buildGym(badge)` in
